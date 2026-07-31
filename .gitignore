@@ -12,6 +12,7 @@ Jerreader.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 .gradle/
 .kotlin/
 .idea/
+.tools/
 local.properties
 **/build/
 captures/
