@@ -12,8 +12,8 @@ android {
         applicationId = "com.jerreader.android"
         minSdk = 23
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.3.0-m2"
+        versionCode = 4
+        versionName = "0.4.0-m4-tap"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

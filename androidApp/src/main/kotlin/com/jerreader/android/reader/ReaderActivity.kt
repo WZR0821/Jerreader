@@ -2,7 +2,11 @@ package com.jerreader.android.reader
 
 import android.annotation.SuppressLint
 import android.app.Dialog
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.graphics.Color
+import android.graphics.PointF
 import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
@@ -11,17 +15,26 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import androidx.activity.ComponentDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.fragment.app.FragmentFactory
 import androidx.fragment.app.commitNow
+import androidx.core.graphics.drawable.toDrawable
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.lifecycle.setViewTreeViewModelStoreOwner
+import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.jerreader.android.JerreaderApplication
 import com.jerreader.android.R
 import com.jerreader.android.library.PublicationIntegrity
@@ -29,10 +42,14 @@ import com.jerreader.android.library.PublicationSnapshot
 import com.jerreader.shared.library.LibraryBook
 import com.jerreader.shared.library.ReaderAppearance
 import com.jerreader.shared.library.ReaderThemeOption
+import com.jerreader.shared.domain.LanguageCode
+import com.jerreader.shared.lexical.WordAnalysis
 import com.jerreader.shared.ui.ReaderAppearancePanel
 import com.jerreader.shared.ui.ReaderChapter
 import com.jerreader.shared.ui.ReaderTableOfContents
 import com.jerreader.shared.ui.ReaderToolbar
+import com.jerreader.shared.ui.WordLookupCard
+import com.jerreader.shared.ui.WordLookupCardState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -67,6 +84,11 @@ class ReaderActivity : AppCompatActivity() {
     private var rootView: FrameLayout? = null
     private var tableOfContents = emptyList<ReaderChapter>()
     private val tableOfContentsLinks = linkedMapOf<String, Link>()
+    private var wordInteractionController: ReaderWordInteractionController? = null
+    private var wordLookupDialog: Dialog? = null
+
+    internal var currentWordLookupState by mutableStateOf<WordLookupCardState?>(null)
+        private set
 
     internal var currentAppearance by mutableStateOf(ReaderAppearance())
         private set
@@ -98,6 +120,10 @@ class ReaderActivity : AppCompatActivity() {
     @SuppressLint("LogNotTimber")
     override fun onDestroy() {
         persistLatestLocator()
+        wordInteractionController?.detach()
+        wordInteractionController = null
+        wordLookupDialog?.dismiss()
+        wordLookupDialog = null
         publication?.close()
         publication = null
         navigator = null
@@ -212,9 +238,19 @@ class ReaderActivity : AppCompatActivity() {
                     ?.let(::parsePreferences)
                     ?: EpubPreferences()
                 currentAppearance = currentPreferences.toAppearance()
+                val wordController = ReaderWordInteractionController(
+                    scope = lifecycleScope,
+                    lookupService = graph.lexicalLookupService,
+                    languageHint = { currentBookLanguage() },
+                    onStateChanged = ::showWordLookup
+                )
+                wordInteractionController = wordController
                 val factory = EpubNavigatorFactory(openedPublication).createFragmentFactory(
                     initialLocator = initialLocator,
-                    initialPreferences = currentPreferences
+                    initialPreferences = currentPreferences,
+                    configuration = EpubNavigatorFragment.Configuration(
+                        selectionActionModeCallback = wordController.selectionActionModeCallback
+                    )
                 )
                 attachEpubNavigator(factory)
             }
@@ -239,6 +275,7 @@ class ReaderActivity : AppCompatActivity() {
             as? EpubNavigatorFragment
             ?: return
         navigator = epubNavigator
+        wordInteractionController?.attach(epubNavigator)
         lifecycleScope.launch {
             epubNavigator.currentLocator.collectLatest { locator ->
                 latestLocatorJson = locator.toJSON().toString()
@@ -321,20 +358,74 @@ class ReaderActivity : AppCompatActivity() {
         }
     }
 
-    private fun showComposeDialog(content: @androidx.compose.runtime.Composable (Dialog) -> Unit) {
-        val dialog = Dialog(this)
+    private fun showWordLookup(state: WordLookupCardState) {
+        currentWordLookupState = state
+        if (wordLookupDialog?.isShowing == true) return
+
+        val dialog = ComponentDialog(this)
+        wordLookupDialog = dialog
         dialog.setContentView(
-            ComposeView(this).apply {
-                setViewCompositionStrategy(
-                    ViewCompositionStrategy.DisposeOnDetachedFromWindow
-                )
-                setContent {
+            dialogComposeView {
+                val visibleState = currentWordLookupState
+                if (visibleState != null) {
                     MaterialTheme {
-                        Surface { content(dialog) }
+                        Surface(
+                            modifier = Modifier.clip(
+                                RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp)
+                            ),
+                            tonalElevation = 6.dp
+                        ) {
+                            WordLookupCard(
+                                state = visibleState,
+                                onDismiss = ::dismissWordLookup,
+                                onRetry = { wordInteractionController?.retry() },
+                                onCopy = ::copyWordEntry
+                            )
+                        }
                     }
                 }
             }
         )
+        dialog.window?.apply {
+            setBackgroundDrawable(Color.TRANSPARENT.toDrawable())
+            setGravity(Gravity.BOTTOM)
+        }
+        dialog.setOnDismissListener {
+            wordInteractionController?.clearSelection()
+            currentWordLookupState = null
+            wordLookupDialog = null
+        }
+        dialog.show()
+        dialog.window?.setLayout(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+    }
+
+    private fun dismissWordLookup() {
+        wordLookupDialog?.dismiss()
+    }
+
+    private fun copyWordEntry(text: String) {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("Jerreader 词条", text))
+    }
+
+    internal suspend fun lookupAtForTesting(point: PointF): WordLookupCardState? =
+        wordInteractionController?.lookupAt(point)
+
+    internal fun analyzeSelectedTextForTesting(
+        text: String,
+        language: LanguageCode? = null
+    ): WordAnalysis? = wordInteractionController?.analyzeSelectedTextForTesting(text, language)
+
+    private fun showComposeDialog(content: @androidx.compose.runtime.Composable (Dialog) -> Unit) {
+        val dialog = ComponentDialog(this)
+        dialog.setContentView(dialogComposeView {
+            MaterialTheme {
+                Surface { content(dialog) }
+            }
+        })
         dialog.setOnShowListener {
             dialog.window?.setLayout(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -342,6 +433,16 @@ class ReaderActivity : AppCompatActivity() {
             )
         }
         dialog.show()
+    }
+
+    private fun dialogComposeView(
+        content: @androidx.compose.runtime.Composable () -> Unit
+    ): ComposeView = ComposeView(this).apply {
+        setViewTreeLifecycleOwner(this@ReaderActivity)
+        setViewTreeViewModelStoreOwner(this@ReaderActivity)
+        setViewTreeSavedStateRegistryOwner(this@ReaderActivity)
+        setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
+        setContent(content)
     }
 
     private fun persistLatestLocator() {
@@ -389,6 +490,15 @@ class ReaderActivity : AppCompatActivity() {
     private fun parsePreferences(json: String): EpubPreferences? = runCatching {
         EpubPreferencesSerializer().deserialize(json)
     }.getOrNull()
+
+    private fun currentBookLanguage(): LanguageCode? {
+        val tag = book?.language?.lowercase().orEmpty()
+        return when {
+            tag.startsWith("ja") -> LanguageCode.JAPANESE
+            tag.startsWith("en") -> LanguageCode.ENGLISH
+            else -> null
+        }
+    }
 
     private fun EpubPreferences.toAppearance(): ReaderAppearance = ReaderAppearance(
         fontScale = fontSize ?: 1.0,

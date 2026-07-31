@@ -90,7 +90,12 @@ fun createSyntheticEpub(
                 <?xml version="1.0" encoding="UTF-8"?>
                 <html xmlns="http://www.w3.org/1999/xhtml" lang="zh-CN">
                   <head><title>第一章</title></head>
-                  <body><h1>第一章</h1><p>这是不含版权内容的合成 EPUB 测试夹具。</p></body>
+                  <body>
+                    <h1>第一章</h1>
+                    <p>这是不含版权内容的合成 EPUB 测试夹具。</p>
+                    <p id="english-sentence">She <span id="english-word">went</span> home.</p>
+                    <p id="japanese-sentence">昨日ご飯を<span id="japanese-word">食べました</span>。</p>
+                  </body>
                 </html>
             """.trimIndent()
         )

@@ -10,7 +10,22 @@
 
 Android 运行时不依赖 Google Play Services。JitPack 只在构建期用于 Readium PDFium 的两项原生依赖。
 
-## M2 可安装 APK
+## M4 点按查词阶段可安装 APK
+
+执行：
+
+```sh
+scripts/package_android_m4_tap.sh
+```
+
+脚本会运行共享层 Android Host 测试、Android 单元测试、lint 和 APK 构建，然后生成：
+
+- `dist/Jerreader-Android-M4-TapLookup-installable.apk`
+- `dist/Jerreader-Android-M4-TapLookup-installable.apk.sha256`
+
+设备/模拟器级的 Readium 点按回归需按下文单独运行，因为打包脚本不能假设构建机已连接 Android 设备。
+
+## 历史 M2 APK
 
 执行：
 
@@ -33,8 +48,8 @@ M2 包使用 Android SDK 自动生成的 debug 证书签名，可直接侧载安
 ./gradlew :androidApp:connectedDebugAndroidTest
 ```
 
-该测试在设备内生成无版权内容的 EPUB，覆盖 M1 导入、去重、Room 持久化、删除，以及 M2 目录跳转、主题/字号和 Locator 跨会话恢复。测试同时断言源 EPUB 和 App 内 EPUB 副本的 SHA-256 和修改时间不变。
+该测试在设备内生成无版权内容的 EPUB，覆盖 M1 导入、去重、Room 持久化、删除，M2 目录跳转、主题/字号和 Locator 跨会话恢复，以及 M4 英语/日语真实点按命中、基本形和中文释义卡。测试同时断言源 EPUB 和 App 内 EPUB 副本的 SHA-256 和修改时间不变。真实词典适配器使用注入的 Stub 响应测试，不访问外网。
 
 ## iOS 交付边界
 
-现有 iOS 源码、Xcode 工程和 target 目前冻结，Android M1/M2 不修改、不嵌入共享 framework、不替换任何 iOS 产物。待 Android 和共享层验证通过并获得明确批准后，再开始 iOS 接入；苹果交付物仍为未签名 `.ipa`，不交付已签名 IPA。
+现有 iOS 源码、Xcode 工程和 target 目前冻结。本阶段不修改、不嵌入共享 framework、不替换任何 iOS 产物。待 Android 和共享层验证通过并获得明确批准后，再开始 iOS 接入；苹果交付物仍为未签名 `.ipa`，不交付已签名 IPA。
