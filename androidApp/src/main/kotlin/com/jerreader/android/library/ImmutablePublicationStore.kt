@@ -3,55 +3,115 @@ package com.jerreader.android.library
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
-import com.jerreader.shared.domain.BookFormat
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
 
-data class ImportedPublication(
+data class StagedPublication(
     val displayName: String,
+    val file: File,
     val snapshot: PublicationSnapshot
 )
 
-class ImmutablePublicationStore(private val context: Context) {
-    fun importFrom(source: Uri): ImportedPublication {
+data class StoredPublication(
+    val fileName: String,
+    val snapshot: PublicationSnapshot
+)
+
+class ImmutablePublicationStore(
+    private val context: Context,
+    private val rootDirectory: File = context.filesDir
+) {
+    private val publicationsDirectory = File(rootDirectory, "publications")
+    private val stagingDirectory = File(rootDirectory, "publication-staging")
+    private val coversDirectory = File(rootDirectory, "covers")
+
+    fun copyToStaging(source: Uri): StagedPublication {
         val displayName = sourceDisplayName(source)
-        val format = BookFormat.fromFileName(displayName)
-        require(format == BookFormat.EPUB || format == BookFormat.PDF) {
-            "M0 只验证 EPUB 和 PDF。"
+        require(displayName.substringAfterLast('.', "").equals("epub", ignoreCase = true)) {
+            "M1 仅支持导入 EPUB。"
         }
 
-        val publicationsDirectory = File(context.filesDir, "publications").apply {
+        stagingDirectory.apply {
             check(exists() || mkdirs()) { "无法创建出版物目录。" }
         }
-        val destination = File(
-            publicationsDirectory,
-            "${UUID.randomUUID()}.${format.fileExtension}"
-        )
-        val temporary = File(publicationsDirectory, "${destination.name}.part")
+        val stagedFile = File(stagingDirectory, "${UUID.randomUUID()}.epub.part")
 
         try {
             val input = checkNotNull(context.contentResolver.openInputStream(source)) {
                 "无法读取所选文件。"
             }
             input.use { sourceStream ->
-                FileOutputStream(temporary).use { output ->
+                FileOutputStream(stagedFile).use { output ->
                     sourceStream.copyTo(output)
                     output.fd.sync()
                 }
             }
-            check(temporary.renameTo(destination)) { "无法保存出版物副本。" }
-            check(destination.setReadOnly()) { "无法将出版物副本设为只读。" }
+            check(stagedFile.setReadOnly()) { "无法将出版物验证副本设为只读。" }
 
-            return ImportedPublication(
+            return StagedPublication(
                 displayName = displayName,
-                snapshot = PublicationIntegrity.capture(destination)
+                file = stagedFile,
+                snapshot = PublicationIntegrity.capture(stagedFile)
             )
         } catch (error: Throwable) {
-            temporary.delete()
-            destination.delete()
+            stagedFile.setWritable(true)
+            stagedFile.delete()
             throw error
         }
+    }
+
+    fun commit(staged: StagedPublication, id: String): StoredPublication {
+        publicationsDirectory.apply {
+            check(exists() || mkdirs()) { "无法创建出版物目录。" }
+        }
+        require(PublicationIntegrity.isUnchanged(staged.snapshot)) {
+            "EPUB 验证过程中发生了变化。"
+        }
+        val destination = File(publicationsDirectory, "$id.epub")
+        check(!destination.exists()) { "出版物目标已存在。" }
+        check(staged.file.renameTo(destination)) { "无法保存出版物副本。" }
+        check(destination.setReadOnly()) { "无法将出版物副本设为只读。" }
+        return StoredPublication(
+            fileName = destination.name,
+            snapshot = PublicationIntegrity.capture(destination)
+        )
+    }
+
+    fun discard(staged: StagedPublication) {
+        staged.file.setWritable(true)
+        staged.file.delete()
+    }
+
+    fun resolvePublication(fileName: String): File = File(publicationsDirectory, fileName)
+
+    fun writeCover(bookId: String, bytes: ByteArray): String {
+        coversDirectory.apply {
+            check(exists() || mkdirs()) { "无法创建封面目录。" }
+        }
+        val cover = File(coversDirectory, "$bookId.png")
+        val temporary = File(coversDirectory, "$bookId.png.part")
+        FileOutputStream(temporary).use { output ->
+            output.write(bytes)
+            output.fd.sync()
+        }
+        check(temporary.renameTo(cover)) { "无法保存封面。" }
+        return cover.name
+    }
+
+    fun resolveCover(fileName: String): File = File(coversDirectory, fileName)
+
+    fun deletePublication(fileName: String): Boolean {
+        val file = resolvePublication(fileName)
+        if (!file.exists()) return true
+        file.setWritable(true)
+        return file.delete()
+    }
+
+    fun deleteCover(fileName: String?): Boolean {
+        if (fileName == null) return true
+        val file = resolveCover(fileName)
+        return !file.exists() || file.delete()
     }
 
     private fun sourceDisplayName(source: Uri): String {
