@@ -10,7 +10,22 @@
 
 Android 运行时不依赖 Google Play Services。JitPack 只在构建期用于 Readium PDFium 的两项原生依赖。
 
-## M4 点按查词阶段可安装 APK
+## 当前功能对齐版可安装 APK
+
+执行：
+
+```sh
+scripts/package_android_parity.sh
+```
+
+脚本会先清理 iCloud 在 build 目录里留下的重复文件，再运行共享层测试、Android 单元测试、lint 和 APK 构建，然后生成：
+
+- `dist/Jerreader-Android-1.0.2-parity.apk`
+- `dist/Jerreader-Android-1.0.2-parity.apk.sha256`
+
+该包使用 Android SDK 自动生成的 debug 证书签名，可直接侧载，但不是商店发布包。
+
+## 历史 M4 点按查词阶段可安装 APK
 
 执行：
 
