@@ -4,6 +4,7 @@ import android.content.Intent
 import android.graphics.BitmapFactory
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
@@ -95,6 +96,15 @@ class MainActivity : ComponentActivity() {
                 )
             }
             var showGuide by rememberSaveable { mutableStateOf(false) }
+
+            // Secondary screens are Compose state, not activities, so back has to
+            // unwind them explicitly. Without this, back from the guide or from
+            // the learning/settings tab dropped straight to the launcher.
+            BackHandler(enabled = showGuide) { showGuide = false }
+            BackHandler(enabled = !showGuide && selectedTab != AndroidAppTab.LIBRARY) {
+                selectedTab = AndroidAppTab.LIBRARY
+            }
+
             val bottomBar: @Composable () -> Unit = {
                 AppNavigationBar(selectedTab) { selectedTab = it }
             }

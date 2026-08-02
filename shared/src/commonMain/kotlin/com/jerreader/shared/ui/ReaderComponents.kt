@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -61,64 +63,78 @@ data class ReaderSearchResultItem(
     val chapterTitle: String?
 )
 
+/** Slim reader header: only what has to stay visible while reading. */
 @Composable
-fun ReaderToolbar(
+fun ReaderTopBar(
     title: String,
-    onBack: () -> Unit,
-    onPreviousPage: () -> Unit,
-    onNextPage: () -> Unit,
-    onPreviousChapter: () -> Unit,
-    onNextChapter: () -> Unit,
-    canGoToPreviousChapter: Boolean,
-    canGoToNextChapter: Boolean,
     isBookmarked: Boolean,
+    onBack: () -> Unit,
     onToggleBookmark: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface
+    ) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 46.dp)
+                    .padding(horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                ReaderBarButton("返回", onClick = onBack)
+                Text(
+                    text = title,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 4.dp),
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                ReaderBarButton(
+                    text = if (isBookmarked) "★ 书签" else "☆ 书签",
+                    onClick = onToggleBookmark,
+                    highlighted = isBookmarked
+                )
+            }
+            JerreaderDivider()
+        }
+    }
+}
+
+/**
+ * Reading controls live at the bottom, like the iOS reader: progress first,
+ * then navigation. Nothing here overlaps the first line of the page.
+ */
+@Composable
+fun ReaderBottomBar(
     progress: Double,
     showProgress: Boolean,
     onProgressChange: (Double) -> Unit,
+    canGoToPreviousChapter: Boolean,
+    canGoToNextChapter: Boolean,
+    onPreviousChapter: () -> Unit,
+    onNextChapter: () -> Unit,
+    onPreviousPage: () -> Unit,
+    onNextPage: () -> Unit,
     onTableOfContents: () -> Unit,
     onAppearance: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Surface(modifier = modifier.fillMaxWidth(), tonalElevation = 3.dp) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 6.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                TextButton(onClick = onBack) { Text("返回") }
-                Text(
-                    text = title,
-                    modifier = Modifier.weight(1f),
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                TextButton(onClick = onToggleBookmark) { Text(if (isBookmarked) "★" else "☆") }
-                TextButton(onClick = onTableOfContents) { Text("导航") }
-                TextButton(onClick = onAppearance) { Text("Aa") }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                TextButton(
-                    enabled = canGoToPreviousChapter,
-                    onClick = onPreviousChapter
-                ) { Text("上一章") }
-                TextButton(onClick = onPreviousPage) { Text("上一页") }
-                TextButton(onClick = onNextPage) { Text("下一页") }
-                TextButton(
-                    enabled = canGoToNextChapter,
-                    onClick = onNextChapter
-                ) { Text("下一章") }
-            }
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface
+    ) {
+        Column {
+            JerreaderDivider()
             if (showProgress) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 14.dp, end = 14.dp, top = 2.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Slider(
@@ -126,12 +142,64 @@ fun ReaderToolbar(
                         onValueChange = { onProgressChange(it.toDouble()) },
                         modifier = Modifier.weight(1f)
                     )
-                    Text("${(progress * 100).toInt()}%", style = MaterialTheme.typography.labelSmall)
+                    Text(
+                        "${(progress * 100).toInt()}%",
+                        modifier = Modifier.padding(start = 8.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 46.dp)
+                    .padding(horizontal = 2.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                ReaderBarButton("目录", onClick = onTableOfContents)
+                ReaderBarButton("上一章", enabled = canGoToPreviousChapter, onClick = onPreviousChapter)
+                ReaderBarButton("上一页", onClick = onPreviousPage)
+                ReaderBarButton("下一页", onClick = onNextPage)
+                ReaderBarButton("下一章", enabled = canGoToNextChapter, onClick = onNextChapter)
+                ReaderBarButton("Aa", onClick = onAppearance)
             }
         }
     }
 }
+
+@Composable
+private fun ReaderBarButton(
+    text: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    highlighted: Boolean = false
+) {
+    TextButton(
+        onClick = onClick,
+        enabled = enabled,
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            horizontal = 8.dp,
+            vertical = 4.dp
+        )
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelLarge,
+            maxLines = 1,
+            softWrap = false,
+            color = if (highlighted) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                LocalContentColorOrDefault()
+            }
+        )
+    }
+}
+
+@Composable
+private fun LocalContentColorOrDefault() = androidx.compose.material3.LocalContentColor.current
 
 @Composable
 fun ReaderNavigationPanel(
@@ -363,147 +431,161 @@ fun ReaderTableOfContents(
     }
 }
 
+/**
+ * Reading settings. The panel scrolls: text direction and the PDF paper switch
+ * used to sit below the fold of a non-scrolling dialog, which made 横排/竖排
+ * unreachable on a phone.
+ */
 @Composable
 fun ReaderAppearancePanel(
     appearance: ReaderAppearance,
     onChange: (ReaderAppearance) -> Unit,
     isPdf: Boolean = false,
+    /** Set when the panel sits inside a page that already scrolls. */
+    embedded: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = modifier.padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp)
+        modifier = if (embedded) {
+            modifier.fillMaxWidth()
+        } else {
+            modifier.fillMaxWidth().heightIn(max = 560.dp)
+        }
     ) {
-        Text("阅读设置", style = MaterialTheme.typography.headlineSmall)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text("字号")
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Button(
-                    enabled = appearance.fontScale > 0.8,
-                    onClick = {
-                        onChange(appearance.copy(fontScale = (appearance.fontScale - 0.1).coerceAtLeast(0.8)))
-                    }
-                ) { Text("−") }
-                Text(
-                    text = "${(appearance.fontScale * 100).toInt()}%",
-                    modifier = Modifier.padding(horizontal = 14.dp)
+        if (!embedded) {
+            Text(
+                "阅读设置",
+                modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 16.dp, bottom = 10.dp),
+                style = MaterialTheme.typography.titleLarge
+            )
+        }
+        Column(
+            modifier = Modifier
+                .then(
+                    if (embedded) Modifier else Modifier.verticalScroll(rememberScrollState())
                 )
-                Button(
-                    enabled = appearance.fontScale < 2.0,
-                    onClick = {
-                        onChange(appearance.copy(fontScale = (appearance.fontScale + 0.1).coerceAtMost(2.0)))
-                    }
-                ) { Text("+") }
-            }
-        }
-        Text("阅读方式")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (appearance.scroll) {
-                TextButton(onClick = { onChange(appearance.copy(scroll = false)) }) { Text("分页") }
-                Button(onClick = { onChange(appearance.copy(scroll = true)) }) { Text("滚动") }
-            } else {
-                Button(onClick = { onChange(appearance.copy(scroll = false)) }) { Text("分页") }
-                TextButton(onClick = { onChange(appearance.copy(scroll = true)) }) { Text("滚动") }
-            }
-        }
-        Text("字体")
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                .padding(horizontal = if (embedded) 0.dp else 14.dp)
+                .padding(bottom = if (embedded) 0.dp else 18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            listOf(
-                ReaderFontOption.PUBLICATION to "原书",
-                ReaderFontOption.SERIF to "衬线",
-                ReaderFontOption.SANS_SERIF to "无衬线",
-                ReaderFontOption.OPEN_DYSLEXIC to "易读"
-            ).forEach { (font, label) ->
-                if (appearance.font == font) {
-                    Button(onClick = { onChange(appearance.copy(font = font)) }) { Text(label) }
-                } else {
-                    TextButton(onClick = { onChange(appearance.copy(font = font)) }) { Text(label) }
-                }
-            }
-        }
-        NumericAppearanceRow("行距", appearance.lineHeight, 1.0, 2.0) {
-            onChange(appearance.copy(lineHeight = it))
-        }
-        NumericAppearanceRow("段间距", appearance.paragraphSpacing, 0.0, 2.0) {
-            onChange(appearance.copy(paragraphSpacing = it))
-        }
-        NumericAppearanceRow("页边距", appearance.pageMargins, 0.5, 2.0) {
-            onChange(appearance.copy(pageMargins = it))
-        }
-        Text("主题")
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            ThemeButton("浅色", ReaderThemeOption.LIGHT, appearance, onChange)
-            ThemeButton("护眼", ReaderThemeOption.SEPIA, appearance, onChange)
-            ThemeButton("冷灰", ReaderThemeOption.COOL_GRAY, appearance, onChange)
-            ThemeButton("深色", ReaderThemeOption.DARK, appearance, onChange)
-        }
-        OutlinedTextField(
-            value = appearance.customBackgroundHex,
-            onValueChange = { value ->
-                onChange(appearance.copy(customBackgroundHex = normalizedHexInput(value)))
-            },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("自定义背景色（例如 #EEF3F8，留空关闭）") },
-            singleLine = true
-        )
-        OutlinedTextField(
-            value = appearance.customSelectionColorHex,
-            onValueChange = { value ->
-                onChange(appearance.copy(customSelectionColorHex = normalizedHexInput(value)))
-            },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("自定义选区色（例如 #317DC2，留空关闭）") },
-            singleLine = true
-        )
-        if (isPdf) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("论文双栏模式")
-                    Text(
-                        "点按识别只使用所点的左栏或右栏，避免跨越中缝。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+            JerreaderSection("版式") {
+                JerreaderRow("字号") {
+                    JerreaderStepper(
+                        value = "${(appearance.fontScale * 100).toInt()}%",
+                        canDecrease = appearance.fontScale > 0.8,
+                        canIncrease = appearance.fontScale < 2.0,
+                        onDecrease = {
+                            onChange(
+                                appearance.copy(
+                                    fontScale = (appearance.fontScale - 0.1).coerceAtLeast(0.8)
+                                )
+                            )
+                        },
+                        onIncrease = {
+                            onChange(
+                                appearance.copy(
+                                    fontScale = (appearance.fontScale + 0.1).coerceAtMost(2.0)
+                                )
+                            )
+                        }
                     )
                 }
-                Switch(
-                    checked = appearance.pdfPaperModeEnabled,
-                    onCheckedChange = { onChange(appearance.copy(pdfPaperModeEnabled = it)) }
-                )
+                NumericAppearanceRow("行距", appearance.lineHeight, 1.0, 2.0) {
+                    onChange(appearance.copy(lineHeight = it))
+                }
+                NumericAppearanceRow("段间距", appearance.paragraphSpacing, 0.0, 2.0) {
+                    onChange(appearance.copy(paragraphSpacing = it))
+                }
+                NumericAppearanceRow("页边距", appearance.pageMargins, 0.5, 2.0) {
+                    onChange(appearance.copy(pageMargins = it))
+                }
+                JerreaderRow("字体") {
+                    JerreaderSegmented(
+                        options = listOf(
+                            ReaderFontOption.PUBLICATION to "原书",
+                            ReaderFontOption.SERIF to "衬线",
+                            ReaderFontOption.SANS_SERIF to "黑体"
+                        ),
+                        selected = appearance.font,
+                        onSelect = { onChange(appearance.copy(font = it)) }
+                    )
+                }
             }
-        }
-        Text("文字方向")
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf(
-                ReaderTextOrientation.PUBLICATION to "原书",
-                ReaderTextOrientation.HORIZONTAL to "横排",
-                ReaderTextOrientation.VERTICAL to "竖排"
-            ).forEach { (orientation, label) ->
-                if (appearance.orientation == orientation) {
-                    Button(onClick = { onChange(appearance.copy(orientation = orientation)) }) {
-                        Text(label)
-                    }
-                } else {
-                    TextButton(onClick = { onChange(appearance.copy(orientation = orientation)) }) {
-                        Text(label)
+
+            JerreaderSection(
+                title = "翻页与方向",
+                footnote = "「原书」保留出版物声明的横竖排与翻页方向；「横排」强制章节间与章节内都从左向右。"
+            ) {
+                JerreaderRow("阅读方式") {
+                    JerreaderSegmented(
+                        options = listOf(false to "分页", true to "滚动"),
+                        selected = appearance.scroll,
+                        onSelect = { onChange(appearance.copy(scroll = it)) }
+                    )
+                }
+                JerreaderRow("文字方向") {
+                    JerreaderSegmented(
+                        options = listOf(
+                            ReaderTextOrientation.PUBLICATION to "原书",
+                            ReaderTextOrientation.HORIZONTAL to "横排",
+                            ReaderTextOrientation.VERTICAL to "竖排"
+                        ),
+                        selected = appearance.orientation,
+                        onSelect = { onChange(appearance.copy(orientation = it)) }
+                    )
+                }
+                if (isPdf) {
+                    JerreaderRow(
+                        label = "论文双栏模式",
+                        detail = "点按识别只使用所点的左栏或右栏。"
+                    ) {
+                        Switch(
+                            checked = appearance.pdfPaperModeEnabled,
+                            onCheckedChange = {
+                                onChange(appearance.copy(pdfPaperModeEnabled = it))
+                            }
+                        )
                     }
                 }
             }
+
+            JerreaderSection("主题与配色") {
+                JerreaderRow("阅读主题") {
+                    JerreaderSegmented(
+                        options = listOf(
+                            ReaderThemeOption.LIGHT to "浅色",
+                            ReaderThemeOption.SEPIA to "护眼",
+                            ReaderThemeOption.COOL_GRAY to "冷灰",
+                            ReaderThemeOption.DARK to "深色"
+                        ),
+                        selected = appearance.theme,
+                        onSelect = { onChange(appearance.copy(theme = it)) }
+                    )
+                }
+                OutlinedTextField(
+                    value = appearance.customBackgroundHex,
+                    onValueChange = { value ->
+                        onChange(appearance.copy(customBackgroundHex = normalizedHexInput(value)))
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("自定义背景色 #RRGGBB", style = MaterialTheme.typography.bodySmall) },
+                    textStyle = MaterialTheme.typography.bodyMedium,
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = appearance.customSelectionColorHex,
+                    onValueChange = { value ->
+                        onChange(
+                            appearance.copy(customSelectionColorHex = normalizedHexInput(value))
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("自定义选区色 #RRGGBB", style = MaterialTheme.typography.bodySmall) },
+                    textStyle = MaterialTheme.typography.bodyMedium,
+                    singleLine = true
+                )
+            }
         }
-        Spacer(Modifier.padding(bottom = 4.dp))
     }
 }
 
@@ -522,36 +604,13 @@ private fun NumericAppearanceRow(
     maximum: Double,
     onChange: (Double) -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(label)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Button(
-                enabled = value > minimum,
-                onClick = { onChange((value - 0.1).coerceAtLeast(minimum)) }
-            ) { Text("−") }
-            Text(value.toString().take(3), modifier = Modifier.padding(horizontal = 10.dp))
-            Button(
-                enabled = value < maximum,
-                onClick = { onChange((value + 0.1).coerceAtMost(maximum)) }
-            ) { Text("+") }
-        }
-    }
-}
-
-@Composable
-private fun ThemeButton(
-    label: String,
-    theme: ReaderThemeOption,
-    appearance: ReaderAppearance,
-    onChange: (ReaderAppearance) -> Unit
-) {
-    if (appearance.theme == theme) {
-        Button(onClick = { onChange(appearance.copy(theme = theme)) }) { Text(label) }
-    } else {
-        TextButton(onClick = { onChange(appearance.copy(theme = theme)) }) { Text(label) }
+    JerreaderRow(label) {
+        JerreaderStepper(
+            value = value.toString().take(3),
+            canDecrease = value > minimum,
+            canIncrease = value < maximum,
+            onDecrease = { onChange((value - 0.1).coerceAtLeast(minimum)) },
+            onIncrease = { onChange((value + 0.1).coerceAtMost(maximum)) }
+        )
     }
 }

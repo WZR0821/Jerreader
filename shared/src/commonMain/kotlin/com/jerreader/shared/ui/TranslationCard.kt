@@ -36,6 +36,17 @@ sealed interface TranslationCardState {
     ) : TranslationCardState
 }
 
+/**
+ * A vocabulary entry only makes sense for a single word: one Latin token, or a
+ * short run of CJK characters without punctuation.
+ */
+internal fun String.isSingleWord(): Boolean {
+    val trimmed = trim()
+    if (trimmed.isEmpty() || trimmed.length > 24) return false
+    if (trimmed.any { it.isWhitespace() }) return false
+    return trimmed.all { it.isLetter() || it == '\'' || it == '-' }
+}
+
 @Composable
 fun TranslationCard(
     state: TranslationCardState,
@@ -48,6 +59,7 @@ fun TranslationCard(
     onExplain: ((TranslationResult) -> Unit)? = null,
     onAnnotate: ((String) -> Unit)? = null,
     onExpandCrossPage: (() -> Unit)? = null,
+    onAddToVocabulary: (() -> Unit)? = null,
     crossPageMessage: String? = null,
     isExpandingCrossPage: Boolean = false,
     onOpenSettings: () -> Unit,
@@ -56,16 +68,16 @@ fun TranslationCard(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 18.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text("点按翻译", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            Text("点按翻译", style = MaterialTheme.typography.titleMedium)
             TextButton(onClick = onDismiss) { Text("关闭") }
         }
 
@@ -115,6 +127,9 @@ fun TranslationCard(
                     onSpeakTranslation?.let { speak ->
                         TextButton(onClick = { speak(state.result) }) { Text("朗读译文") }
                     }
+                    // iOS lets a successful card be translated again, subject to
+                    // the same five-second cooldown as a failed one.
+                    TextButton(onClick = onRetry) { Text("重新翻译") }
                     onExplain?.let { explain ->
                         TextButton(onClick = { explain(state.result) }) { Text("AI 解析") }
                     }
@@ -125,6 +140,10 @@ fun TranslationCard(
                         TextButton(enabled = !isExpandingCrossPage, onClick = expand) {
                             Text(if (isExpandingCrossPage) "正在补齐…" else "扩展跨页句段")
                         }
+                    }
+                    // iOS offers this only when the selection is a single word.
+                    onAddToVocabulary?.takeIf { state.sourceText.isSingleWord() }?.let { add ->
+                        TextButton(onClick = add) { Text("加入生词本") }
                     }
                 }
                 crossPageMessage?.let { message ->

@@ -48,6 +48,8 @@ import com.jerreader.shared.translation.TranslationDisplayMode
 import com.jerreader.shared.translation.TranslationSourceChoice
 import com.jerreader.android.settings.AndroidAppPreferences
 import com.jerreader.android.settings.AppThemeChoice
+import com.jerreader.shared.ui.JerreaderRow
+import com.jerreader.shared.ui.JerreaderSection
 import com.jerreader.shared.library.ReaderAppearance
 import com.jerreader.shared.ui.ReaderAppearancePanel
 import kotlinx.coroutines.launch
@@ -130,6 +132,7 @@ fun SettingsScreen(
                 Button(onClick = onOpenGuide) { Text("打开操作指南") }
             }
             SettingsCard("默认阅读排版") {
+                SettingsNote("这里设定的是新导入书籍的初始排版；每本书都可以在阅读器里单独覆盖。")
                 ToggleRow(
                     "同步应用到现有全部书籍",
                     appPreferences.applyReaderDefaultsToExistingBooks,
@@ -142,17 +145,15 @@ fun SettingsScreen(
                 )
                 ReaderAppearancePanel(
                     appearance = appPreferences.defaultReaderAppearance,
-                    onChange = onDefaultReaderChanged
+                    onChange = onDefaultReaderChanged,
+                    embedded = true
                 )
                 if (!appPreferences.applyReaderDefaultsToExistingBooks) {
                     Button(onClick = onApplyDefaultsToExistingBooks) {
                         Text("应用到书架中的现有书籍")
                     }
                 }
-                Text(
-                    "只覆盖阅读排版，不修改阅读位置、书签、划线、批注或笔记。",
-                    style = MaterialTheme.typography.bodySmall
-                )
+                SettingsNote("只覆盖阅读排版，不修改阅读位置、书签、划线、批注或笔记。")
             }
             SettingsCard("翻译与 AI") {
                 TranslationSettings(
@@ -164,25 +165,16 @@ fun SettingsScreen(
                 )
             }
             SettingsCard("数据与隐私") {
-                Text("书籍、书架与学习记录默认只保存在本机。")
-                Text("API Key 使用 Android Keystore 加密，只保存在本机，不会写入书籍、日志或 APK。")
-                Text("在线 AI 只接收你主动点按或框选的文字。")
-            }
-            SettingsCard("操作指南") {
-                Text("1. 在书架点“导入电子书”，选择 EPUB、PDF、DOCX 或 TXT。")
-                Text("2. 阅读 EPUB 时左右滑动或点 ‹ › 翻页；点正文翻译句子/段落，长按可翻译、查词或添加批注。")
-                Text("3. PDF 使用单页 Readium 阅读；点正文时会在本机对当前页 OCR，再翻译命中的文字。")
-                Text("4. 首次翻译前，在本页选择 DeepSeek、Kimi 等服务并填写自己的 API Key，然后点“测试连接”。")
-                Text("5. API Key 只存于 Android Keystore；书籍与学习数据只保存在本机。")
+                SettingsNote("书籍、书架与学习记录默认只保存在本机。")
+                SettingsNote("API Key 使用 Android Keystore 加密，只保存在本机，不会写入书籍、日志或 APK。")
+                SettingsNote("在线 AI 只接收你主动点按或框选的文字。")
             }
             SettingsCard("关于") {
-                Text("Jerreader", fontWeight = FontWeight.SemiBold)
-                Text("简体中文桌面名称：读鼠")
-                Text("版本 $versionName（Android）")
-                Text("最低系统：Android 6.0")
-                Text("作者：WANG ZIRUI")
-                Text("Readium EPUB / PDF 阅读内核")
-                Text("当前构建不包含备份、登录、云同步、付费或 DRM 绕过。")
+                JerreaderRow("应用") { Text("Jerreader · 读鼠", style = MaterialTheme.typography.bodyMedium) }
+                JerreaderRow("版本") { Text("$versionName（Android）", style = MaterialTheme.typography.bodyMedium) }
+                JerreaderRow("最低系统") { Text("Android 6.0", style = MaterialTheme.typography.bodyMedium) }
+                JerreaderRow("作者") { Text("WANG ZIRUI", style = MaterialTheme.typography.bodyMedium) }
+                SettingsNote("Readium EPUB / PDF 阅读内核。当前构建不包含备份、登录、云同步、付费或 DRM 绕过。")
             }
         }
     }
@@ -458,18 +450,18 @@ private fun TranslationSettings(
 
 @Composable
 private fun SettingsCard(title: String, content: @Composable ColumnScope.() -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-    ) {
-        Column(
-            modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-            content()
-        }
-    }
+    // One bordered section per group, so the settings page reads as distinct
+    // cards instead of one continuous list of controls.
+    JerreaderSection(title = title, content = content)
+}
+
+@Composable
+private fun SettingsNote(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
 }
 
 @Composable
@@ -485,12 +477,7 @@ private fun ChoiceRow(content: @Composable RowScope.() -> Unit) {
 
 @Composable
 private fun ToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(label, modifier = Modifier.weight(1f))
+    JerreaderRow(label) {
         Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }

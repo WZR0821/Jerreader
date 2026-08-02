@@ -16,6 +16,8 @@ import com.jerreader.shared.ui.TranslationCardState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import org.json.JSONTokener
@@ -36,12 +38,18 @@ class ReaderTapTranslationController(
     private val onPreviousPageRequested: (() -> Unit)? = null,
     private val onNextPageRequested: (() -> Unit)? = null,
     private val onLookupRequested: (() -> Unit)? = null,
-    private val onAnnotateRequested: (() -> Unit)? = null
+    private val onAnnotateRequested: (() -> Unit)? = null,
+    private val onHapticFeedback: (() -> Unit)? = null,
+    private val timeSource: () -> Long = System::currentTimeMillis
 ) {
     private var navigator: EpubNavigatorFragment? = null
     private var translationJob: Job? = null
     private var lastRequest: TranslationRequest? = null
     private var lastTapPoint: PointF? = null
+    private var requestToken = 0L
+    private var currentIdentity: String? = null
+    private var currentState: TranslationCardState? = null
+    private val manualRetryAt = mutableMapOf<String, Long>()
 
     val selectionActionModeCallback: ActionMode.Callback = object : BaseActionModeCallback() {
         override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
@@ -124,6 +132,8 @@ class ReaderTapTranslationController(
 
     fun clearSelection() {
         navigator?.clearSelection()
+        currentIdentity = null
+        currentState = null
     }
 
     fun retry() {
@@ -214,25 +224,93 @@ class ReaderTapTranslationController(
         translationJob = scope.launch { translateNow(request) }
     }
 
+    /**
+     * Manual retry, mirroring iOS: the same text may be retried at most once
+     * every five seconds, and the cooldown key deliberately excludes the
+     * provider so switching to a fallback cannot bypass it.
+     */
+    fun retryManually(): Boolean {
+        val request = lastRequest ?: return false
+        val key = cooldownKey(request)
+        val now = timeSource()
+        val previous = manualRetryAt[key]
+        if (previous != null && now - previous < MANUAL_RETRY_COOLDOWN_MILLIS) return false
+        if (currentState is TranslationCardState.Loading) return false
+        manualRetryAt[key] = now
+        startTranslation(request)
+        return true
+    }
+
+    private fun requestIdentity(request: TranslationRequest): String = buildString {
+        append(navigator?.currentLocator?.value?.href?.toString().orEmpty())
+        append('|')
+        append(ReaderTextNormalizer.normalized(request.text))
+        append('|')
+        append(request.sourceLanguage?.tag ?: "auto")
+        append("->")
+        append(request.targetLanguage.tag)
+        append('|')
+        append(settings.preferences.value.providerMode.name)
+    }
+
+    private fun cooldownKey(request: TranslationRequest): String = buildString {
+        append(ReaderTextNormalizer.normalized(request.text))
+        append('|')
+        append(request.sourceLanguage?.tag ?: "auto")
+        append("->")
+        append(request.targetLanguage.tag)
+    }
+
     private suspend fun translateNow(request: TranslationRequest): TranslationCardState {
+        val identity = requestIdentity(request)
+        // The same sentence tapped again while it is loading, or already shown
+        // as a success, must not spend another request.
+        val visible = currentState
+        if (identity == currentIdentity && visible != null &&
+            visible !is TranslationCardState.Failure
+        ) {
+            onStateChanged(visible)
+            return visible
+        }
+
         lastRequest = request
-        val loading = TranslationCardState.Loading(request.text)
-        onStateChanged(loading)
+        currentIdentity = identity
+        val token = ++requestToken
+        publish(token, TranslationCardState.Loading(request.text))
         return try {
-            val result = translationService.translate(request)
-            TranslationCardState.Success(request.text, result).also(onStateChanged)
+            val result = withTimeout(TRANSLATION_TIMEOUT_MILLIS) {
+                translationService.translate(request)
+            }
+            TranslationCardState.Success(request.text, result).also { publish(token, it) }
         } catch (error: CancellationException) {
             throw error
+        } catch (_: TimeoutCancellationException) {
+            TranslationCardState.Failure(
+                sourceText = request.text,
+                message = "翻译超过 30 秒未返回，请重试或更换翻译服务。"
+            ).also { publish(token, it) }
         } catch (error: TranslationFailure) {
             TranslationCardState.Failure(
                 sourceText = request.text,
                 message = error.message ?: "翻译失败。"
-            ).also(onStateChanged)
+            ).also { publish(token, it) }
         } catch (_: Exception) {
             TranslationCardState.Failure(
                 sourceText = request.text,
                 message = "翻译服务暂时不可用，请稍后重试。"
-            ).also(onStateChanged)
+            ).also { publish(token, it) }
+        }
+    }
+
+    /** Drops results from superseded requests so a late reply cannot win. */
+    private fun publish(token: Long, state: TranslationCardState) {
+        if (token != requestToken) return
+        currentState = state
+        onStateChanged(state)
+        if (state !is TranslationCardState.Loading &&
+            settings.preferences.value.translationHapticsEnabled
+        ) {
+            onHapticFeedback?.invoke()
         }
     }
 
@@ -432,5 +510,7 @@ class ReaderTapTranslationController(
         const val LOOKUP_MENU_ITEM_ID = 0x4A455257
         const val ANNOTATE_MENU_ITEM_ID = 0x4A455241
         const val EDGE_PAGE_TURN_RATIO = 0.16f
+        const val TRANSLATION_TIMEOUT_MILLIS = 30_000L
+        const val MANUAL_RETRY_COOLDOWN_MILLIS = 5_000L
     }
 }

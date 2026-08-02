@@ -5,12 +5,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 
 /**
@@ -137,6 +141,24 @@ fun jerreaderColorScheme(accent: JerreaderAccent, dark: Boolean): ColorScheme {
     )
 }
 
+/**
+ * Explicit type scale. Material's defaults render far larger than the iOS app
+ * on a phone, which is what made the settings and reader panels feel loose and
+ * disorganised, so every size used by Jerreader screens is pinned here.
+ */
+private val jerreaderTypography = Typography(
+    headlineSmall = TextStyle(fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.SemiBold),
+    titleLarge = TextStyle(fontSize = 18.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold),
+    titleMedium = TextStyle(fontSize = 15.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold),
+    titleSmall = TextStyle(fontSize = 14.sp, lineHeight = 19.sp, fontWeight = FontWeight.SemiBold),
+    bodyLarge = TextStyle(fontSize = 15.sp, lineHeight = 22.sp),
+    bodyMedium = TextStyle(fontSize = 14.sp, lineHeight = 20.sp),
+    bodySmall = TextStyle(fontSize = 13.sp, lineHeight = 18.sp),
+    labelLarge = TextStyle(fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium),
+    labelMedium = TextStyle(fontSize = 12.sp, lineHeight = 16.sp),
+    labelSmall = TextStyle(fontSize = 11.sp, lineHeight = 15.sp)
+)
+
 /** Matches the iOS 22pt continuous card radius. */
 private val jerreaderShapes = Shapes(
     extraSmall = RoundedCornerShape(8.dp),
@@ -157,6 +179,7 @@ fun JerreaderTheme(
         MaterialTheme(
             colorScheme = jerreaderColorScheme(accent, dark),
             shapes = jerreaderShapes,
+            typography = jerreaderTypography,
             content = content
         )
     }

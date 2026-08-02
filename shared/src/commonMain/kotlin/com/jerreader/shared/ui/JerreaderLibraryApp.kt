@@ -18,7 +18,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items as lazyItems
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Surface
+import androidx.compose.ui.draw.clip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -152,47 +157,42 @@ fun JerreaderLibraryApp(
                     onValueChange = { searchQuery = it },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    label = { Text("搜索书名、作者、系列、文件夹或标签") },
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                    placeholder = {
+                        Text("搜索书名、作者、系列或标签", style = MaterialTheme.typography.bodyMedium)
+                    },
+                    textStyle = MaterialTheme.typography.bodyMedium,
                     singleLine = true
                 )
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    FilterChip(
-                        selected = selectedCategory == null,
-                        onClick = { selectedCategory = null },
-                        label = { Text("全部") }
+                // Format and sort are separate axes; one long scrolling strip hid
+                // the sort options off the right edge.
+                LibraryChipRow {
+                    JerreaderSegmented(
+                        options = listOf<Pair<String?, String>>(null to "全部格式") +
+                            listOf("epub", "pdf", "docx", "txt").map { it to it.uppercase() },
+                        selected = selectedFormat,
+                        onSelect = { selectedFormat = it }
                     )
-                    categories.forEach { category ->
-                        FilterChip(
-                            selected = selectedCategory == category,
-                            onClick = { selectedCategory = category },
-                            label = { Text(category) }
-                        )
-                    }
-                    FilterChip(
-                        selected = selectedFormat == null,
-                        onClick = { selectedFormat = null },
-                        label = { Text("全部格式") }
+                }
+                LibraryChipRow {
+                    JerreaderSegmented(
+                        options = LibrarySortOrder.entries.map { it to it.title },
+                        selected = sortOrder,
+                        onSelect = { sortOrder = it }
                     )
-                    listOf("epub", "pdf", "docx", "txt").forEach { format ->
+                    if (categories.isNotEmpty()) {
                         FilterChip(
-                            selected = selectedFormat == format,
-                            onClick = { selectedFormat = format },
-                            label = { Text(format.uppercase()) }
+                            selected = selectedCategory == null,
+                            onClick = { selectedCategory = null },
+                            label = { Text("全部文件夹", style = MaterialTheme.typography.labelLarge) }
                         )
-                    }
-                    LibrarySortOrder.entries.forEach { order ->
-                        FilterChip(
-                            selected = sortOrder == order,
-                            onClick = { sortOrder = order },
-                            label = { Text(order.title) }
-                        )
+                        categories.forEach { category ->
+                            FilterChip(
+                                selected = selectedCategory == category,
+                                onClick = { selectedCategory = category },
+                                label = { Text(category, style = MaterialTheme.typography.labelLarge) }
+                            )
+                        }
                     }
                 }
                 Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
@@ -298,6 +298,18 @@ fun JerreaderLibraryApp(
 }
 
 @Composable
+private fun LibraryChipRow(content: @Composable () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 3.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) { content() }
+}
+
+@Composable
 private fun EmptyLibrary(onImport: () -> Unit, modifier: Modifier = Modifier) {
     Column(
         modifier = modifier.padding(32.dp),
@@ -322,16 +334,19 @@ private fun LibraryBookCard(
     onChangeCover: () -> Unit,
     coverContent: (@Composable (LibraryBook) -> Unit)?
 ) {
-    Card(
+    var menuExpanded by remember { mutableStateOf(false) }
+    Surface(
         onClick = onOpen,
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
     ) {
         Column {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(0.72f),
+                    .aspectRatio(0.70f)
+                    .clip(RoundedCornerShape(topStart = 15.dp, topEnd = 15.dp)),
                 contentAlignment = Alignment.Center
             ) {
                 if (coverContent != null) {
@@ -339,55 +354,71 @@ private fun LibraryBookCard(
                 } else {
                     Text(
                         book.title.take(1).ifEmpty { "J" },
-                        style = MaterialTheme.typography.displayMedium,
+                        style = MaterialTheme.typography.headlineSmall,
                         color = MaterialTheme.colorScheme.primary
                     )
                 }
             }
             Column(
-                modifier = Modifier.padding(start = 14.dp, end = 10.dp, bottom = 10.dp),
+                modifier = Modifier.padding(start = 10.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                Text(
-                    text = book.title,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = book.author ?: "未知作者",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.secondary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    TextButton(onClick = onEdit) { Text("管理") }
-                    TextButton(onClick = onChangeCover) { Text("封面") }
-                    TextButton(onClick = onDelete) { Text("删除") }
-                }
-                if (book.lastReadProgress > 0) {
-                    Text(
-                        "已读 ${(book.lastReadProgress * 100).toInt()}%",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-                Text(
-                    buildString {
-                        append(book.sourceFormat.uppercase())
-                        if (book.totalReadingSeconds > 0) {
-                            append(" · ")
-                            append((book.totalReadingSeconds / 60).toInt())
-                            append(" 分钟")
+                Row(verticalAlignment = Alignment.Top) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = book.title,
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = book.author ?: "未知作者",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    // A single overflow entry keeps the card readable; three text
+                    // buttons in a row used to wrap "删除" onto two lines.
+                    Box {
+                        TextButton(
+                            onClick = { menuExpanded = true },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                        ) { Text("⋯", style = MaterialTheme.typography.titleMedium) }
+                        DropdownMenu(
+                            expanded = menuExpanded,
+                            onDismissRequest = { menuExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("管理书籍") },
+                                onClick = { menuExpanded = false; onEdit() }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("更换封面") },
+                                onClick = { menuExpanded = false; onChangeCover() }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("删除") },
+                                onClick = { menuExpanded = false; onDelete() }
+                            )
                         }
-                        if (book.category.isNotBlank()) append(" · ${book.category}")
+                    }
+                }
+                Text(
+                    text = buildString {
+                        append(book.sourceFormat.uppercase())
+                        if (book.lastReadProgress > 0) {
+                            append(" · 已读 ${(book.lastReadProgress * 100).toInt()}%")
+                        }
+                        if (book.totalReadingSeconds >= 60) {
+                            append(" · ${(book.totalReadingSeconds / 60).toInt()} 分钟")
+                        }
                     },
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.secondary
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }

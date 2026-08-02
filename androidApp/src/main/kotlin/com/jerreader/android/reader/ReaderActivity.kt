@@ -11,6 +11,7 @@ import android.graphics.PointF
 import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -18,6 +19,12 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.ComponentDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,7 +32,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.ComposeView
@@ -67,7 +76,8 @@ import com.jerreader.shared.ui.ReaderBookmarkItem
 import com.jerreader.shared.ui.ReaderChapter
 import com.jerreader.shared.ui.ReaderNavigationPanel
 import com.jerreader.shared.ui.ReaderSearchResultItem
-import com.jerreader.shared.ui.ReaderToolbar
+import com.jerreader.shared.ui.ReaderBottomBar
+import com.jerreader.shared.ui.ReaderTopBar
 import com.jerreader.shared.ui.TranslationCard
 import com.jerreader.shared.ui.TranslationCardState
 import com.jerreader.shared.ui.WordLookupCard
@@ -115,8 +125,6 @@ class ReaderActivity : AppCompatActivity() {
     private var wordInteractionController: ReaderWordInteractionController? = null
     private var tapTranslationController: ReaderTapTranslationController? = null
     private var pdfTranslationController: PdfTapTranslationController? = null
-    private var wordLookupDialog: Dialog? = null
-    private var translationDialog: Dialog? = null
     private var annotationDialog: Dialog? = null
     private val sessionStartedAtMillis = System.currentTimeMillis()
     private val searchLocators = linkedMapOf<String, Locator>()
@@ -142,6 +150,11 @@ class ReaderActivity : AppCompatActivity() {
     private var searchMessage by mutableStateOf<String?>(null)
     private var crossPageMessage by mutableStateOf<String?>(null)
     private var isExpandingCrossPage by mutableStateOf(false)
+    private var anchorTopPx by mutableStateOf(0)
+    private var anchorBottomPx by mutableStateOf(0)
+    private var floatingLayer: ComposeView? = null
+    private var readerContentTopPx = 0
+    private var readerContentBottomPx = 0
 
     private data class PendingAnnotation(
         val selectedText: String,
@@ -185,10 +198,6 @@ class ReaderActivity : AppCompatActivity() {
         tapTranslationController = null
         pdfTranslationController?.close()
         pdfTranslationController = null
-        wordLookupDialog?.dismiss()
-        wordLookupDialog = null
-        translationDialog?.dismiss()
-        translationDialog = null
         annotationDialog?.dismiss()
         annotationDialog = null
         publication?.close()
@@ -256,7 +265,8 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     private fun showRoot() {
-        val toolbarHeight = (TOOLBAR_HEIGHT_DP * resources.displayMetrics.density).toInt()
+        val density = resources.displayMetrics.density
+        val topBarHeight = (TOP_BAR_HEIGHT_DP * density).toInt()
         val root = FrameLayout(this).apply { setBackgroundColor(Color.WHITE) }
         val readerContainer = FrameLayout(this).apply { id = R.id.reader_container }
         root.addView(
@@ -264,7 +274,7 @@ class ReaderActivity : AppCompatActivity() {
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
-            ).apply { topMargin = toolbarHeight }
+            )
         )
         root.addView(
             ProgressBar(this).apply { id = R.id.reader_loading },
@@ -274,58 +284,93 @@ class ReaderActivity : AppCompatActivity() {
                 Gravity.CENTER
             )
         )
-        val toolbarView = ComposeView(this).apply {
-                setViewCompositionStrategy(
-                    ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed
-                )
-                setContent {
-                    val appPreferences by graph.appSettings.preferences.collectAsState()
-                    ReaderTheme {
-                        ReaderToolbar(
-                            title = book?.title ?: "Jerreader",
-                            onBack = onBackPressedDispatcher::onBackPressed,
-                            onPreviousPage = ::goToPreviousPage,
-                            onNextPage = ::goToNextPage,
-                            onPreviousChapter = { goToAdjacentChapter(-1) },
-                            onNextChapter = { goToAdjacentChapter(1) },
-                            canGoToPreviousChapter = currentChapterIndex > 0,
-                            canGoToNextChapter = currentChapterIndex >= 0 &&
-                                currentChapterIndex < readingOrder.lastIndex,
-                            isBookmarked = isCurrentPositionBookmarked,
-                            onToggleBookmark = ::toggleBookmark,
-                            progress = currentProgress,
-                            showProgress = appPreferences.showReadingProgress,
-                            onProgressChange = ::goToProgress,
-                            onTableOfContents = ::showNavigationPanel,
-                            onAppearance = ::showAppearance
-                        )
-                    }
-                }
-            }
+
+        val topBarView = readerComposeView {
+            ReaderTopBar(
+                title = book?.title ?: "Jerreader",
+                isBookmarked = isCurrentPositionBookmarked,
+                onBack = onBackPressedDispatcher::onBackPressed,
+                onToggleBookmark = ::toggleBookmark
+            )
+        }
         root.addView(
-            toolbarView,
+            topBarView,
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
-                toolbarHeight,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.TOP
             )
         )
-        // API 35+ draws edge to edge, so the toolbar must reserve the status bar
-        // strip itself and the navigator must stop above the gesture bar.
+
+        val bottomBarView = readerComposeView {
+            val appPreferences by graph.appSettings.preferences.collectAsState()
+            ReaderBottomBar(
+                progress = currentProgress,
+                showProgress = appPreferences.showReadingProgress,
+                onProgressChange = ::goToProgress,
+                canGoToPreviousChapter = currentChapterIndex > 0,
+                canGoToNextChapter = currentChapterIndex >= 0 &&
+                    currentChapterIndex < readingOrder.lastIndex,
+                onPreviousChapter = { goToAdjacentChapter(-1) },
+                onNextChapter = { goToAdjacentChapter(1) },
+                onPreviousPage = ::goToPreviousPage,
+                onNextPage = ::goToNextPage,
+                onTableOfContents = ::showNavigationPanel,
+                onAppearance = ::showAppearance
+            )
+        }
+        root.addView(
+            bottomBarView,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM
+            )
+        )
+
+        // Floating cards live above the page but never fill the screen, so the
+        // sentence being translated stays readable.
+        val overlayView = readerComposeView { ReaderFloatingLayer() }
+        root.addView(
+            overlayView,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
+        floatingLayer = overlayView
+
+        // API 35+ draws edge to edge, so the bars reserve the system insets and
+        // the navigator sits between them.
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            toolbarView.updatePadding(top = bars.top)
-            toolbarView.updateLayoutParams<FrameLayout.LayoutParams> {
-                height = toolbarHeight + bars.top
-            }
+            topBarView.updatePadding(top = bars.top)
+            bottomBarView.updatePadding(bottom = bars.bottom)
             readerContainer.updateLayoutParams<FrameLayout.LayoutParams> {
-                topMargin = toolbarHeight + bars.top
-                bottomMargin = bars.bottom
+                topMargin = topBarHeight + bars.top
+                bottomMargin = bottomBarView.height.takeIf { it > 0 }
+                    ?: ((BOTTOM_BAR_HEIGHT_DP * density).toInt() + bars.bottom)
             }
+            overlayView.updatePadding(top = bars.top, bottom = bars.bottom)
+            readerContentTopPx = topBarHeight + bars.top
             insets
+        }
+        bottomBarView.addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->
+            val height = bottom - top
+            readerContainer.updateLayoutParams<FrameLayout.LayoutParams> {
+                bottomMargin = height
+            }
+            readerContentBottomPx = height
         }
         rootView = root
         setContentView(root)
+    }
+
+    private fun readerComposeView(
+        content: @androidx.compose.runtime.Composable () -> Unit
+    ): ComposeView = ComposeView(this).apply {
+        setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+        setContent { ReaderTheme(content) }
     }
 
     private suspend fun openPublication(file: File, libraryBook: LibraryBook?) {
@@ -378,7 +423,8 @@ class ReaderActivity : AppCompatActivity() {
                     onPreviousPageRequested = ::goToPreviousPage,
                     onNextPageRequested = ::goToNextPage,
                     onLookupRequested = { wordController.lookupSelectionFromMenu() },
-                    onAnnotateRequested = ::requestAnnotationForSelection
+                    onAnnotateRequested = ::requestAnnotationForSelection,
+                    onHapticFeedback = ::performTranslationHaptic
                 )
                 tapTranslationController = tapController
                 val factory = EpubNavigatorFactory(openedPublication).createFragmentFactory(
@@ -828,114 +874,180 @@ class ReaderActivity : AppCompatActivity() {
         }
     }
 
-    private fun showWordLookup(state: WordLookupCardState) {
-        currentWordLookupState = state
-        if (wordLookupDialog?.isShowing == true) return
+    /**
+     * Renders the translation and word cards as compact floating panels anchored
+     * to the selection, instead of a bottom sheet that covered half the page.
+     */
+    @androidx.compose.runtime.Composable
+    private fun ReaderFloatingLayer() {
+        val translation = currentTranslationState
+        val lookup = currentWordLookupState
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val available = maxHeight
+            val anchorTop = with(LocalDensity.current) { anchorTopPx.toDp() }
+                .coerceIn(0.dp, available)
+            val anchorBottom = with(LocalDensity.current) { anchorBottomPx.toDp() }
+                .coerceIn(0.dp, available)
+            // Put the card wherever there is more room, so the sentence being
+            // translated stays visible above or below it.
+            val roomBelow = available - anchorBottom - GAP
+            val roomAbove = anchorTop - GAP
+            val placeBelow = roomBelow >= roomAbove
+            val room = (if (placeBelow) roomBelow else roomAbove).coerceAtLeast(0.dp)
+            val cardHeight = room.coerceIn(
+                minimumValue = 0.dp,
+                maximumValue = (available * 0.46f)
+            ).coerceAtLeast(minOf(room, 150.dp))
+            val cardModifier = Modifier
+                .align(if (placeBelow) Alignment.TopStart else Alignment.BottomStart)
+                .padding(
+                    top = if (placeBelow) anchorBottom + GAP else 0.dp,
+                    bottom = if (placeBelow) 0.dp else (available - anchorTop + GAP)
+                        .coerceAtLeast(0.dp)
+                )
+                .padding(horizontal = 12.dp)
+                .fillMaxWidth()
+                .heightIn(max = cardHeight)
 
-        val dialog = ComponentDialog(this)
-        wordLookupDialog = dialog
-        dialog.setContentView(
-            dialogComposeView {
-                val visibleState = currentWordLookupState
-                if (visibleState != null) {
-                    ReaderTheme {
-                        Surface(
-                            modifier = Modifier.clip(
-                                RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp)
-                            ),
-                            tonalElevation = 6.dp
-                        ) {
-                            WordLookupCard(
-                                state = visibleState,
-                                onDismiss = ::dismissWordLookup,
-                                onRetry = { wordInteractionController?.retry() },
-                                onCopy = ::copyToClipboard,
-                                onFavorite = { explanation ->
-                                    lifecycleScope.launch {
-                                        graph.learningRecords.recordLookup(
-                                            explanation = explanation,
-                                            sourceBookId = book?.id,
-                                            sourceBookTitle = book?.title,
-                                            favorite = true
-                                        )
-                                    }
-                                }
-                            )
+            if (translation != null) {
+                FloatingSurface(cardModifier) {
+                    TranslationCard(
+                        state = translation,
+                        onDismiss = ::dismissTranslation,
+                        onRetry = ::retryTranslation,
+                        onCopy = ::copyToClipboard,
+                        onFavorite = { result -> favoriteTranslation(translation, result) },
+                        onExplain = { explainTranslation(translation) },
+                        onAnnotate = ::annotateTranslatedText,
+                        onExpandCrossPage = { expandCrossPageSegment(translation) },
+                        onAddToVocabulary = { addTranslatedWordToVocabulary(translation) },
+                        crossPageMessage = crossPageMessage,
+                        isExpandingCrossPage = isExpandingCrossPage,
+                        onOpenSettings = ::openTranslationSettings
+                    )
+                }
+            } else if (lookup != null) {
+                FloatingSurface(cardModifier) {
+                    WordLookupCard(
+                        state = lookup,
+                        onDismiss = ::dismissWordLookup,
+                        onRetry = { wordInteractionController?.retry() },
+                        onCopy = ::copyToClipboard,
+                        onFavorite = { explanation ->
+                            lifecycleScope.launch {
+                                graph.learningRecords.recordLookup(
+                                    explanation = explanation,
+                                    sourceBookId = book?.id,
+                                    sourceBookTitle = book?.title,
+                                    favorite = true
+                                )
+                            }
                         }
-                    }
+                    )
                 }
             }
-        )
-        dialog.window?.apply {
-            setBackgroundDrawable(Color.TRANSPARENT.toDrawable())
-            setGravity(Gravity.BOTTOM)
         }
-        dialog.setOnDismissListener {
-            wordInteractionController?.clearSelection()
-            currentWordLookupState = null
-            wordLookupDialog = null
-        }
-        dialog.show()
-        dialog.window?.setLayout(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
+    }
+
+    @androidx.compose.runtime.Composable
+    private fun FloatingSurface(
+        modifier: Modifier,
+        content: @androidx.compose.runtime.Composable () -> Unit
+    ) {
+        Surface(
+            modifier = modifier,
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            shadowElevation = 10.dp,
+            content = { content() }
         )
+    }
+
+    /** Anchors the floating card to the current selection, or to the tap point. */
+    private fun updateFloatingAnchor() {
+        lifecycleScope.launch {
+            val rect = navigator?.currentSelection()?.rect
+            val density = resources.displayMetrics.density
+            if (rect != null) {
+                anchorTopPx = (readerContentTopPx + rect.top).toInt()
+                anchorBottomPx = (readerContentTopPx + rect.bottom).toInt()
+                return@launch
+            }
+            val point = tapTranslationController?.focusPoint()
+            if (point != null) {
+                val y = readerContentTopPx + point.y * density
+                anchorTopPx = (y - 12 * density).toInt()
+                anchorBottomPx = (y + 12 * density).toInt()
+            }
+        }
+    }
+
+    private fun setFloatingLayerVisible(visible: Boolean) {
+        floatingLayer?.visibility = if (visible) View.VISIBLE else View.GONE
+    }
+
+    private fun dismissTranslation() {
+        tapTranslationController?.clearSelection()
+        currentTranslationState = null
+        crossPageMessage = null
+        setFloatingLayerVisible(currentWordLookupState != null)
+    }
+
+    private fun showWordLookup(state: WordLookupCardState) {
+        currentWordLookupState = state
+        setFloatingLayerVisible(true)
+        updateFloatingAnchor()
     }
 
     private fun showTranslation(state: TranslationCardState) {
         currentTranslationState = state
-        if (translationDialog?.isShowing == true) return
+        setFloatingLayerVisible(true)
+        updateFloatingAnchor()
+    }
 
-        val dialog = ComponentDialog(this)
-        translationDialog = dialog
-        dialog.setContentView(
-            dialogComposeView {
-                val visibleState = currentTranslationState
-                if (visibleState != null) {
-                    ReaderTheme {
-                        Surface(
-                            modifier = Modifier.clip(
-                                RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp)
-                            ),
-                            tonalElevation = 6.dp
-                        ) {
-                            TranslationCard(
-                                state = visibleState,
-                                onDismiss = { dialog.dismiss() },
-                                onRetry = ::retryTranslation,
-                                onCopy = ::copyToClipboard,
-                                onFavorite = { result -> favoriteTranslation(visibleState, result) },
-                                onExplain = { explainTranslation(visibleState) },
-                                onAnnotate = ::annotateTranslatedText,
-                                onExpandCrossPage = { expandCrossPageSegment(visibleState) },
-                                crossPageMessage = crossPageMessage,
-                                isExpandingCrossPage = isExpandingCrossPage,
-                                onOpenSettings = ::openTranslationSettings
-                            )
-                        }
-                    }
-                }
-            }
-        )
-        dialog.window?.apply {
-            setBackgroundDrawable(Color.TRANSPARENT.toDrawable())
-            setGravity(Gravity.BOTTOM)
-        }
-        dialog.setOnDismissListener {
-            tapTranslationController?.clearSelection()
-            currentTranslationState = null
-            crossPageMessage = null
-            translationDialog = null
-        }
-        dialog.show()
-        dialog.window?.setLayout(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        )
+
+    private fun performTranslationHaptic() {
+        rootView?.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
     }
 
     private fun retryTranslation() {
-        pdfTranslationController?.retry() ?: tapTranslationController?.retry()
+        val pdf = pdfTranslationController
+        if (pdf != null) {
+            pdf.retry()
+            return
+        }
+        val accepted = tapTranslationController?.retryManually() ?: false
+        if (!accepted) {
+            crossPageMessage = "同一段文字 5 秒内只能手动重试一次。"
+        }
+    }
+
+    /** iOS adds the word with a real dictionary entry, not just the translation. */
+    private fun addTranslatedWordToVocabulary(state: TranslationCardState) {
+        val word = state.sourceText.trim()
+        if (word.isEmpty()) return
+        lifecycleScope.launch {
+            val explanation = runCatching {
+                graph.lexicalLookupService.lookup(
+                    word = word,
+                    sentenceContext = null,
+                    language = currentBookLanguage() ?: LanguageCode.ENGLISH,
+                    candidates = emptyList()
+                )
+            }.getOrNull()
+            if (explanation == null) {
+                crossPageMessage = "词典暂时不可用，未加入生词本。"
+                return@launch
+            }
+            graph.learningRecords.recordLookup(
+                explanation = explanation,
+                sourceBookId = book?.id,
+                sourceBookTitle = book?.title,
+                favorite = true
+            )
+            crossPageMessage = "已加入生词本。"
+        }
     }
 
     private fun favoriteTranslation(state: TranslationCardState, result: TranslationResult) {
@@ -1007,12 +1119,12 @@ class ReaderActivity : AppCompatActivity() {
 
     private fun annotateTranslatedText(text: String) {
         val locator = latestLocator ?: return
-        translationDialog?.dismiss()
+        dismissTranslation()
         showAnnotationEditor(PendingAnnotation(selectedText = text, locator = locator))
     }
 
     private fun openTranslationSettings() {
-        translationDialog?.dismiss()
+        dismissTranslation()
         startActivity(
             Intent(this, MainActivity::class.java)
                 .putExtra(MainActivity.EXTRA_OPEN_SETTINGS, true)
@@ -1021,7 +1133,9 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     private fun dismissWordLookup() {
-        wordLookupDialog?.dismiss()
+        wordInteractionController?.clearSelection()
+        currentWordLookupState = null
+        setFloatingLayerVisible(currentTranslationState != null)
     }
 
     private fun copyToClipboard(text: String) {
@@ -1147,7 +1261,9 @@ class ReaderActivity : AppCompatActivity() {
         const val EXTRA_EXPECTED_LAST_MODIFIED = "com.jerreader.reader.EXPECTED_LAST_MODIFIED"
         const val EXTRA_SOURCE_FORMAT = "com.jerreader.reader.SOURCE_FORMAT"
 
-        private const val TOOLBAR_HEIGHT_DP = 140
+        private val GAP = 16.dp
+        private const val TOP_BAR_HEIGHT_DP = 47
+        private const val BOTTOM_BAR_HEIGHT_DP = 96
         private const val ANNOTATION_DECORATION_GROUP = "jerreader-reading-annotations"
         private const val NAVIGATOR_TAG = "JerreaderNavigator"
         private const val INTEGRITY_TAG = "JerreaderIntegrity"
