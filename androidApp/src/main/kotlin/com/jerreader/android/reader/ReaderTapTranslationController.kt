@@ -325,13 +325,16 @@ class ReaderTapTranslationController(
                 translationService.translate(request)
             }
             TranslationCardState.Success(request.text, result).also { publish(token, it) }
-        } catch (error: CancellationException) {
-            throw error
         } catch (_: TimeoutCancellationException) {
+            // Must precede the CancellationException branch: the timeout type
+            // extends it, so catching the parent first swallowed the watchdog
+            // and left the card spinning forever.
             TranslationCardState.Failure(
                 sourceText = request.text,
                 message = "翻译超过 30 秒未返回，请重试或更换翻译服务。"
             ).also { publish(token, it) }
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: TranslationFailure) {
             TranslationCardState.Failure(
                 sourceText = request.text,
