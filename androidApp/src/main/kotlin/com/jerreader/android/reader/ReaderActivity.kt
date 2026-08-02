@@ -61,6 +61,7 @@ import com.jerreader.shared.domain.BookFormat
 import com.jerreader.shared.library.LibraryBook
 import com.jerreader.shared.library.ReaderAnnotationColor
 import com.jerreader.shared.library.ReaderAppearance
+import com.jerreader.shared.library.ReaderTextOrientation
 import com.jerreader.shared.domain.LanguageCode
 import com.jerreader.shared.lexical.WordAnalysis
 import com.jerreader.shared.translation.ContextExplanationRequest
@@ -76,8 +77,8 @@ import com.jerreader.shared.ui.ReaderBookmarkItem
 import com.jerreader.shared.ui.ReaderChapter
 import com.jerreader.shared.ui.ReaderNavigationPanel
 import com.jerreader.shared.ui.ReaderSearchResultItem
-import com.jerreader.shared.ui.ReaderBottomBar
-import com.jerreader.shared.ui.ReaderTopBar
+import com.jerreader.shared.ui.ReaderBottomChrome
+import com.jerreader.shared.ui.ReaderTopChrome
 import com.jerreader.shared.ui.TranslationCard
 import com.jerreader.shared.ui.TranslationCardState
 import com.jerreader.shared.ui.WordLookupCard
@@ -144,6 +145,7 @@ class ReaderActivity : AppCompatActivity() {
     private var currentProgress by mutableStateOf(0.0)
     private var isCurrentPositionBookmarked by mutableStateOf(false)
     private var currentChapterIndex by mutableStateOf(-1)
+    private var currentChapterName by mutableStateOf("")
     private var searchQuery by mutableStateOf("")
     private var searchResults by mutableStateOf(emptyList<ReaderSearchResultItem>())
     private var isSearching by mutableStateOf(false)
@@ -266,8 +268,8 @@ class ReaderActivity : AppCompatActivity() {
 
     private fun showRoot() {
         val density = resources.displayMetrics.density
-        val topBarHeight = (TOP_BAR_HEIGHT_DP * density).toInt()
         val root = FrameLayout(this).apply { setBackgroundColor(Color.WHITE) }
+        // iOS lets the page run edge to edge and floats the controls above it.
         val readerContainer = FrameLayout(this).apply { id = R.id.reader_container }
         root.addView(
             readerContainer,
@@ -285,16 +287,19 @@ class ReaderActivity : AppCompatActivity() {
             )
         )
 
-        val topBarView = readerComposeView {
-            ReaderTopBar(
-                title = book?.title ?: "Jerreader",
+        val topChrome = readerComposeView {
+            ReaderTopChrome(
+                chapterTitle = currentChapterName,
+                bookTitle = book?.title ?: "Jerreader",
                 isBookmarked = isCurrentPositionBookmarked,
-                onBack = onBackPressedDispatcher::onBackPressed,
-                onToggleBookmark = ::toggleBookmark
+                onClose = onBackPressedDispatcher::onBackPressed,
+                onTableOfContents = ::showNavigationPanel,
+                onToggleBookmark = ::toggleBookmark,
+                onAppearance = ::showAppearance
             )
         }
         root.addView(
-            topBarView,
+            topChrome,
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -302,25 +307,29 @@ class ReaderActivity : AppCompatActivity() {
             )
         )
 
-        val bottomBarView = readerComposeView {
+        val bottomChrome = readerComposeView {
             val appPreferences by graph.appSettings.preferences.collectAsState()
-            ReaderBottomBar(
+            val translationPreferences by graph.translationSettings.preferences.collectAsState()
+            ReaderBottomChrome(
+                chapterLabel = currentChapterName,
                 progress = currentProgress,
                 showProgress = appPreferences.showReadingProgress,
                 onProgressChange = ::goToProgress,
-                canGoToPreviousChapter = currentChapterIndex > 0,
-                canGoToNextChapter = currentChapterIndex >= 0 &&
-                    currentChapterIndex < readingOrder.lastIndex,
+                canGoToAdjacentChapter = readingOrder.size > 1,
                 onPreviousChapter = { goToAdjacentChapter(-1) },
                 onNextChapter = { goToAdjacentChapter(1) },
                 onPreviousPage = ::goToPreviousPage,
                 onNextPage = ::goToNextPage,
-                onTableOfContents = ::showNavigationPanel,
-                onAppearance = ::showAppearance
+                isQuickTranslationEnabled = translationPreferences.quickTranslationEnabled,
+                onToggleQuickTranslation = {
+                    graph.translationSettings.updateQuickTranslationEnabled(
+                        !translationPreferences.quickTranslationEnabled
+                    )
+                }
             )
         }
         root.addView(
-            bottomBarView,
+            bottomChrome,
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -328,8 +337,6 @@ class ReaderActivity : AppCompatActivity() {
             )
         )
 
-        // Floating cards live above the page but never fill the screen, so the
-        // sentence being translated stays readable.
         val overlayView = readerComposeView { ReaderFloatingLayer() }
         root.addView(
             overlayView,
@@ -340,27 +347,19 @@ class ReaderActivity : AppCompatActivity() {
         )
         floatingLayer = overlayView
 
-        // API 35+ draws edge to edge, so the bars reserve the system insets and
-        // the navigator sits between them.
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            topBarView.updatePadding(top = bars.top)
-            bottomBarView.updatePadding(bottom = bars.bottom)
-            readerContainer.updateLayoutParams<FrameLayout.LayoutParams> {
-                topMargin = topBarHeight + bars.top
-                bottomMargin = bottomBarView.height.takeIf { it > 0 }
-                    ?: ((BOTTOM_BAR_HEIGHT_DP * density).toInt() + bars.bottom)
-            }
+            topChrome.updatePadding(top = bars.top)
+            bottomChrome.updatePadding(bottom = bars.bottom)
+            // The page keeps clear of the floating cards so text is never hidden
+            // behind them, while the background still reaches the screen edges.
+            readerContainer.updatePadding(
+                top = bars.top + (CONTENT_TOP_INSET_DP * density).toInt(),
+                bottom = bars.bottom + (CONTENT_BOTTOM_INSET_DP * density).toInt()
+            )
+            readerContentTopPx = bars.top + (CONTENT_TOP_INSET_DP * density).toInt()
             overlayView.updatePadding(top = bars.top, bottom = bars.bottom)
-            readerContentTopPx = topBarHeight + bars.top
             insets
-        }
-        bottomBarView.addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->
-            val height = bottom - top
-            readerContainer.updateLayoutParams<FrameLayout.LayoutParams> {
-                bottomMargin = height
-            }
-            readerContentBottomPx = height
         }
         rootView = root
         setContentView(root)
@@ -502,6 +501,8 @@ class ReaderActivity : AppCompatActivity() {
                 currentChapterIndex = readingOrder.indexOfFirst {
                     it.url().toString() == locator.href.toString()
                 }
+                currentChapterName = currentChapterTitle(locator)
+                applyWritingModeOverride()
                 refreshBookmarkState()
                 delay(PROGRESS_SAVE_DEBOUNCE_MILLIS)
                 persistLatestLocator()
@@ -611,16 +612,62 @@ class ReaderActivity : AppCompatActivity() {
             ?: "阅读位置"
 
     internal fun applyAppearance(appearance: ReaderAppearance) {
+        val previousOrientation = currentAppearance.orientation
         currentAppearance = appearance
         val updated = appearance.toEpubPreferences(basePreferences)
         basePreferences = updated
         navigator?.submitPreferences(updated)
+        applyWritingModeOverride()
+
+        // Readium resolves the EPUB layout when the navigator is created and
+        // does not re-lay out an already loaded resource when the writing mode
+        // changes, so a vertical Japanese book stayed vertical after choosing
+        // 横排. Rebuilding the navigator at the current locator applies it.
+        if (previousOrientation != appearance.orientation && publication != null) {
+            recreateNavigatorForOrientation(updated)
+        }
 
         val bookId = book?.id ?: return
         val serialized = encodeStoredReaderPreferences(appearance, updated)
         graph.applicationScope.launch {
             graph.repository.updatePreferences(bookId, serialized)
         }
+    }
+
+    private fun recreateNavigatorForOrientation(preferences: EpubPreferences) {
+        val openedPublication = publication ?: return
+        val tapController = tapTranslationController ?: return
+        val resumeLocator = latestLocator
+        navigator?.removeDecorationListener(annotationDecorationListener)
+        wordInteractionController?.detach()
+        tapController.detach()
+        supportFragmentManager.findFragmentByTag(NAVIGATOR_TAG)?.let { existing ->
+            supportFragmentManager.commitNow { remove(existing) }
+        }
+        navigator = null
+        val factory = EpubNavigatorFactory(openedPublication).createFragmentFactory(
+            initialLocator = resumeLocator,
+            initialPreferences = preferences,
+            configuration = EpubNavigatorFragment.Configuration(
+                selectionActionModeCallback = tapController.selectionActionModeCallback
+            )
+        )
+        attachEpubNavigator(factory)
+    }
+
+    /**
+     * Readium keeps rendering a publication that declares Japanese vertical
+     * text vertically even when `verticalText = false` is submitted, so the
+     * chosen direction is also enforced with an injected stylesheet. It is
+     * reapplied whenever the visible resource changes.
+     */
+    private fun applyWritingModeOverride() {
+        val mode = when (currentAppearance.orientation) {
+            ReaderTextOrientation.HORIZONTAL -> "horizontal"
+            ReaderTextOrientation.VERTICAL -> "vertical"
+            ReaderTextOrientation.PUBLICATION -> null
+        }
+        lifecycleScope.launch { tapTranslationController?.applyWritingModeOverride(mode) }
     }
 
     private fun showNavigationPanel() {
@@ -1262,8 +1309,8 @@ class ReaderActivity : AppCompatActivity() {
         const val EXTRA_SOURCE_FORMAT = "com.jerreader.reader.SOURCE_FORMAT"
 
         private val GAP = 16.dp
-        private const val TOP_BAR_HEIGHT_DP = 47
-        private const val BOTTOM_BAR_HEIGHT_DP = 96
+        private const val CONTENT_TOP_INSET_DP = 74
+        private const val CONTENT_BOTTOM_INSET_DP = 156
         private const val ANNOTATION_DECORATION_GROUP = "jerreader-reading-annotations"
         private const val NAVIGATOR_TAG = "JerreaderNavigator"
         private const val INTEGRITY_TAG = "JerreaderIntegrity"

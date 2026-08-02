@@ -48,8 +48,16 @@ import com.jerreader.shared.translation.TranslationDisplayMode
 import com.jerreader.shared.translation.TranslationSourceChoice
 import com.jerreader.android.settings.AndroidAppPreferences
 import com.jerreader.android.settings.AppThemeChoice
+import com.jerreader.shared.ui.AppGuideScreen
+import com.jerreader.shared.ui.JerreaderCard
+import com.jerreader.shared.ui.JerreaderDivider
 import com.jerreader.shared.ui.JerreaderRow
 import com.jerreader.shared.ui.JerreaderSection
+import com.jerreader.shared.ui.JerreaderSegmented
+import com.jerreader.shared.ui.SettingsGroup
+import com.jerreader.shared.ui.SettingsNavigationRow
+import com.jerreader.shared.ui.SettingsPage
+import com.jerreader.shared.ui.SettingsValueRow
 import com.jerreader.shared.library.ReaderAppearance
 import com.jerreader.shared.ui.ReaderAppearancePanel
 import kotlinx.coroutines.launch
@@ -76,12 +84,16 @@ data class TranslationSettingsActions(
     val updateGrammarPrompt: (String) -> Unit
 )
 
+/** Which settings page is showing; mirrors the iOS NavigationStack. */
+enum class SettingsRoute { ROOT, THEME, READER_DEFAULTS, TRANSLATION, GUIDE, PRIVACY }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     appPreferences: AndroidAppPreferences,
+    route: SettingsRoute,
+    onRouteChanged: (SettingsRoute) -> Unit,
     onThemeChanged: (AppThemeChoice) -> Unit,
-    onOpenGuide: () -> Unit,
     onDefaultReaderChanged: (ReaderAppearance) -> Unit,
     onShowProgressChanged: (Boolean) -> Unit,
     onApplyDefaultsAutomaticallyChanged: (Boolean) -> Unit,
@@ -99,40 +111,69 @@ fun SettingsScreen(
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
         }.getOrNull().orEmpty().ifBlank { "—" }
     }
-    Scaffold(
-        topBar = { TopAppBar(title = { Text("设置") }) },
-        bottomBar = bottomBar
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            SettingsCard("界面主题") {
-                ChoiceRow {
-                    AppThemeChoice.entries.forEach { choice ->
-                        FilterChip(
+    val back = { onRouteChanged(SettingsRoute.ROOT) }
+
+    when (route) {
+        SettingsRoute.ROOT -> SettingsPage(title = "设置", bottomBar = bottomBar) {
+            SettingsGroup("偏好") {
+                SettingsNavigationRow(
+                    title = "界面主题",
+                    detail = "选择 App 界面的整体色系",
+                    onClick = { onRouteChanged(SettingsRoute.THEME) }
+                )
+                JerreaderDivider()
+                SettingsNavigationRow(
+                    title = "默认阅读排版",
+                    detail = "字体、间距、背景、翻页与日文版式",
+                    onClick = { onRouteChanged(SettingsRoute.READER_DEFAULTS) }
+                )
+                JerreaderDivider()
+                SettingsNavigationRow(
+                    title = "翻译与 AI",
+                    detail = "服务商、三语互译、提示词与交互",
+                    onClick = { onRouteChanged(SettingsRoute.TRANSLATION) }
+                )
+            }
+            SettingsGroup("支持") {
+                SettingsNavigationRow(
+                    title = "操作指南",
+                    detail = "导入、阅读、PDF/文字识别与 API 配置",
+                    onClick = { onRouteChanged(SettingsRoute.GUIDE) }
+                )
+                JerreaderDivider()
+                SettingsNavigationRow(
+                    title = "数据与隐私",
+                    detail = "本机数据、在线请求与密钥存储",
+                    onClick = { onRouteChanged(SettingsRoute.PRIVACY) }
+                )
+            }
+            SettingsGroup("关于") {
+                SettingsValueRow("Jerreader", versionName)
+                SettingsValueRow("最低系统", "Android 6.0")
+                SettingsValueRow("作者", "WANG ZIRUI")
+            }
+        }
+
+        SettingsRoute.THEME -> SettingsPage(title = "界面主题", onBack = back) {
+            JerreaderCard {
+                AppThemeChoice.entries.forEach { choice ->
+                    JerreaderRow(label = choice.title, detail = choice.detail) {
+                        JerreaderSegmented(
+                            options = listOf(true to if (appPreferences.theme == choice) "使用中" else "选择"),
                             selected = appPreferences.theme == choice,
-                            onClick = { onThemeChanged(choice) },
-                            label = { Text(choice.title) }
+                            onSelect = { onThemeChanged(choice) }
                         )
                     }
+                    if (choice != AppThemeChoice.entries.last()) JerreaderDivider()
                 }
             }
-            SettingsCard("操作指南") {
-                Text(
-                    "覆盖导入途径、只读打开、点句/点段、日文版式、主题与选区配色、" +
-                        "全书排版同步、PDF 与文字识别、学习功能，以及本机/直接 AI API/代理翻译配置。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Button(onClick = onOpenGuide) { Text("打开操作指南") }
-            }
-            SettingsCard("默认阅读排版") {
-                SettingsNote("这里设定的是新导入书籍的初始排版；每本书都可以在阅读器里单独覆盖。")
+        }
+
+        SettingsRoute.READER_DEFAULTS -> SettingsPage(title = "默认阅读排版", onBack = back) {
+            JerreaderSection(
+                title = "应用范围",
+                footnote = "只覆盖阅读排版，不修改阅读位置、书签、划线、批注或笔记。"
+            ) {
                 ToggleRow(
                     "同步应用到现有全部书籍",
                     appPreferences.applyReaderDefaultsToExistingBooks,
@@ -143,38 +184,38 @@ fun SettingsScreen(
                     appPreferences.showReadingProgress,
                     onShowProgressChanged
                 )
-                ReaderAppearancePanel(
-                    appearance = appPreferences.defaultReaderAppearance,
-                    onChange = onDefaultReaderChanged,
-                    embedded = true
-                )
                 if (!appPreferences.applyReaderDefaultsToExistingBooks) {
                     Button(onClick = onApplyDefaultsToExistingBooks) {
                         Text("应用到书架中的现有书籍")
                     }
                 }
-                SettingsNote("只覆盖阅读排版，不修改阅读位置、书签、划线、批注或笔记。")
             }
-            SettingsCard("翻译与 AI") {
-                TranslationSettings(
-                    preferences = preferences,
-                    directApiKey = directApiKey,
-                    backendToken = backendToken,
-                    actions = actions,
-                    onTestConnection = onTestConnection
-                )
-            }
-            SettingsCard("数据与隐私") {
+            ReaderAppearancePanel(
+                appearance = appPreferences.defaultReaderAppearance,
+                onChange = onDefaultReaderChanged,
+                embedded = true
+            )
+        }
+
+        SettingsRoute.TRANSLATION -> SettingsPage(title = "翻译与 AI", onBack = back) {
+            TranslationSettings(
+                preferences = preferences,
+                directApiKey = directApiKey,
+                backendToken = backendToken,
+                actions = actions,
+                onTestConnection = onTestConnection
+            )
+        }
+
+        SettingsRoute.GUIDE -> AppGuideScreen(onBack = back)
+
+        SettingsRoute.PRIVACY -> SettingsPage(title = "数据与隐私", onBack = back) {
+            JerreaderCard {
                 SettingsNote("书籍、书架与学习记录默认只保存在本机。")
                 SettingsNote("API Key 使用 Android Keystore 加密，只保存在本机，不会写入书籍、日志或 APK。")
                 SettingsNote("在线 AI 只接收你主动点按或框选的文字。")
-            }
-            SettingsCard("关于") {
-                JerreaderRow("应用") { Text("Jerreader · 读鼠", style = MaterialTheme.typography.bodyMedium) }
-                JerreaderRow("版本") { Text("$versionName（Android）", style = MaterialTheme.typography.bodyMedium) }
-                JerreaderRow("最低系统") { Text("Android 6.0", style = MaterialTheme.typography.bodyMedium) }
-                JerreaderRow("作者") { Text("WANG ZIRUI", style = MaterialTheme.typography.bodyMedium) }
-                SettingsNote("Readium EPUB / PDF 阅读内核。当前构建不包含备份、登录、云同步、付费或 DRM 绕过。")
+                SettingsNote("导入的书籍文件是只读输入：阅读、选区与翻译都不会改写它的内容或修改时间。")
+                SettingsNote("受 DRM 保护的出版物会被直接拒绝打开，本应用不做任何解密。")
             }
         }
     }

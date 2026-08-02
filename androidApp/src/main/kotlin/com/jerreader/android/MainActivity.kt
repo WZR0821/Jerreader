@@ -35,6 +35,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.jerreader.android.reader.ReaderActivity
 import com.jerreader.android.ui.AndroidAppTab
 import com.jerreader.android.ui.AppNavigationBar
+import com.jerreader.android.ui.SettingsRoute
 import com.jerreader.android.ui.SettingsScreen
 import com.jerreader.android.ui.TranslationSettingsActions
 import com.jerreader.android.settings.AppThemeChoice
@@ -42,7 +43,6 @@ import com.jerreader.android.reader.encodeStoredReaderPreferences
 import com.jerreader.shared.domain.LanguageCode
 import com.jerreader.shared.library.LibraryBook
 import com.jerreader.shared.translation.TranslationRequest
-import com.jerreader.shared.ui.AppGuideScreen
 import com.jerreader.shared.ui.JerreaderLibraryApp
 import com.jerreader.shared.ui.JerreaderTheme
 import java.io.File
@@ -95,15 +95,18 @@ class MainActivity : ComponentActivity() {
                     }
                 )
             }
-            var showGuide by rememberSaveable { mutableStateOf(false) }
+            var settingsRoute by rememberSaveable { mutableStateOf(SettingsRoute.ROOT) }
 
             // Secondary screens are Compose state, not activities, so back has to
-            // unwind them explicitly. Without this, back from the guide or from
-            // the learning/settings tab dropped straight to the launcher.
-            BackHandler(enabled = showGuide) { showGuide = false }
-            BackHandler(enabled = !showGuide && selectedTab != AndroidAppTab.LIBRARY) {
-                selectedTab = AndroidAppTab.LIBRARY
+            // unwind them explicitly. Without this, back from a settings sub-page
+            // or from a non-library tab dropped straight to the launcher.
+            BackHandler(enabled = settingsRoute != SettingsRoute.ROOT) {
+                settingsRoute = SettingsRoute.ROOT
             }
+            BackHandler(
+                enabled = settingsRoute == SettingsRoute.ROOT &&
+                    selectedTab != AndroidAppTab.LIBRARY
+            ) { selectedTab = AndroidAppTab.LIBRARY }
 
             val bottomBar: @Composable () -> Unit = {
                 AppNavigationBar(selectedTab) { selectedTab = it }
@@ -139,12 +142,11 @@ class MainActivity : ComponentActivity() {
                         bottomBar = bottomBar
                     )
 
-                    AndroidAppTab.SETTINGS -> if (showGuide) {
-                        AppGuideScreen(onBack = { showGuide = false })
-                    } else SettingsScreen(
+                    AndroidAppTab.SETTINGS -> SettingsScreen(
                         appPreferences = appPreferences,
+                        route = settingsRoute,
+                        onRouteChanged = { settingsRoute = it },
                         onThemeChanged = graph.appSettings::updateTheme,
-                        onOpenGuide = { showGuide = true },
                         onDefaultReaderChanged = { appearance ->
                             graph.appSettings.updateReaderAppearance(appearance)
                             if (appPreferences.applyReaderDefaultsToExistingBooks) {

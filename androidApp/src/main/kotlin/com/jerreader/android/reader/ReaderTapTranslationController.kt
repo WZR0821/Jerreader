@@ -141,6 +141,49 @@ class ReaderTapTranslationController(
         startTranslation(request)
     }
 
+    /**
+     * Forces the writing mode of the visible resource.
+     *
+     * Readium resolves an EPUB's layout from its metadata, and for a publication
+     * that declares Japanese vertical text it keeps rendering vertically even
+     * after `verticalText = false` is submitted. This injects a stylesheet into
+     * the rendered document only; the EPUB file itself is never touched.
+     */
+    suspend fun applyWritingModeOverride(mode: String?) {
+        val navigator = navigator ?: return
+        navigator.evaluateJavascript(writingModeScript(mode))
+    }
+
+    private fun writingModeScript(mode: String?): String {
+        val css = when (mode) {
+            "horizontal" ->
+                "html,body,* { writing-mode: horizontal-tb !important;" +
+                    " -webkit-writing-mode: horizontal-tb !important;" +
+                    " -epub-writing-mode: horizontal-tb !important;" +
+                    " text-orientation: mixed !important; }"
+            "vertical" ->
+                "html,body { writing-mode: vertical-rl !important;" +
+                    " -webkit-writing-mode: vertical-rl !important;" +
+                    " -epub-writing-mode: vertical-rl !important; }"
+            else -> ""
+        }
+        val encoded = JSONObject.quote(css)
+        return """
+            (() => {
+              const id = 'jerreader-writing-mode';
+              const previous = document.getElementById(id);
+              if (previous) previous.remove();
+              const css = $encoded;
+              if (!css) return true;
+              const style = document.createElement('style');
+              style.id = id;
+              style.textContent = css;
+              (document.head || document.documentElement).appendChild(style);
+              return true;
+            })()
+        """.trimIndent()
+    }
+
     /** Issues exactly one request for a locally completed cross-page segment. */
     suspend fun translateExpanded(request: TranslationRequest): TranslationCardState =
         translateNow(request)

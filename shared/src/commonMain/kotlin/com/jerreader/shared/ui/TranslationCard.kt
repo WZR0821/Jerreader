@@ -1,21 +1,31 @@
 package com.jerreader.shared.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import com.jerreader.shared.translation.TranslationResult
 
@@ -47,6 +57,12 @@ internal fun String.isSingleWord(): Boolean {
     return trimmed.all { it.isLetter() || it == '\'' || it == '-' }
 }
 
+/**
+ * Mirrors the iOS `ReaderTranslationOverlay`: a compact header carrying the
+ * actions menu and a close button, a hairline divider, then a body that shows
+ * only the translation. The source sentence is already highlighted on the page,
+ * so repeating it here would just push the translation out of view.
+ */
 @Composable
 fun TranslationCard(
     state: TranslationCardState,
@@ -54,8 +70,6 @@ fun TranslationCard(
     onRetry: () -> Unit,
     onCopy: (String) -> Unit,
     onFavorite: ((TranslationResult) -> Unit)? = null,
-    onSpeakSource: (() -> Unit)? = null,
-    onSpeakTranslation: ((TranslationResult) -> Unit)? = null,
     onExplain: ((TranslationResult) -> Unit)? = null,
     onAnnotate: ((String) -> Unit)? = null,
     onExpandCrossPage: (() -> Unit)? = null,
@@ -65,103 +79,186 @@ fun TranslationCard(
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text("点按翻译", style = MaterialTheme.typography.titleMedium)
-            TextButton(onClick = onDismiss) { Text("关闭") }
-        }
-
-        Text(
-            text = state.sourceText,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+    Column(modifier = modifier.fillMaxWidth()) {
+        OverlayHeader(
+            state = state,
+            onDismiss = onDismiss,
+            onRetry = onRetry,
+            onCopy = onCopy,
+            onFavorite = onFavorite,
+            onExplain = onExplain,
+            onAnnotate = onAnnotate,
+            onExpandCrossPage = onExpandCrossPage,
+            onAddToVocabulary = onAddToVocabulary,
+            isExpandingCrossPage = isExpandingCrossPage
         )
-
-        when (state) {
-            is TranslationCardState.Loading -> Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                CircularProgressIndicator()
-                Text("正在翻译…")
-            }
-
-            is TranslationCardState.Success -> {
-                Text(
-                    text = state.result.translatedText,
-                    style = MaterialTheme.typography.bodyLarge
-                )
-                state.analysisText?.let { analysis ->
-                    Text("句子结构", fontWeight = FontWeight.SemiBold)
-                    Text(analysis, style = MaterialTheme.typography.bodyMedium)
+        JerreaderDivider()
+        Column(
+            modifier = Modifier
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            when (state) {
+                is TranslationCardState.Loading -> Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Text("正在翻译…", style = MaterialTheme.typography.bodyMedium)
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { onCopy(state.result.translatedText) }) { Text("复制译文") }
-                    onFavorite?.let { favorite ->
-                        Button(onClick = { favorite(state.result) }) { Text("收藏") }
-                    }
+
+                is TranslationCardState.Success -> {
                     Text(
-                        buildString {
-                            append(state.result.providerIdentifier)
-                            if (state.result.isFromCache) append(" · 缓存")
-                        },
-                        modifier = Modifier.align(Alignment.CenterVertically),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = state.result.translatedText,
+                        style = MaterialTheme.typography.bodyLarge
                     )
+                    state.analysisText?.let { analysis ->
+                        Text(
+                            "句子结构",
+                            style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                        Text(analysis, style = MaterialTheme.typography.bodyMedium)
+                    }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    onSpeakSource?.let { speak ->
-                        TextButton(onClick = speak) { Text("朗读原文") }
+
+                is TranslationCardState.Failure -> {
+                    Text(
+                        state.message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(onClick = onRetry) { Text("重试") }
+                        TextButton(onClick = onOpenSettings) { Text("翻译设置") }
                     }
-                    onSpeakTranslation?.let { speak ->
-                        TextButton(onClick = { speak(state.result) }) { Text("朗读译文") }
+                }
+            }
+            crossPageMessage?.let { message ->
+                Text(
+                    message,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun OverlayHeader(
+    state: TranslationCardState,
+    onDismiss: () -> Unit,
+    onRetry: () -> Unit,
+    onCopy: (String) -> Unit,
+    onFavorite: ((TranslationResult) -> Unit)?,
+    onExplain: ((TranslationResult) -> Unit)?,
+    onAnnotate: ((String) -> Unit)?,
+    onExpandCrossPage: (() -> Unit)?,
+    onAddToVocabulary: (() -> Unit)?,
+    isExpandingCrossPage: Boolean
+) {
+    var menuExpanded by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 12.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(25.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.secondaryContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            JerreaderGlyph(
+                icon = JerreaderIcon.SPEECH_BUBBLE_FILLED,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(14.dp)
+            )
+        }
+        Text(
+            text = when (state) {
+                is TranslationCardState.Loading -> "正在翻译"
+                is TranslationCardState.Success -> state.result.providerIdentifier
+                is TranslationCardState.Failure -> "翻译失败"
+            },
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1
+        )
+        if (state is TranslationCardState.Success) {
+            Box {
+                HeaderIconButton(JerreaderIcon.MORE) { menuExpanded = true }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("复制译文") },
+                        onClick = { menuExpanded = false; onCopy(state.result.translatedText) }
+                    )
+                    onFavorite?.let { favorite ->
+                        DropdownMenuItem(
+                            text = { Text("收藏译文") },
+                            onClick = { menuExpanded = false; favorite(state.result) }
+                        )
                     }
-                    // iOS lets a successful card be translated again, subject to
-                    // the same five-second cooldown as a failed one.
-                    TextButton(onClick = onRetry) { Text("重新翻译") }
+                    DropdownMenuItem(
+                        text = { Text("重新翻译") },
+                        onClick = { menuExpanded = false; onRetry() }
+                    )
                     onExplain?.let { explain ->
-                        TextButton(onClick = { explain(state.result) }) { Text("AI 解析") }
+                        DropdownMenuItem(
+                            text = { Text("AI 句子结构分析") },
+                            onClick = { menuExpanded = false; explain(state.result) }
+                        )
                     }
                     onAnnotate?.let { annotate ->
-                        TextButton(onClick = { annotate(state.sourceText) }) { Text("添加笔记") }
+                        DropdownMenuItem(
+                            text = { Text("添加笔记") },
+                            onClick = { menuExpanded = false; annotate(state.sourceText) }
+                        )
                     }
                     onExpandCrossPage?.let { expand ->
-                        TextButton(enabled = !isExpandingCrossPage, onClick = expand) {
-                            Text(if (isExpandingCrossPage) "正在补齐…" else "扩展跨页句段")
-                        }
+                        DropdownMenuItem(
+                            enabled = !isExpandingCrossPage,
+                            text = {
+                                Text(if (isExpandingCrossPage) "正在补齐…" else "扩展跨页句段")
+                            },
+                            onClick = { menuExpanded = false; expand() }
+                        )
                     }
-                    // iOS offers this only when the selection is a single word.
                     onAddToVocabulary?.takeIf { state.sourceText.isSingleWord() }?.let { add ->
-                        TextButton(onClick = add) { Text("加入生词本") }
+                        DropdownMenuItem(
+                            text = { Text("加入生词本") },
+                            onClick = { menuExpanded = false; add() }
+                        )
                     }
-                }
-                crossPageMessage?.let { message ->
-                    Text(
-                        message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            is TranslationCardState.Failure -> {
-                Text(state.message, color = MaterialTheme.colorScheme.error)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onRetry) { Text("重试") }
-                    TextButton(onClick = onOpenSettings) { Text("打开翻译设置") }
                 }
             }
         }
+        HeaderIconButton(JerreaderIcon.CLOSE, onClick = onDismiss)
+    }
+}
+
+@Composable
+private fun HeaderIconButton(icon: JerreaderIcon, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(30.dp)
+            .clip(CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        JerreaderGlyph(
+            icon = icon,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(16.dp)
+        )
     }
 }
