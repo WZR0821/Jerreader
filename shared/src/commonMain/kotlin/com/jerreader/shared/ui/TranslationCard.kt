@@ -47,6 +47,9 @@ fun TranslationCard(
     onSpeakTranslation: ((TranslationResult) -> Unit)? = null,
     onExplain: ((TranslationResult) -> Unit)? = null,
     onAnnotate: ((String) -> Unit)? = null,
+    onExpandCrossPage: (() -> Unit)? = null,
+    crossPageMessage: String? = null,
+    isExpandingCrossPage: Boolean = false,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -118,6 +121,18 @@ fun TranslationCard(
                     onAnnotate?.let { annotate ->
                         TextButton(onClick = { annotate(state.sourceText) }) { Text("添加笔记") }
                     }
+                    onExpandCrossPage?.let { expand ->
+                        TextButton(enabled = !isExpandingCrossPage, onClick = expand) {
+                            Text(if (isExpandingCrossPage) "正在补齐…" else "扩展跨页句段")
+                        }
+                    }
+                }
+                crossPageMessage?.let { message ->
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
 

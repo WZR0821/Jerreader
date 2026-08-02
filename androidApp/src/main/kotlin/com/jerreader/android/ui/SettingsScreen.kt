@@ -79,6 +79,7 @@ data class TranslationSettingsActions(
 fun SettingsScreen(
     appPreferences: AndroidAppPreferences,
     onThemeChanged: (AppThemeChoice) -> Unit,
+    onOpenGuide: () -> Unit,
     onDefaultReaderChanged: (ReaderAppearance) -> Unit,
     onShowProgressChanged: (Boolean) -> Unit,
     onApplyDefaultsAutomaticallyChanged: (Boolean) -> Unit,
@@ -118,6 +119,15 @@ fun SettingsScreen(
                         )
                     }
                 }
+            }
+            SettingsCard("操作指南") {
+                Text(
+                    "覆盖导入途径、只读打开、点句/点段、日文版式、主题与选区配色、" +
+                        "全书排版同步、PDF 与文字识别、学习功能，以及本机/直接 AI API/代理翻译配置。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Button(onClick = onOpenGuide) { Text("打开操作指南") }
             }
             SettingsCard("默认阅读排版") {
                 ToggleRow(

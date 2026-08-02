@@ -21,6 +21,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -49,11 +50,14 @@ import com.jerreader.android.library.PublicationIntegrity
 import com.jerreader.android.library.PublicationSnapshot
 import com.jerreader.shared.domain.BookFormat
 import com.jerreader.shared.library.LibraryBook
+import com.jerreader.shared.library.ReaderAnnotationColor
 import com.jerreader.shared.library.ReaderAppearance
 import com.jerreader.shared.domain.LanguageCode
 import com.jerreader.shared.lexical.WordAnalysis
 import com.jerreader.shared.translation.ContextExplanationRequest
 import com.jerreader.shared.translation.ContextExplanationService
+import com.jerreader.shared.translation.ReaderCrossPageTranslationResolver
+import com.jerreader.shared.translation.TranslationRequest
 import com.jerreader.shared.translation.TranslationResult
 import com.jerreader.shared.ui.JerreaderTheme
 import com.jerreader.shared.ui.ReaderAnnotationEditor
@@ -73,6 +77,8 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import org.readium.adapter.pdfium.navigator.PdfiumEngineProvider
+import org.readium.r2.navigator.DecorableNavigator
+import org.readium.r2.navigator.Decoration
 import org.readium.r2.navigator.epub.EpubNavigatorFactory
 import org.readium.r2.navigator.epub.EpubNavigatorFragment
 import org.readium.r2.navigator.epub.EpubPreferences
@@ -134,6 +140,8 @@ class ReaderActivity : AppCompatActivity() {
     private var searchResults by mutableStateOf(emptyList<ReaderSearchResultItem>())
     private var isSearching by mutableStateOf(false)
     private var searchMessage by mutableStateOf<String?>(null)
+    private var crossPageMessage by mutableStateOf<String?>(null)
+    private var isExpandingCrossPage by mutableStateOf(false)
 
     private data class PendingAnnotation(
         val selectedText: String,
@@ -170,6 +178,7 @@ class ReaderActivity : AppCompatActivity() {
     override fun onDestroy() {
         persistLatestLocator()
         persistReadingTime()
+        navigator?.removeDecorationListener(annotationDecorationListener)
         wordInteractionController?.detach()
         wordInteractionController = null
         tapTranslationController?.detach()
@@ -241,6 +250,7 @@ class ReaderActivity : AppCompatActivity() {
         lifecycleScope.launch {
             graph.readerRecords.observeAnnotations(libraryBook.id).collectLatest { records ->
                 annotations = records
+                applyAnnotationDecorations()
             }
         }
     }
@@ -269,6 +279,7 @@ class ReaderActivity : AppCompatActivity() {
                     ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed
                 )
                 setContent {
+                    val appPreferences by graph.appSettings.preferences.collectAsState()
                     ReaderTheme {
                         ReaderToolbar(
                             title = book?.title ?: "Jerreader",
@@ -283,7 +294,7 @@ class ReaderActivity : AppCompatActivity() {
                             isBookmarked = isCurrentPositionBookmarked,
                             onToggleBookmark = ::toggleBookmark,
                             progress = currentProgress,
-                            showProgress = graph.appSettings.preferences.value.showReadingProgress,
+                            showProgress = appPreferences.showReadingProgress,
                             onProgressChange = ::goToProgress,
                             onTableOfContents = ::showNavigationPanel,
                             onAppearance = ::showAppearance
@@ -405,6 +416,11 @@ class ReaderActivity : AppCompatActivity() {
         // a competing tap listener.
         wordInteractionController?.attach(epubNavigator, registerShortTap = false)
         tapTranslationController?.attach(epubNavigator)
+        epubNavigator.addDecorationListener(
+            ANNOTATION_DECORATION_GROUP,
+            annotationDecorationListener
+        )
+        applyAnnotationDecorations()
         observeLocator { epubNavigator.currentLocator.collectLatest(it) }
     }
 
@@ -749,6 +765,47 @@ class ReaderActivity : AppCompatActivity() {
         )
     }
 
+    /**
+     * Draws saved markers on the page itself, the same way iOS applies a
+     * dedicated Readium decoration group. Tapping a marker reopens its editor.
+     */
+    private fun applyAnnotationDecorations() {
+        val decorable = navigator ?: return
+        val snapshot = annotations
+        lifecycleScope.launch {
+            val decorations = snapshot.mapNotNull { record ->
+                val locator = parseLocator(record.locatorJson) ?: return@mapNotNull null
+                Decoration(
+                    id = record.id,
+                    locator = locator,
+                    style = Decoration.Style.Highlight(
+                        tint = ReaderAnnotationColor.fromId(record.color).tintArgb.toInt()
+                    )
+                )
+            }
+            decorable.applyDecorations(decorations, ANNOTATION_DECORATION_GROUP)
+        }
+    }
+
+    private val annotationDecorationListener = object : DecorableNavigator.Listener {
+        override fun onDecorationActivated(
+            event: DecorableNavigator.OnActivatedEvent
+        ): Boolean {
+            val record = annotations.firstOrNull { it.id == event.decoration.id } ?: return false
+            val locator = parseLocator(record.locatorJson) ?: return false
+            showAnnotationEditor(
+                PendingAnnotation(
+                    selectedText = record.selectedText,
+                    locator = locator,
+                    existingId = record.id,
+                    note = record.noteText,
+                    color = record.color
+                )
+            )
+            return true
+        }
+    }
+
     private fun saveAnnotation(target: PendingAnnotation, note: String, color: String) {
         val libraryBook = book ?: return
         lifecycleScope.launch {
@@ -850,6 +907,9 @@ class ReaderActivity : AppCompatActivity() {
                                 onFavorite = { result -> favoriteTranslation(visibleState, result) },
                                 onExplain = { explainTranslation(visibleState) },
                                 onAnnotate = ::annotateTranslatedText,
+                                onExpandCrossPage = { expandCrossPageSegment(visibleState) },
+                                crossPageMessage = crossPageMessage,
+                                isExpandingCrossPage = isExpandingCrossPage,
                                 onOpenSettings = ::openTranslationSettings
                             )
                         }
@@ -864,6 +924,7 @@ class ReaderActivity : AppCompatActivity() {
         dialog.setOnDismissListener {
             tapTranslationController?.clearSelection()
             currentTranslationState = null
+            crossPageMessage = null
             translationDialog = null
         }
         dialog.show()
@@ -904,6 +965,42 @@ class ReaderActivity : AppCompatActivity() {
             val current = currentTranslationState
             if (current is TranslationCardState.Success && current.sourceText == state.sourceText) {
                 currentTranslationState = current.copy(analysisText = explained.explanation)
+            }
+        }
+    }
+
+    /**
+     * Completes a sentence cut by a screen or page boundary before asking the
+     * translation service again. The reader only sends one extra request, and
+     * only when it could rebuild a sentence it can confirm locally.
+     */
+    private fun expandCrossPageSegment(state: TranslationCardState) {
+        if (isExpandingCrossPage) return
+        isExpandingCrossPage = true
+        crossPageMessage = null
+        lifecycleScope.launch {
+            try {
+                val context = tapTranslationController?.crossPageContext(state.sourceText)
+                    ?: pdfTranslationController?.crossPageContext(state.sourceText)
+                val expansion = ReaderCrossPageTranslationResolver.expansion(
+                    sourceText = state.sourceText,
+                    contextText = context,
+                    language = currentBookLanguage()
+                )
+                if (expansion == null) {
+                    crossPageMessage = "没有找到可确认的完整句段，已保留当前译文。"
+                    return@launch
+                }
+                val preferences = graph.translationSettings.preferences.value
+                tapTranslationController?.translateExpanded(
+                    TranslationRequest(
+                        text = expansion.text,
+                        sourceLanguage = preferences.sourceChoice.language ?: currentBookLanguage(),
+                        targetLanguage = preferences.targetLanguage
+                    )
+                )
+            } finally {
+                isExpandingCrossPage = false
             }
         }
     }
@@ -966,7 +1063,8 @@ class ReaderActivity : AppCompatActivity() {
 
     @androidx.compose.runtime.Composable
     private fun ReaderTheme(content: @androidx.compose.runtime.Composable () -> Unit) {
-        JerreaderTheme(accent = graph.appSettings.preferences.value.theme, content = content)
+        val preferences by graph.appSettings.preferences.collectAsState()
+        JerreaderTheme(accent = preferences.theme, content = content)
     }
 
     private fun dialogComposeView(
@@ -1050,6 +1148,7 @@ class ReaderActivity : AppCompatActivity() {
         const val EXTRA_SOURCE_FORMAT = "com.jerreader.reader.SOURCE_FORMAT"
 
         private const val TOOLBAR_HEIGHT_DP = 140
+        private const val ANNOTATION_DECORATION_GROUP = "jerreader-reading-annotations"
         private const val NAVIGATOR_TAG = "JerreaderNavigator"
         private const val INTEGRITY_TAG = "JerreaderIntegrity"
         private const val PROGRESS_SAVE_DEBOUNCE_MILLIS = 500L

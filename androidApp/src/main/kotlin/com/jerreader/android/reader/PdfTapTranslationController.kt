@@ -15,6 +15,9 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.jerreader.android.translation.AndroidTranslationSettingsStore
 import com.jerreader.shared.domain.LanguageCode
 import com.jerreader.shared.translation.QuickTranslationUnit
+import com.jerreader.shared.translation.ReaderCrossPageContextBuilder
+import com.jerreader.shared.translation.ReaderCrossPageTextFragment
+import com.jerreader.shared.translation.ReaderTextNormalizer
 import com.jerreader.shared.translation.TranslationFailure
 import com.jerreader.shared.translation.TranslationInputPolicy
 import com.jerreader.shared.translation.TranslationRequest
@@ -104,6 +107,63 @@ class PdfTapTranslationController(
             targetLanguage = preferences.targetLanguage
         )
         return translate(request)
+    }
+
+    /**
+     * Builds a bounded window from the previous, current and next page so a
+     * sentence broken by a page break can be completed before translating.
+     * Neighbouring pages are tagged with their own identity, so the shared
+     * builder can refuse text that does not belong to the same document flow.
+     */
+    suspend fun crossPageContext(sourceText: String): String? {
+        val source = ReaderTextNormalizer.normalized(sourceText)
+        if (source.isEmpty() || renderer.pageCount <= 0) return null
+        val pageIndex = currentPageIndex().coerceIn(0, renderer.pageCount - 1)
+        val documentIdentity = "pdf"
+        val current = recognizePage(pageIndex) ?: return null
+        val previous = if (pageIndex > 0) recognizePage(pageIndex - 1) else null
+        val next = if (pageIndex + 1 < renderer.pageCount) recognizePage(pageIndex + 1) else null
+        return ReaderCrossPageContextBuilder.context(
+            sourceText = source,
+            currentResourceIdentifier = documentIdentity,
+            currentChapterIdentifier = null,
+            previousPage = previous?.let {
+                ReaderCrossPageTextFragment(documentIdentity, null, it)
+            },
+            localContext = current,
+            nextPage = next?.let {
+                ReaderCrossPageTextFragment(documentIdentity, null, it)
+            }
+        )
+    }
+
+    private suspend fun recognizePage(pageIndex: Int): String? = withContext(Dispatchers.Default) {
+        val rendered = withContext(Dispatchers.IO) {
+            runCatching {
+                renderer.openPage(pageIndex).use { page ->
+                    val bitmap = Bitmap.createBitmap(
+                        page.width.coerceAtLeast(1),
+                        page.height.coerceAtLeast(1),
+                        Bitmap.Config.ARGB_8888
+                    )
+                    page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    bitmap
+                }
+            }.getOrNull()
+        } ?: return@withContext null
+        try {
+            val recognizer = if (languageHint() == LanguageCode.JAPANESE) {
+                japaneseRecognizer
+            } else {
+                latinRecognizer
+            }
+            val text = runCatching {
+                recognizer.process(InputImage.fromBitmap(rendered, 0)).await().text
+            }.getOrNull()
+            ReaderTextNormalizer.normalized(text).takeIf(String::isNotEmpty)
+        } finally {
+            rendered.recycle()
+        }
     }
 
     private suspend fun extractText(

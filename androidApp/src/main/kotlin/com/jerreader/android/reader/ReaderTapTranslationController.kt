@@ -7,6 +7,7 @@ import android.view.MenuItem
 import com.jerreader.android.translation.AndroidTranslationSettingsStore
 import com.jerreader.shared.domain.LanguageCode
 import com.jerreader.shared.translation.QuickTranslationUnit
+import com.jerreader.shared.translation.ReaderTextNormalizer
 import com.jerreader.shared.translation.TranslationFailure
 import com.jerreader.shared.translation.TranslationInputPolicy
 import com.jerreader.shared.translation.TranslationRequest
@@ -16,6 +17,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import org.json.JSONObject
+import org.json.JSONTokener
 import org.readium.r2.navigator.Selection
 import org.readium.r2.navigator.epub.EpubNavigatorFragment
 import org.readium.r2.navigator.input.InputListener
@@ -128,6 +131,10 @@ class ReaderTapTranslationController(
         startTranslation(request)
     }
 
+    /** Issues exactly one request for a locally completed cross-page segment. */
+    suspend fun translateExpanded(request: TranslationRequest): TranslationCardState =
+        translateNow(request)
+
     fun focusPoint(): PointF? = lastTapPoint?.let { PointF(it.x, it.y) }
 
     /**
@@ -151,6 +158,22 @@ class ReaderTapTranslationController(
         if (selected != "true") return null
         val selection = navigator.currentSelection() ?: return null
         return translateSelection(selection)
+    }
+
+    /**
+     * Reads the visible Readium document as plain text around [sourceText],
+     * excluding ruby annotations, so a sentence cut by a screen boundary can be
+     * completed locally before any translation request is made.
+     */
+    suspend fun crossPageContext(sourceText: String): String? {
+        val source = ReaderTextNormalizer.normalized(sourceText)
+        if (source.isEmpty()) return null
+        val raw = navigator?.evaluateJavascript(crossPageContextScript(source)) ?: return null
+        if (raw == "null") return null
+        val decoded = runCatching { JSONTokener(raw).nextValue() as? String }.getOrNull()
+            ?: raw.trim('"')
+        val context = ReaderTextNormalizer.normalized(decoded)
+        return context.takeIf { it.length > source.length && it.contains(source) }
     }
 
     /** Same entry point as a real Readium tap, including the pixel conversion. */
@@ -333,6 +356,73 @@ class ReaderTapTranslationController(
               selection.removeAllRanges();
               selection.addRange(range);
               return selection.toString().trim().length > 0;
+            })()
+        """.trimIndent()
+    }
+
+    private fun crossPageContextScript(source: String): String {
+        val encoded = JSONObject.quote(source)
+        return """
+            (() => {
+              const source = ($encoded || '').replace(/\s+/gu, ' ').trim();
+              if (!source) return null;
+              const root = document.body || document.documentElement;
+              const walker = document.createTreeWalker(
+                root,
+                NodeFilter.SHOW_TEXT,
+                {
+                  acceptNode(node) {
+                    const parent = node.parentElement;
+                    if (!parent || parent.closest('rt,rp,script,style,noscript')) {
+                      return NodeFilter.FILTER_REJECT;
+                    }
+                    return NodeFilter.FILTER_ACCEPT;
+                  }
+                }
+              );
+              const blockSelector =
+                'p,li,blockquote,dd,dt,figcaption,h1,h2,h3,h4,h5,h6,td,th,pre';
+              let raw = '';
+              let previousBlock = null;
+              let node = walker.nextNode();
+              while (node) {
+                const block = (node.parentElement &&
+                  node.parentElement.closest(blockSelector)) || root;
+                if (raw && previousBlock && block !== previousBlock) raw += ' ';
+                raw += node.data;
+                previousBlock = block;
+                node = walker.nextNode();
+              }
+              const text = raw.replace(/\s+/gu, ' ').trim();
+              if (!text) return null;
+
+              const matches = [];
+              let cursor = 0;
+              while (cursor <= text.length - source.length) {
+                const index = text.indexOf(source, cursor);
+                if (index < 0) break;
+                matches.push(index);
+                cursor = index + Math.max(source.length, 1);
+              }
+              if (!matches.length) return null;
+              const middle = text.length / 2;
+              matches.sort(
+                (left, right) => Math.abs(left - middle) - Math.abs(right - middle)
+              );
+
+              const selected = matches[0];
+              const maximum = Math.max(1200, Math.min(source.length + 240, 2000));
+              const remaining = Math.max(maximum - source.length, 0);
+              let start = Math.max(0, selected - Math.floor(remaining / 2));
+              let end = Math.min(
+                text.length,
+                selected + source.length + (remaining - Math.floor(remaining / 2))
+              );
+              if (end - start < maximum) {
+                start = Math.max(0, start - (maximum - (end - start)));
+                end = Math.min(text.length, start + maximum);
+              }
+              return text.slice(start, end);
             })()
         """.trimIndent()
     }

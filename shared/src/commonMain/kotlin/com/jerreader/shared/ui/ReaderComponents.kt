@@ -28,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.jerreader.shared.library.ReaderAnnotationColor
 import com.jerreader.shared.library.ReaderAppearance
 import com.jerreader.shared.library.ReaderFontOption
 import com.jerreader.shared.library.ReaderTextOrientation
@@ -303,11 +304,11 @@ fun ReaderAnnotationEditor(
         Text("划线与批注", style = MaterialTheme.typography.headlineSmall)
         Text(selectedText, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 5)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf("yellow" to "琥珀", "blue" to "海蓝", "mint" to "薄荷", "pink" to "珊瑚").forEach {
+            ReaderAnnotationColor.entries.forEach { option ->
                 FilterChip(
-                    selected = color == it.first,
-                    onClick = { color = it.first },
-                    label = { Text(it.second) }
+                    selected = color == option.id,
+                    onClick = { color = option.id },
+                    label = { Text(option.title) }
                 )
             }
         }

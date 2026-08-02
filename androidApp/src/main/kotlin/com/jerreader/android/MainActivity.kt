@@ -41,6 +41,7 @@ import com.jerreader.android.reader.encodeStoredReaderPreferences
 import com.jerreader.shared.domain.LanguageCode
 import com.jerreader.shared.library.LibraryBook
 import com.jerreader.shared.translation.TranslationRequest
+import com.jerreader.shared.ui.AppGuideScreen
 import com.jerreader.shared.ui.JerreaderLibraryApp
 import com.jerreader.shared.ui.JerreaderTheme
 import java.io.File
@@ -93,6 +94,7 @@ class MainActivity : ComponentActivity() {
                     }
                 )
             }
+            var showGuide by rememberSaveable { mutableStateOf(false) }
             val bottomBar: @Composable () -> Unit = {
                 AppNavigationBar(selectedTab) { selectedTab = it }
             }
@@ -127,9 +129,12 @@ class MainActivity : ComponentActivity() {
                         bottomBar = bottomBar
                     )
 
-                    AndroidAppTab.SETTINGS -> SettingsScreen(
+                    AndroidAppTab.SETTINGS -> if (showGuide) {
+                        AppGuideScreen(onBack = { showGuide = false })
+                    } else SettingsScreen(
                         appPreferences = appPreferences,
                         onThemeChanged = graph.appSettings::updateTheme,
+                        onOpenGuide = { showGuide = true },
                         onDefaultReaderChanged = { appearance ->
                             graph.appSettings.updateReaderAppearance(appearance)
                             if (appPreferences.applyReaderDefaultsToExistingBooks) {
