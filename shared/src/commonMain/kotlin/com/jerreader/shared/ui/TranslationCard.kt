@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -160,44 +161,20 @@ private fun OverlayHeader(
     isExpandingCrossPage: Boolean
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
-    Row(
+    // iOS header: a circular more button, a centred drag handle and a circular
+    // close button. No provider name and no title text.
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 12.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(7.dp)
+            .padding(horizontal = 10.dp, vertical = 8.dp)
     ) {
-        Box(
-            modifier = Modifier
-                .size(25.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.secondaryContainer),
-            contentAlignment = Alignment.Center
-        ) {
-            JerreaderGlyph(
-                icon = JerreaderIcon.SPEECH_BUBBLE_FILLED,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(14.dp)
-            )
-        }
-        Text(
-            text = when (state) {
-                is TranslationCardState.Loading -> "正在翻译"
-                is TranslationCardState.Success -> state.result.providerIdentifier
-                is TranslationCardState.Failure -> "翻译失败"
-            },
-            modifier = Modifier.weight(1f),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1
-        )
-        if (state is TranslationCardState.Success) {
-            Box {
-                HeaderIconButton(JerreaderIcon.MORE) { menuExpanded = true }
-                DropdownMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false }
-                ) {
+        Box(modifier = Modifier.align(Alignment.CenterStart)) {
+            HeaderIconButton(JerreaderIcon.MORE) { menuExpanded = true }
+            DropdownMenu(
+                expanded = menuExpanded,
+                onDismissRequest = { menuExpanded = false }
+            ) {
+                if (state is TranslationCardState.Success) {
                     DropdownMenuItem(
                         text = { Text("复制译文") },
                         onClick = { menuExpanded = false; onCopy(state.result.translatedText) }
@@ -208,41 +185,50 @@ private fun OverlayHeader(
                             onClick = { menuExpanded = false; favorite(state.result) }
                         )
                     }
-                    DropdownMenuItem(
-                        text = { Text("重新翻译") },
-                        onClick = { menuExpanded = false; onRetry() }
-                    )
+                }
+                DropdownMenuItem(
+                    text = { Text("重新翻译") },
+                    onClick = { menuExpanded = false; onRetry() }
+                )
+                if (state is TranslationCardState.Success) {
                     onExplain?.let { explain ->
                         DropdownMenuItem(
                             text = { Text("AI 句子结构分析") },
                             onClick = { menuExpanded = false; explain(state.result) }
                         )
                     }
-                    onAnnotate?.let { annotate ->
-                        DropdownMenuItem(
-                            text = { Text("添加笔记") },
-                            onClick = { menuExpanded = false; annotate(state.sourceText) }
-                        )
-                    }
-                    onExpandCrossPage?.let { expand ->
-                        DropdownMenuItem(
-                            enabled = !isExpandingCrossPage,
-                            text = {
-                                Text(if (isExpandingCrossPage) "正在补齐…" else "扩展跨页句段")
-                            },
-                            onClick = { menuExpanded = false; expand() }
-                        )
-                    }
-                    onAddToVocabulary?.takeIf { state.sourceText.isSingleWord() }?.let { add ->
-                        DropdownMenuItem(
-                            text = { Text("加入生词本") },
-                            onClick = { menuExpanded = false; add() }
-                        )
-                    }
+                }
+                onAnnotate?.let { annotate ->
+                    DropdownMenuItem(
+                        text = { Text("添加笔记") },
+                        onClick = { menuExpanded = false; annotate(state.sourceText) }
+                    )
+                }
+                onExpandCrossPage?.let { expand ->
+                    DropdownMenuItem(
+                        enabled = !isExpandingCrossPage,
+                        text = { Text(if (isExpandingCrossPage) "正在补齐…" else "扩展跨页句段") },
+                        onClick = { menuExpanded = false; expand() }
+                    )
+                }
+                onAddToVocabulary?.takeIf { state.sourceText.isSingleWord() }?.let { add ->
+                    DropdownMenuItem(
+                        text = { Text("加入生词本") },
+                        onClick = { menuExpanded = false; add() }
+                    )
                 }
             }
         }
-        HeaderIconButton(JerreaderIcon.CLOSE, onClick = onDismiss)
+        Box(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .size(width = 34.dp, height = 5.dp)
+                .clip(RoundedCornerShape(3.dp))
+                .background(MaterialTheme.colorScheme.outline)
+        )
+        Box(modifier = Modifier.align(Alignment.CenterEnd)) {
+            HeaderIconButton(JerreaderIcon.CLOSE, onClick = onDismiss)
+        }
     }
 }
 
@@ -250,8 +236,9 @@ private fun OverlayHeader(
 private fun HeaderIconButton(icon: JerreaderIcon, onClick: () -> Unit) {
     Box(
         modifier = Modifier
-            .size(30.dp)
+            .size(32.dp)
             .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
