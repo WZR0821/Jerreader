@@ -31,7 +31,14 @@ enum class JerreaderIcon {
     SPEECH_BUBBLE,
     SPEECH_BUBBLE_FILLED,
     MORE,
-    CHEVRON_FORWARD
+    CHEVRON_FORWARD,
+    TREND,
+    GRID,
+    CLOCK,
+    PLUS,
+    SORT,
+    CHECKLIST,
+    SEARCH
 }
 
 @Composable
@@ -62,7 +69,15 @@ fun JerreaderGlyph(
             JerreaderIcon.SPEECH_BUBBLE -> drawBubble(tint, stroke, unit, filled = false)
             JerreaderIcon.SPEECH_BUBBLE_FILLED -> drawBubble(tint, stroke, unit, filled = true)
             JerreaderIcon.MORE -> drawMore(tint, unit)
-            JerreaderIcon.CHEVRON_FORWARD -> drawChevrons(tint, stroke, unit, pointsLeft = false, count = 1)
+            JerreaderIcon.CHEVRON_FORWARD ->
+                drawChevrons(tint, stroke, unit, pointsLeft = false, count = 1)
+            JerreaderIcon.TREND -> drawTrend(tint, stroke, unit)
+            JerreaderIcon.GRID -> drawGrid(tint, unit)
+            JerreaderIcon.CLOCK -> drawClock(tint, stroke, unit)
+            JerreaderIcon.PLUS -> drawPlus(tint, stroke, unit)
+            JerreaderIcon.SORT -> drawSort(tint, stroke, unit)
+            JerreaderIcon.CHECKLIST -> drawChecklist(tint, stroke, unit)
+            JerreaderIcon.SEARCH -> drawSearch(tint, stroke, unit)
         }
     }
 }
@@ -192,4 +207,132 @@ private fun DrawScope.drawMore(tint: Color, unit: Float) {
     listOf(-spacing, 0f, spacing).forEach { dx ->
         drawCircle(tint, radius = unit * 0.055f, center = Offset(c.x + dx, c.y))
     }
+}
+
+private fun DrawScope.drawTrend(tint: Color, stroke: Stroke, unit: Float) {
+    val c = centered(unit)
+    val points = listOf(
+        Offset(c.x - unit * 0.30f, c.y + unit * 0.16f),
+        Offset(c.x - unit * 0.08f, c.y - unit * 0.06f),
+        Offset(c.x + unit * 0.06f, c.y + unit * 0.06f),
+        Offset(c.x + unit * 0.30f, c.y - unit * 0.22f)
+    )
+    points.zipWithNext { a, b -> drawLine(tint, a, b, stroke.width, stroke.cap) }
+    drawLine(
+        tint,
+        Offset(c.x + unit * 0.16f, c.y - unit * 0.22f),
+        Offset(c.x + unit * 0.30f, c.y - unit * 0.22f),
+        stroke.width,
+        stroke.cap
+    )
+    drawLine(
+        tint,
+        Offset(c.x + unit * 0.30f, c.y - unit * 0.22f),
+        Offset(c.x + unit * 0.30f, c.y - unit * 0.08f),
+        stroke.width,
+        stroke.cap
+    )
+}
+
+private fun DrawScope.drawGrid(tint: Color, unit: Float) {
+    val c = centered(unit)
+    val gap = unit * 0.15f
+    val side = unit * 0.22f
+    listOf(-1, 1).forEach { row ->
+        listOf(-1, 1).forEach { column ->
+            val left = c.x + column * gap - side / 2f
+            val top = c.y + row * gap - side / 2f
+            drawRoundRect(
+                color = tint,
+                topLeft = Offset(left, top),
+                size = androidx.compose.ui.geometry.Size(side, side),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(unit * 0.04f)
+            )
+        }
+    }
+}
+
+private fun DrawScope.drawClock(tint: Color, stroke: Stroke, unit: Float) {
+    val c = centered(unit)
+    drawCircle(tint, radius = unit * 0.30f, center = c, style = stroke)
+    drawLine(tint, c, Offset(c.x, c.y - unit * 0.17f), stroke.width, stroke.cap)
+    drawLine(tint, c, Offset(c.x + unit * 0.13f, c.y), stroke.width, stroke.cap)
+}
+
+private fun DrawScope.drawPlus(tint: Color, stroke: Stroke, unit: Float) {
+    val c = centered(unit)
+    val r = unit * 0.28f
+    drawLine(tint, Offset(c.x - r, c.y), Offset(c.x + r, c.y), stroke.width, stroke.cap)
+    drawLine(tint, Offset(c.x, c.y - r), Offset(c.x, c.y + r), stroke.width, stroke.cap)
+}
+
+private fun DrawScope.drawSort(tint: Color, stroke: Stroke, unit: Float) {
+    val c = centered(unit)
+    val h = unit * 0.28f
+    val dx = unit * 0.14f
+    drawLine(tint, Offset(c.x - dx, c.y - h), Offset(c.x - dx, c.y + h), stroke.width, stroke.cap)
+    drawLine(
+        tint,
+        Offset(c.x - dx - unit * 0.08f, c.y + h - unit * 0.10f),
+        Offset(c.x - dx, c.y + h),
+        stroke.width,
+        stroke.cap
+    )
+    drawLine(
+        tint,
+        Offset(c.x - dx + unit * 0.08f, c.y + h - unit * 0.10f),
+        Offset(c.x - dx, c.y + h),
+        stroke.width,
+        stroke.cap
+    )
+    drawLine(tint, Offset(c.x + dx, c.y - h), Offset(c.x + dx, c.y + h), stroke.width, stroke.cap)
+    drawLine(
+        tint,
+        Offset(c.x + dx - unit * 0.08f, c.y - h + unit * 0.10f),
+        Offset(c.x + dx, c.y - h),
+        stroke.width,
+        stroke.cap
+    )
+    drawLine(
+        tint,
+        Offset(c.x + dx + unit * 0.08f, c.y - h + unit * 0.10f),
+        Offset(c.x + dx, c.y - h),
+        stroke.width,
+        stroke.cap
+    )
+}
+
+private fun DrawScope.drawChecklist(tint: Color, stroke: Stroke, unit: Float) {
+    val c = centered(unit)
+    listOf(-unit * 0.20f, unit * 0.14f).forEachIndexed { index, dy ->
+        if (index == 0) {
+            drawCircle(tint, radius = unit * 0.09f, center = Offset(c.x - unit * 0.24f, c.y + dy), style = stroke)
+        } else {
+            drawCircle(tint, radius = unit * 0.09f, center = Offset(c.x - unit * 0.24f, c.y + dy), style = stroke)
+        }
+        drawLine(
+            tint,
+            Offset(c.x - unit * 0.08f, c.y + dy),
+            Offset(c.x + unit * 0.30f, c.y + dy),
+            stroke.width,
+            stroke.cap
+        )
+    }
+}
+
+private fun DrawScope.drawSearch(tint: Color, stroke: Stroke, unit: Float) {
+    val c = centered(unit)
+    drawCircle(
+        tint,
+        radius = unit * 0.20f,
+        center = Offset(c.x - unit * 0.05f, c.y - unit * 0.05f),
+        style = stroke
+    )
+    drawLine(
+        tint,
+        Offset(c.x + unit * 0.10f, c.y + unit * 0.10f),
+        Offset(c.x + unit * 0.26f, c.y + unit * 0.26f),
+        stroke.width,
+        stroke.cap
+    )
 }

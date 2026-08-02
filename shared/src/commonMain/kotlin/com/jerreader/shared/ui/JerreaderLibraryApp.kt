@@ -13,7 +13,12 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items as lazyItems
 import androidx.compose.foundation.layout.heightIn
@@ -113,137 +118,138 @@ fun JerreaderLibraryApp(
             }
         }
 
+    val recentBook = state.books
+        .filter { it.lastOpenedAtEpochMillis != null }
+        .maxByOrNull { it.lastOpenedAtEpochMillis ?: 0L }
+    val startedBooks = state.books.filter { it.lastReadProgress > 0 }
+
     Scaffold(
-            modifier = modifier.fillMaxSize(),
-            containerColor = MaterialTheme.colorScheme.background,
-            bottomBar = bottomBar,
-            topBar = {
-                TopAppBar(
-                    title = {
-                        Column {
-                            Text("Jerreader", fontWeight = FontWeight.SemiBold)
-                            Text(
-                                "我的书架",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.secondary
-                            )
-                        }
-                    },
-                    actions = {
-                        TextButton(
-                            enabled = state.books.isNotEmpty(),
-                            onClick = { isBatchEditing = true }
-                        ) { Text("批量") }
-                        Button(
-                            enabled = !state.isImporting,
-                            onClick = onImport
-                        ) {
-                            Text(if (state.isImporting) "导入中…" else "导入电子书")
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.background
-                    )
-                )
-            }
-        ) { contentPadding ->
+        modifier = modifier.fillMaxSize(),
+        containerColor = MaterialTheme.colorScheme.background,
+        bottomBar = bottomBar,
+        topBar = {
+            // iOS uses a large "书库" title with icon-only actions above it.
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(contentPadding)
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 16.dp)
             ) {
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
-                    placeholder = {
-                        Text("搜索书名、作者、系列或标签", style = MaterialTheme.typography.bodyMedium)
-                    },
-                    textStyle = MaterialTheme.typography.bodyMedium,
-                    singleLine = true
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    LibraryToolbarButton(
+                        icon = JerreaderIcon.CHECKLIST,
+                        enabled = state.books.isNotEmpty(),
+                        onClick = { isBatchEditing = true }
+                    )
+                    LibraryToolbarButton(
+                        icon = JerreaderIcon.SORT,
+                        onClick = {
+                            sortOrder = LibrarySortOrder.entries[
+                                (sortOrder.ordinal + 1) % LibrarySortOrder.entries.size
+                            ]
+                        }
+                    )
+                    LibraryToolbarButton(
+                        icon = JerreaderIcon.PLUS,
+                        enabled = !state.isImporting,
+                        onClick = onImport
+                    )
+                }
+                Text(
+                    "书库",
+                    modifier = Modifier.padding(bottom = 10.dp),
+                    style = MaterialTheme.typography.displaySmall
                 )
-                // Format and sort are separate axes; one long scrolling strip hid
-                // the sort options off the right edge.
-                LibraryChipRow {
-                    JerreaderSegmented(
-                        options = listOf<Pair<String?, String>>(null to "全部格式") +
-                            listOf("epub", "pdf", "docx", "txt").map { it to it.uppercase() },
-                        selected = selectedFormat,
-                        onSelect = { selectedFormat = it }
-                    )
-                }
-                LibraryChipRow {
-                    JerreaderSegmented(
-                        options = LibrarySortOrder.entries.map { it to it.title },
-                        selected = sortOrder,
-                        onSelect = { sortOrder = it }
-                    )
-                    if (categories.isNotEmpty()) {
-                        FilterChip(
-                            selected = selectedCategory == null,
-                            onClick = { selectedCategory = null },
-                            label = { Text("全部文件夹", style = MaterialTheme.typography.labelLarge) }
+            }
+        }
+    ) { contentPadding ->
+        Box(modifier = Modifier.fillMaxSize().padding(contentPadding)) {
+            when {
+                state.isLoading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                state.books.isEmpty() -> EmptyLibrary(
+                    onImport = onImport,
+                    modifier = Modifier.align(Alignment.Center)
+                )
+                else -> LazyVerticalGrid(
+                    columns = GridCells.Adaptive(minSize = 150.dp),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(20.dp)
+                ) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        LibrarySearchField(searchQuery) { searchQuery = it }
+                    }
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        LibraryReadingOverview(
+                            totalMinutes = (state.books.sumOf { it.totalReadingSeconds } / 60).toInt(),
+                            startedCount = startedBooks.size,
+                            averageProgress = if (startedBooks.isEmpty()) {
+                                0.0
+                            } else {
+                                startedBooks.sumOf { it.lastReadProgress } / startedBooks.size
+                            }
                         )
-                        categories.forEach { category ->
-                            FilterChip(
-                                selected = selectedCategory == category,
-                                onClick = { selectedCategory = category },
-                                label = { Text(category, style = MaterialTheme.typography.labelLarge) }
-                            )
+                    }
+                    if (recentBook != null) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                LibrarySectionTitle(
+                                    title = "最近查看",
+                                    detail = "继续上次阅读",
+                                    icon = JerreaderIcon.CLOCK
+                                )
+                                LibraryRecentlyViewedRow(
+                                    title = recentBook.title,
+                                    author = recentBook.author ?: "未知作者",
+                                    format = recentBook.sourceFormat,
+                                    lastOpenedLabel = null,
+                                    progress = recentBook.lastReadProgress,
+                                    onOpen = { onOpenBook(recentBook.id) },
+                                    cover = { coverContent?.invoke(recentBook) }
+                                )
+                            }
                         }
                     }
-                }
-                Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                when {
-                    state.isLoading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
-                    state.books.isEmpty() -> EmptyLibrary(
-                        onImport = onImport,
-                        modifier = Modifier.align(Alignment.Center)
-                    )
-                    displayedBooks.isEmpty() -> Text(
-                        "没有符合筛选条件的书籍。",
-                        modifier = Modifier.align(Alignment.Center)
-                    )
-                    else -> LazyVerticalGrid(
-                        columns = GridCells.Adaptive(minSize = 148.dp),
-                        contentPadding = PaddingValues(16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        items(displayedBooks, key = LibraryBook::id) { book ->
-                            LibraryBookCard(
-                                book = book,
-                                onOpen = { onOpenBook(book.id) },
-                                onDelete = { pendingDeletion = book },
-                                onEdit = { editingBook = book },
-                                onChangeCover = { onChangeCover(book.id) },
-                                coverContent = coverContent
-                            )
-                        }
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        LibrarySectionTitle(
+                            title = "所有书籍",
+                            detail = "${displayedBooks.size} 本 · ${sortOrder.title}",
+                            icon = JerreaderIcon.GRID
+                        )
+                    }
+                    items(displayedBooks, key = LibraryBook::id) { book ->
+                        LibraryBookCard(
+                            book = book,
+                            onOpen = { onOpenBook(book.id) },
+                            onDelete = { pendingDeletion = book },
+                            onEdit = { editingBook = book },
+                            onChangeCover = { onChangeCover(book.id) },
+                            coverContent = coverContent
+                        )
                     }
                 }
+            }
 
-                state.message?.let { message ->
-                    Card(
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.inverseSurface
-                        )
-                    ) {
-                        Text(
-                            text = message,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                            color = MaterialTheme.colorScheme.inverseOnSurface
-                        )
-                    }
-                }
+            state.message?.let { message ->
+                Card(
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.inverseSurface
+                    )
+                ) {
+                    Text(
+                        text = message,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                        color = MaterialTheme.colorScheme.inverseOnSurface
+                    )
                 }
             }
         }
+    }
 
         pendingDeletion?.let { book ->
             AlertDialog(
@@ -294,6 +300,50 @@ fun JerreaderLibraryApp(
                 isBatchEditing = false
             }
         )
+    }
+}
+
+@Composable
+private fun LibrarySearchField(value: String, onValueChange: (String) -> Unit) {
+    // iOS uses a filled, rounded search field rather than an outlined one.
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            JerreaderGlyph(
+                icon = JerreaderIcon.SEARCH,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp)
+            )
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                modifier = Modifier.weight(1f).padding(vertical = 12.dp),
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                    color = MaterialTheme.colorScheme.onSurface
+                ),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                decorationBox = { inner ->
+                    if (value.isEmpty()) {
+                        Text(
+                            "搜索书名、作者、系列、文件夹或标签",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    inner()
+                }
+            )
+        }
     }
 }
 
