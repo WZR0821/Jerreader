@@ -46,7 +46,11 @@ enum class JerreaderIcon {
     SHIELD,
     BOOKS,
     DICTIONARY,
-    GEAR
+    GEAR,
+    STAR_OUTLINE,
+    STAR_FILLED,
+    DOWNLOAD,
+    LOCK
 }
 
 @Composable
@@ -94,6 +98,10 @@ fun JerreaderGlyph(
             JerreaderIcon.BOOKS -> drawBooks(tint, unit)
             JerreaderIcon.DICTIONARY -> drawDictionary(tint, stroke, unit)
             JerreaderIcon.GEAR -> drawGear(tint, stroke, unit)
+            JerreaderIcon.STAR_OUTLINE -> drawStar(tint, stroke, unit, filled = false)
+            JerreaderIcon.STAR_FILLED -> drawStar(tint, stroke, unit, filled = true)
+            JerreaderIcon.DOWNLOAD -> drawDownload(tint, stroke, unit)
+            JerreaderIcon.LOCK -> drawLock(tint, stroke, unit)
         }
     }
 }
@@ -463,4 +471,46 @@ private fun DrawScope.drawGear(tint: Color, stroke: Stroke, unit: Float) {
             stroke.cap
         )
     }
+}
+
+private fun DrawScope.drawStar(tint: Color, stroke: Stroke, unit: Float, filled: Boolean) {
+    val c = centered(unit)
+    val outer = unit * 0.31f
+    val inner = unit * 0.135f
+    val path = Path()
+    repeat(10) { index ->
+        val radius = if (index % 2 == 0) outer else inner
+        val angle = -kotlin.math.PI.toFloat() / 2f + index * kotlin.math.PI.toFloat() / 5f
+        val x = c.x + radius * kotlin.math.cos(angle)
+        val y = c.y + radius * kotlin.math.sin(angle)
+        if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+    }
+    path.close()
+    if (filled) drawPath(path, tint) else drawPath(path, tint, style = stroke)
+}
+
+private fun DrawScope.drawDownload(tint: Color, stroke: Stroke, unit: Float) {
+    val c = centered(unit)
+    drawLine(tint, Offset(c.x, c.y - unit * 0.26f), Offset(c.x, c.y + unit * 0.08f), stroke.width, stroke.cap)
+    drawLine(tint, Offset(c.x - unit * 0.12f, c.y - unit * 0.04f), Offset(c.x, c.y + unit * 0.08f), stroke.width, stroke.cap)
+    drawLine(tint, Offset(c.x + unit * 0.12f, c.y - unit * 0.04f), Offset(c.x, c.y + unit * 0.08f), stroke.width, stroke.cap)
+    drawLine(tint, Offset(c.x - unit * 0.24f, c.y + unit * 0.24f), Offset(c.x + unit * 0.24f, c.y + unit * 0.24f), stroke.width, stroke.cap)
+}
+
+private fun DrawScope.drawLock(tint: Color, stroke: Stroke, unit: Float) {
+    val c = centered(unit)
+    drawRoundRect(
+        color = tint,
+        topLeft = Offset(c.x - unit * 0.20f, c.y - unit * 0.02f),
+        size = androidx.compose.ui.geometry.Size(unit * 0.40f, unit * 0.30f),
+        cornerRadius = androidx.compose.ui.geometry.CornerRadius(unit * 0.06f),
+        style = stroke
+    )
+    val arc = Path().apply {
+        moveTo(c.x - unit * 0.12f, c.y - unit * 0.02f)
+        lineTo(c.x - unit * 0.12f, c.y - unit * 0.14f)
+        quadraticTo(c.x, c.y - unit * 0.30f, c.x + unit * 0.12f, c.y - unit * 0.14f)
+        lineTo(c.x + unit * 0.12f, c.y - unit * 0.02f)
+    }
+    drawPath(arc, tint, style = stroke)
 }

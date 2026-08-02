@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.items as lazyItems
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -51,6 +52,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.jerreader.shared.library.LibraryBook
@@ -161,9 +164,12 @@ fun JerreaderLibraryApp(
                 }
                 Text(
                     "书库",
-                    modifier = Modifier.padding(bottom = 10.dp),
+                    modifier = Modifier.padding(bottom = 8.dp),
                     style = MaterialTheme.typography.displaySmall
                 )
+                // iOS pins the search field directly under the large title.
+                LibrarySearchField(searchQuery) { searchQuery = it }
+                Spacer(Modifier.padding(bottom = 8.dp))
             }
         }
     ) { contentPadding ->
@@ -180,9 +186,6 @@ fun JerreaderLibraryApp(
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                     verticalArrangement = Arrangement.spacedBy(20.dp)
                 ) {
-                    item(span = { GridItemSpan(maxLineSpan) }) {
-                        LibrarySearchField(searchQuery) { searchQuery = it }
-                    }
                     item(span = { GridItemSpan(maxLineSpan) }) {
                         LibraryReadingOverview(
                             totalMinutes = (state.books.sumOf { it.totalReadingSeconds } / 60).toInt(),
@@ -362,16 +365,55 @@ private fun LibraryChipRow(content: @Composable () -> Unit) {
 @Composable
 private fun EmptyLibrary(onImport: () -> Unit, modifier: Modifier = Modifier) {
     Column(
-        modifier = modifier.padding(32.dp),
+        modifier = modifier.padding(horizontal = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Text("书架还是空的", style = MaterialTheme.typography.headlineSmall)
+        Box(
+            modifier = Modifier
+                .size(96.dp)
+                .clip(RoundedCornerShape(24.dp))
+                .background(MaterialTheme.colorScheme.secondaryContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            JerreaderGlyph(
+                icon = JerreaderIcon.BOOKS,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(46.dp)
+            )
+        }
         Text(
-            "导入你拥有的 EPUB、PDF、DOCX 或 TXT，阅读数据仅保存在本机。",
-            color = MaterialTheme.colorScheme.secondary
+            "把下一本书放进来",
+            style = MaterialTheme.typography.titleLarge,
+            textAlign = TextAlign.Center
         )
-        Button(onClick = onImport) { Text("选择电子书") }
+        Text(
+            "导入 EPUB、PDF、DOCX 或 TXT。书籍只保存在这台设备上。",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+        JerreaderPrimaryButton(
+            text = "导入书籍",
+            icon = JerreaderIcon.DOWNLOAD,
+            onClick = onImport,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            JerreaderGlyph(
+                icon = JerreaderIcon.LOCK,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(13.dp)
+            )
+            Text(
+                "本机保存，不会上传",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 

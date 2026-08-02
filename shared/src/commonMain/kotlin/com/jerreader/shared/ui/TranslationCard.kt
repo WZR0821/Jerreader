@@ -10,7 +10,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -101,7 +104,7 @@ fun TranslationCard(
         Column(
             modifier = Modifier
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             when (state) {
@@ -114,10 +117,20 @@ fun TranslationCard(
                 }
 
                 is TranslationCardState.Success -> {
-                    Text(
-                        text = state.result.translatedText,
-                        style = MaterialTheme.typography.bodyLarge
-                    )
+                    // iOS marks the translation with a vertical accent rule.
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Box(
+                            modifier = Modifier
+                                .width(3.dp)
+                                .heightIn(min = 22.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(MaterialTheme.colorScheme.primary)
+                        )
+                        Text(
+                            text = state.result.translatedText,
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
                     state.analysisText?.let { analysis ->
                         Text(
                             "句子结构",
@@ -166,14 +179,59 @@ private fun OverlayHeader(
     isExpandingCrossPage: Boolean
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
-    // iOS header: a circular more button, a centred drag handle and a circular
-    // close button. No provider name and no title text.
-    Box(
+    // iOS header: a 字 badge with the 译文 label on the left, a centred drag
+    // handle, then the more, favourite and close buttons.
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 10.dp, vertical = 8.dp)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(modifier = Modifier.align(Alignment.CenterStart)) {
+        Box(
+            modifier = Modifier
+                .size(24.dp)
+                .clip(RoundedCornerShape(7.dp))
+                .background(MaterialTheme.colorScheme.primary),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                "字",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onPrimary
+            )
+        }
+        Text(
+            "译文",
+            modifier = Modifier.padding(start = 7.dp),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(26.dp)
+                .then(
+                    if (onDrag == null) {
+                        Modifier
+                    } else {
+                        Modifier.pointerInput(Unit) {
+                            detectDragGestures { change, amount ->
+                                change.consume()
+                                onDrag(amount.x, amount.y)
+                            }
+                        }
+                    }
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(width = 34.dp, height = 5.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(MaterialTheme.colorScheme.outline)
+            )
+        }
+        Box {
             HeaderIconButton(JerreaderIcon.MORE) { menuExpanded = true }
             DropdownMenu(
                 expanded = menuExpanded,
@@ -184,12 +242,6 @@ private fun OverlayHeader(
                         text = { Text("复制译文") },
                         onClick = { menuExpanded = false; onCopy(state.result.translatedText) }
                     )
-                    onFavorite?.let { favorite ->
-                        DropdownMenuItem(
-                            text = { Text("收藏译文") },
-                            onClick = { menuExpanded = false; favorite(state.result) }
-                        )
-                    }
                 }
                 DropdownMenuItem(
                     text = { Text("重新翻译") },
@@ -224,35 +276,11 @@ private fun OverlayHeader(
                 }
             }
         }
-        // The handle is the drag target, as on iOS.
-        Box(
-            modifier = Modifier
-                .align(Alignment.Center)
-                .size(width = 76.dp, height = 26.dp)
-                .then(
-                    if (onDrag == null) {
-                        Modifier
-                    } else {
-                        Modifier.pointerInput(Unit) {
-                            detectDragGestures { change, amount ->
-                                change.consume()
-                                onDrag(amount.x, amount.y)
-                            }
-                        }
-                    }
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(width = 34.dp, height = 5.dp)
-                    .clip(RoundedCornerShape(3.dp))
-                    .background(MaterialTheme.colorScheme.outline)
-            )
+        // iOS keeps favouriting on the header rather than inside the menu.
+        if (state is TranslationCardState.Success && onFavorite != null) {
+            HeaderIconButton(JerreaderIcon.STAR_OUTLINE) { onFavorite(state.result) }
         }
-        Box(modifier = Modifier.align(Alignment.CenterEnd)) {
-            HeaderIconButton(JerreaderIcon.CLOSE, onClick = onDismiss)
-        }
+        HeaderIconButton(JerreaderIcon.CLOSE, onClick = onDismiss)
     }
 }
 
