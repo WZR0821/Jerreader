@@ -268,3 +268,107 @@ fun LibraryToolbarButton(
         )
     }
 }
+
+/**
+ * Segmented navigation used by the iOS 学习 page: a white pill container with
+ * an icon and a label per item, the selected one filled with the accent.
+ */
+@Composable
+fun <T> JerreaderSegmentedNav(
+    options: List<Triple<T, String, JerreaderIcon>>,
+    selected: T,
+    onSelect: (T) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(15.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh
+    ) {
+        Row(modifier = Modifier.padding(5.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            options.forEach { (value, title, icon) ->
+                val isSelected = value == selected
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(11.dp))
+                        .background(
+                            if (isSelected) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                androidx.compose.ui.graphics.Color.Transparent
+                            }
+                        )
+                        .clickable { onSelect(value) }
+                        .padding(vertical = 9.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    JerreaderGlyph(
+                        icon = icon,
+                        tint = if (isSelected) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        },
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Text(
+                        text = title,
+                        modifier = Modifier.padding(start = 5.dp),
+                        style = MaterialTheme.typography.labelLarge,
+                        maxLines = 1,
+                        color = if (isSelected) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Hint banner: a rounded glyph tile, a bold headline and a grey subtitle. */
+@Composable
+fun JerreaderHintCard(
+    badge: String,
+    title: String,
+    detail: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer
+    ) {
+        Row(
+            modifier = Modifier.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(52.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    badge,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    detail,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}

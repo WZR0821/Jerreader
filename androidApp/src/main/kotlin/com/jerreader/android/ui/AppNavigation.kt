@@ -5,12 +5,17 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import com.jerreader.shared.ui.JerreaderGlyph
+import com.jerreader.shared.ui.JerreaderIcon
 
-enum class AndroidAppTab(val title: String) {
-    LIBRARY("书架"),
-    LEARNING("学习"),
-    SETTINGS("设置")
+enum class AndroidAppTab(val title: String, internal val icon: JerreaderIcon) {
+    LIBRARY("书架", JerreaderIcon.BOOKS),
+    LEARNING("学习", JerreaderIcon.DICTIONARY),
+    SETTINGS("设置", JerreaderIcon.GEAR)
 }
 
 @Composable
@@ -20,9 +25,19 @@ fun AppNavigationBar(selected: AndroidAppTab, onSelected: (AndroidAppTab) -> Uni
             NavigationBarItem(
                 selected = selected == tab,
                 onClick = { onSelected(tab) },
-                // A single label reads better than the previous character-as-icon
-                // with the same word repeated underneath it.
-                icon = { Text(tab.title, style = MaterialTheme.typography.labelLarge) },
+                // iOS puts a glyph above the label in the tab bar.
+                icon = {
+                    JerreaderGlyph(
+                        icon = tab.icon,
+                        tint = if (selected == tab) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.size(24.dp)
+                    )
+                },
+                label = { Text(tab.title, style = MaterialTheme.typography.labelSmall) },
                 colors = NavigationBarItemDefaults.colors(
                     selectedIconColor = MaterialTheme.colorScheme.primary,
                     unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,

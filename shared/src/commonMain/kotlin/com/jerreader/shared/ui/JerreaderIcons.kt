@@ -43,7 +43,10 @@ enum class JerreaderIcon {
     SLIDERS,
     PALETTE,
     QUESTION,
-    SHIELD
+    SHIELD,
+    BOOKS,
+    DICTIONARY,
+    GEAR
 }
 
 @Composable
@@ -88,6 +91,9 @@ fun JerreaderGlyph(
             JerreaderIcon.PALETTE -> drawPalette(tint, stroke, unit)
             JerreaderIcon.QUESTION -> drawQuestion(tint, stroke, unit)
             JerreaderIcon.SHIELD -> drawShield(tint, stroke, unit)
+            JerreaderIcon.BOOKS -> drawBooks(tint, unit)
+            JerreaderIcon.DICTIONARY -> drawDictionary(tint, stroke, unit)
+            JerreaderIcon.GEAR -> drawGear(tint, stroke, unit)
         }
     }
 }
@@ -408,4 +414,53 @@ private fun DrawScope.drawShield(tint: Color, stroke: Stroke, unit: Float) {
         close()
     }
     drawPath(path, tint, style = stroke)
+}
+
+private fun DrawScope.drawBooks(tint: Color, unit: Float) {
+    val c = centered(unit)
+    val heights = listOf(0.46f, 0.56f, 0.40f)
+    val width = unit * 0.13f
+    heights.forEachIndexed { index, factor ->
+        val height = unit * factor
+        val left = c.x - unit * 0.24f + index * (width + unit * 0.05f)
+        drawRoundRect(
+            color = tint,
+            topLeft = Offset(left, c.y + unit * 0.26f - height),
+            size = androidx.compose.ui.geometry.Size(width, height),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(unit * 0.03f)
+        )
+    }
+}
+
+private fun DrawScope.drawDictionary(tint: Color, stroke: Stroke, unit: Float) {
+    val c = centered(unit)
+    val left = c.x - unit * 0.26f
+    val right = c.x + unit * 0.26f
+    val top = c.y - unit * 0.30f
+    val bottom = c.y + unit * 0.30f
+    drawRoundRect(
+        color = tint,
+        topLeft = Offset(left, top),
+        size = androidx.compose.ui.geometry.Size(right - left, bottom - top),
+        cornerRadius = androidx.compose.ui.geometry.CornerRadius(unit * 0.06f),
+        style = stroke
+    )
+    drawLine(tint, Offset(left + unit * 0.12f, top), Offset(left + unit * 0.12f, bottom), stroke.width, stroke.cap)
+}
+
+private fun DrawScope.drawGear(tint: Color, stroke: Stroke, unit: Float) {
+    val c = centered(unit)
+    drawCircle(tint, radius = unit * 0.14f, center = c, style = stroke)
+    repeat(8) { index ->
+        val angle = index * kotlin.math.PI.toFloat() / 4f
+        val inner = unit * 0.22f
+        val outer = unit * 0.31f
+        drawLine(
+            tint,
+            Offset(c.x + inner * kotlin.math.cos(angle), c.y + inner * kotlin.math.sin(angle)),
+            Offset(c.x + outer * kotlin.math.cos(angle), c.y + outer * kotlin.math.sin(angle)),
+            stroke.width,
+            stroke.cap
+        )
+    }
 }

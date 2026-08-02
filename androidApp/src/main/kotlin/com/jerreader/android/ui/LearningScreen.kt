@@ -31,7 +31,11 @@ import android.content.Intent
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import androidx.compose.foundation.layout.statusBarsPadding
 import com.jerreader.android.AppGraph
+import com.jerreader.shared.ui.JerreaderHintCard
+import com.jerreader.shared.ui.JerreaderIcon
+import com.jerreader.shared.ui.JerreaderSegmentedNav
 import com.jerreader.android.data.TranslationFavoriteEntity
 import com.jerreader.android.data.WordLookupEntity
 import com.jerreader.android.learning.LearningRecordRepository
@@ -68,7 +72,16 @@ fun LearningScreen(graph: AppGraph, bottomBar: @Composable () -> Unit) {
         .collectAsStateWithLifecycle(initialValue = emptyList())
     val context = LocalContext.current
     Scaffold(
-        topBar = { TopAppBar(title = { Text("学习") }) },
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            Text(
+                "学习",
+                modifier = Modifier
+                    .statusBarsPadding()
+                    .padding(start = 16.dp, top = 6.dp, bottom = 10.dp),
+                style = MaterialTheme.typography.displaySmall
+            )
+        },
         bottomBar = bottomBar
     ) { padding ->
         Column(
@@ -79,18 +92,27 @@ fun LearningScreen(graph: AppGraph, bottomBar: @Composable () -> Unit) {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                LearningTab.entries.forEach { candidate ->
-                    FilterChip(
-                        selected = tab == candidate,
-                        onClick = { tab = candidate },
-                        label = { Text(candidate.title) }
-                    )
-                }
-            }
+            // iOS uses a pill segmented navigation here, not a chip row.
+            JerreaderSegmentedNav(
+                options = listOf(
+                    Triple(LearningTab.LOOKUP, "查词", JerreaderIcon.SEARCH),
+                    Triple(LearningTab.TRANSLATE, "翻译", JerreaderIcon.SPEECH_BUBBLE),
+                    Triple(LearningTab.VOCABULARY, "生词本", JerreaderIcon.BOOKMARK_OUTLINE),
+                    Triple(LearningTab.HISTORY, "历史", JerreaderIcon.CLOCK)
+                ),
+                selected = tab,
+                onSelect = { tab = it }
+            )
+            JerreaderHintCard(
+                badge = if (tab == LearningTab.TRANSLATE) "译" else "あ",
+                title = when (tab) {
+                    LearningTab.LOOKUP -> "读懂一个词，也保留它的语境。"
+                    LearningTab.TRANSLATE -> "翻译一段话，随手收藏。"
+                    LearningTab.VOCABULARY -> "生词和译文都在这里。"
+                    LearningTab.HISTORY -> "查过的词都留有记录。"
+                },
+                detail = "查询结果、收藏与上下文只保存在本机"
+            )
             when (tab) {
                 LearningTab.LOOKUP -> LookupTool(graph)
                 LearningTab.TRANSLATE -> TranslationTool(graph)
