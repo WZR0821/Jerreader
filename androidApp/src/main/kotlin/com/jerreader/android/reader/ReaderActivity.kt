@@ -1342,7 +1342,9 @@ class ReaderActivity : AppCompatActivity() {
         const val EXTRA_EXPECTED_LAST_MODIFIED = "com.jerreader.reader.EXPECTED_LAST_MODIFIED"
         const val EXTRA_SOURCE_FORMAT = "com.jerreader.reader.SOURCE_FORMAT"
 
-        private val GAP = 16.dp
+        // Enough clearance that the card never sits on the descenders of
+        // the line it was anchored to.
+        private val GAP = 26.dp
         private const val CONTENT_TOP_INSET_DP = 74
         private const val CONTENT_BOTTOM_INSET_DP = 156
         private const val ANNOTATION_DECORATION_GROUP = "jerreader-reading-annotations"
