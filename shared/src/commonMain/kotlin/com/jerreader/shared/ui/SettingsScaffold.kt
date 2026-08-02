@@ -20,6 +20,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.Surface
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -78,54 +79,86 @@ fun SettingsPage(
     }
 }
 
-/** Section header with the small accent chip, like `SettingsSectionHeader`. */
+/**
+ * `SettingsSectionHeader`: an accent-tinted icon and an accent-tinted title
+ * above a plain white card. iOS does not use a grey caption here.
+ */
 @Composable
 fun SettingsGroup(
     title: String,
+    icon: JerreaderIcon = JerreaderIcon.INFO,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
-        Text(
-            text = title,
-            modifier = Modifier.padding(start = 6.dp, bottom = 8.dp),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        JerreaderCard { content() }
+        Row(
+            modifier = Modifier.padding(start = 10.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            JerreaderGlyph(
+                icon = icon,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(17.dp)
+            )
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh
+        ) {
+            Column(modifier = Modifier.padding(vertical = 2.dp)) { content() }
+        }
     }
 }
 
-/** Row that opens a sub-page: title, detail and a trailing chevron. */
+/** Row that opens a sub-page: leading icon, title, detail, trailing chevron. */
 @Composable
 fun SettingsNavigationRow(
     title: String,
     detail: String,
+    icon: JerreaderIcon,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showDivider: Boolean = true
 ) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
-            .padding(vertical = 10.dp, horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            Text(
-                detail,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onClick)
+                .padding(vertical = 13.dp, horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            JerreaderGlyph(
+                icon = icon,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(24.dp)
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    detail,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            JerreaderGlyph(
+                icon = JerreaderIcon.CHEVRON_FORWARD,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(13.dp)
             )
         }
-        JerreaderGlyph(
-            icon = JerreaderIcon.CHEVRON_FORWARD,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(14.dp)
-        )
+        // iOS insets the separator so it starts past the leading icon.
+        if (showDivider) {
+            JerreaderDivider(modifier = Modifier.padding(start = 54.dp))
+        }
     }
 }
 
@@ -133,7 +166,7 @@ fun SettingsNavigationRow(
 @Composable
 fun SettingsValueRow(label: String, value: String, modifier: Modifier = Modifier) {
     Row(
-        modifier = modifier.fillMaxWidth().padding(vertical = 8.dp, horizontal = 4.dp),
+        modifier = modifier.fillMaxWidth().padding(vertical = 12.dp, horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)

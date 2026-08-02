@@ -2,6 +2,8 @@ package com.jerreader.shared.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -78,10 +80,12 @@ fun TranslationCard(
     crossPageMessage: String? = null,
     isExpandingCrossPage: Boolean = false,
     onOpenSettings: () -> Unit,
+    onDrag: ((Float, Float) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
         OverlayHeader(
+            onDrag = onDrag,
             state = state,
             onDismiss = onDismiss,
             onRetry = onRetry,
@@ -149,6 +153,7 @@ fun TranslationCard(
 
 @Composable
 private fun OverlayHeader(
+    onDrag: ((Float, Float) -> Unit)?,
     state: TranslationCardState,
     onDismiss: () -> Unit,
     onRetry: () -> Unit,
@@ -219,13 +224,32 @@ private fun OverlayHeader(
                 }
             }
         }
+        // The handle is the drag target, as on iOS.
         Box(
             modifier = Modifier
                 .align(Alignment.Center)
-                .size(width = 34.dp, height = 5.dp)
-                .clip(RoundedCornerShape(3.dp))
-                .background(MaterialTheme.colorScheme.outline)
-        )
+                .size(width = 76.dp, height = 26.dp)
+                .then(
+                    if (onDrag == null) {
+                        Modifier
+                    } else {
+                        Modifier.pointerInput(Unit) {
+                            detectDragGestures { change, amount ->
+                                change.consume()
+                                onDrag(amount.x, amount.y)
+                            }
+                        }
+                    }
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(width = 34.dp, height = 5.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(MaterialTheme.colorScheme.outline)
+            )
+        }
         Box(modifier = Modifier.align(Alignment.CenterEnd)) {
             HeaderIconButton(JerreaderIcon.CLOSE, onClick = onDismiss)
         }

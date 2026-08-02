@@ -17,7 +17,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -75,7 +77,17 @@ fun ReaderTopChrome(
                 isActive = isBookmarked,
                 onClick = onToggleBookmark
             )
-            ChromeButton(JerreaderIcon.TEXT_FORMAT, onClick = onAppearance)
+            // iOS labels this control 「格式」 rather than using a glyph.
+            TextButton(
+                onClick = onAppearance,
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    "格式",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
         }
     }
 }

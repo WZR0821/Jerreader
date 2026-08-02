@@ -38,7 +38,12 @@ enum class JerreaderIcon {
     PLUS,
     SORT,
     CHECKLIST,
-    SEARCH
+    SEARCH,
+    INFO,
+    SLIDERS,
+    PALETTE,
+    QUESTION,
+    SHIELD
 }
 
 @Composable
@@ -78,6 +83,11 @@ fun JerreaderGlyph(
             JerreaderIcon.SORT -> drawSort(tint, stroke, unit)
             JerreaderIcon.CHECKLIST -> drawChecklist(tint, stroke, unit)
             JerreaderIcon.SEARCH -> drawSearch(tint, stroke, unit)
+            JerreaderIcon.INFO -> drawInfo(tint, stroke, unit)
+            JerreaderIcon.SLIDERS -> drawSliders(tint, stroke, unit)
+            JerreaderIcon.PALETTE -> drawPalette(tint, stroke, unit)
+            JerreaderIcon.QUESTION -> drawQuestion(tint, stroke, unit)
+            JerreaderIcon.SHIELD -> drawShield(tint, stroke, unit)
         }
     }
 }
@@ -335,4 +345,67 @@ private fun DrawScope.drawSearch(tint: Color, stroke: Stroke, unit: Float) {
         stroke.width,
         stroke.cap
     )
+}
+
+private fun DrawScope.drawInfo(tint: Color, stroke: Stroke, unit: Float) {
+    val c = centered(unit)
+    drawCircle(tint, radius = unit * 0.32f, center = c, style = stroke)
+    drawCircle(tint, radius = unit * 0.035f, center = Offset(c.x, c.y - unit * 0.14f))
+    drawLine(
+        tint,
+        Offset(c.x, c.y - unit * 0.02f),
+        Offset(c.x, c.y + unit * 0.16f),
+        stroke.width,
+        stroke.cap
+    )
+}
+
+private fun DrawScope.drawSliders(tint: Color, stroke: Stroke, unit: Float) {
+    val c = centered(unit)
+    listOf(-unit * 0.18f to -unit * 0.06f, unit * 0.18f to unit * 0.10f).forEach { (dy, knob) ->
+        drawLine(
+            tint,
+            Offset(c.x - unit * 0.30f, c.y + dy),
+            Offset(c.x + unit * 0.30f, c.y + dy),
+            stroke.width,
+            stroke.cap
+        )
+        drawCircle(tint, radius = unit * 0.075f, center = Offset(c.x + knob, c.y + dy))
+    }
+}
+
+private fun DrawScope.drawPalette(tint: Color, stroke: Stroke, unit: Float) {
+    val c = centered(unit)
+    drawCircle(tint, radius = unit * 0.30f, center = c, style = stroke)
+    listOf(
+        Offset(c.x - unit * 0.13f, c.y - unit * 0.10f),
+        Offset(c.x + unit * 0.02f, c.y - unit * 0.16f),
+        Offset(c.x + unit * 0.15f, c.y - unit * 0.02f)
+    ).forEach { drawCircle(tint, radius = unit * 0.045f, center = it) }
+}
+
+private fun DrawScope.drawQuestion(tint: Color, stroke: Stroke, unit: Float) {
+    val c = centered(unit)
+    drawCircle(tint, radius = unit * 0.32f, center = c, style = stroke)
+    val path = Path().apply {
+        moveTo(c.x - unit * 0.09f, c.y - unit * 0.09f)
+        quadraticTo(c.x - unit * 0.02f, c.y - unit * 0.22f, c.x + unit * 0.08f, c.y - unit * 0.12f)
+        quadraticTo(c.x + unit * 0.14f, c.y - unit * 0.02f, c.x, c.y + unit * 0.04f)
+    }
+    drawPath(path, tint, style = stroke)
+    drawCircle(tint, radius = unit * 0.035f, center = Offset(c.x, c.y + unit * 0.17f))
+}
+
+private fun DrawScope.drawShield(tint: Color, stroke: Stroke, unit: Float) {
+    val c = centered(unit)
+    val path = Path().apply {
+        moveTo(c.x, c.y - unit * 0.30f)
+        lineTo(c.x + unit * 0.24f, c.y - unit * 0.18f)
+        lineTo(c.x + unit * 0.24f, c.y + unit * 0.04f)
+        quadraticTo(c.x + unit * 0.20f, c.y + unit * 0.24f, c.x, c.y + unit * 0.31f)
+        quadraticTo(c.x - unit * 0.20f, c.y + unit * 0.24f, c.x - unit * 0.24f, c.y + unit * 0.04f)
+        lineTo(c.x - unit * 0.24f, c.y - unit * 0.18f)
+        close()
+    }
+    drawPath(path, tint, style = stroke)
 }

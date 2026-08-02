@@ -50,6 +50,7 @@ import com.jerreader.android.settings.AndroidAppPreferences
 import com.jerreader.android.settings.AppThemeChoice
 import com.jerreader.shared.ui.AppGuideScreen
 import com.jerreader.shared.ui.JerreaderCard
+import com.jerreader.shared.ui.JerreaderIcon
 import com.jerreader.shared.ui.JerreaderDivider
 import com.jerreader.shared.ui.JerreaderRow
 import com.jerreader.shared.ui.JerreaderSection
@@ -115,39 +116,43 @@ fun SettingsScreen(
 
     when (route) {
         SettingsRoute.ROOT -> SettingsPage(title = "设置", bottomBar = bottomBar) {
-            SettingsGroup("偏好") {
+            SettingsGroup("偏好", icon = JerreaderIcon.SLIDERS) {
                 SettingsNavigationRow(
                     title = "界面主题",
                     detail = "选择 App 界面的整体色系",
+                    icon = JerreaderIcon.PALETTE,
                     onClick = { onRouteChanged(SettingsRoute.THEME) }
                 )
-                JerreaderDivider()
                 SettingsNavigationRow(
                     title = "默认阅读排版",
                     detail = "字体、间距、背景、翻页与日文版式",
+                    icon = JerreaderIcon.TEXT_FORMAT,
                     onClick = { onRouteChanged(SettingsRoute.READER_DEFAULTS) }
                 )
-                JerreaderDivider()
                 SettingsNavigationRow(
                     title = "翻译与 AI",
                     detail = "服务商、三语互译、提示词与交互",
-                    onClick = { onRouteChanged(SettingsRoute.TRANSLATION) }
+                    icon = JerreaderIcon.SPEECH_BUBBLE,
+                    onClick = { onRouteChanged(SettingsRoute.TRANSLATION) },
+                    showDivider = false
                 )
             }
-            SettingsGroup("支持") {
+            SettingsGroup("支持", icon = JerreaderIcon.INFO) {
                 SettingsNavigationRow(
                     title = "操作指南",
                     detail = "导入、阅读、PDF/文字识别与 API 配置",
+                    icon = JerreaderIcon.QUESTION,
                     onClick = { onRouteChanged(SettingsRoute.GUIDE) }
                 )
-                JerreaderDivider()
                 SettingsNavigationRow(
                     title = "数据与隐私",
                     detail = "本机数据、在线请求与密钥存储",
-                    onClick = { onRouteChanged(SettingsRoute.PRIVACY) }
+                    icon = JerreaderIcon.SHIELD,
+                    onClick = { onRouteChanged(SettingsRoute.PRIVACY) },
+                    showDivider = false
                 )
             }
-            SettingsGroup("关于") {
+            SettingsGroup("关于", icon = JerreaderIcon.INFO) {
                 SettingsValueRow("Jerreader", versionName)
                 SettingsValueRow("最低系统", "Android 6.0")
                 SettingsValueRow("作者", "WANG ZIRUI")

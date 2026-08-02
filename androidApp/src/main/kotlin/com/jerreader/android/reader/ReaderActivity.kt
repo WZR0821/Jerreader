@@ -24,7 +24,9 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -155,6 +157,10 @@ class ReaderActivity : AppCompatActivity() {
     private var isExpandingCrossPage by mutableStateOf(false)
     private var anchorTopPx by mutableStateOf(0)
     private var anchorBottomPx by mutableStateOf(0)
+    private var cardDragX by mutableStateOf(0f)
+    private var cardDragY by mutableStateOf(0f)
+    private var anchorLeftPx by mutableStateOf(0)
+    private var anchorRightPx by mutableStateOf(0)
     private var floatingLayer: ComposeView? = null
     private var readerContentTopPx = 0
     private var readerContentBottomPx = 0
@@ -946,7 +952,23 @@ class ReaderActivity : AppCompatActivity() {
                 minimumValue = 0.dp,
                 maximumValue = (available * 0.46f)
             ).coerceAtLeast(minOf(room, 150.dp))
-            val cardModifier = Modifier
+            // A vertical Japanese page reads in columns, so iOS puts the card
+            // beside the tapped column instead of above or below it.
+            val isVertical = currentAppearance.orientation == ReaderTextOrientation.VERTICAL
+            val widthPx = constraints.maxWidth
+            val placeLeft = anchorLeftPx > widthPx / 2
+            val sideWidth = with(LocalDensity.current) {
+                (if (placeLeft) anchorLeftPx else widthPx - anchorRightPx).toDp()
+            } - GAP * 2
+            val cardModifier = if (isVertical && sideWidth >= 160.dp) {
+                Modifier
+                    .align(if (placeLeft) Alignment.TopStart else Alignment.TopEnd)
+                    .padding(top = anchorTop.coerceAtMost(available - 200.dp))
+                    .padding(horizontal = GAP)
+                    .widthIn(max = minOf(sideWidth, 300.dp))
+                    .heightIn(max = (available * 0.5f))
+                    .offset { IntOffset(cardDragX.toInt(), cardDragY.toInt()) }
+            } else Modifier
                 .align(if (placeBelow) Alignment.TopStart else Alignment.BottomStart)
                 .padding(
                     top = if (placeBelow) anchorBottom + GAP else 0.dp,
@@ -959,6 +981,7 @@ class ReaderActivity : AppCompatActivity() {
                 .widthIn(max = 320.dp)
                 .fillMaxWidth()
                 .heightIn(max = cardHeight)
+                .offset { IntOffset(cardDragX.toInt(), cardDragY.toInt()) }
 
             if (translation != null) {
                 FloatingSurface(cardModifier) {
@@ -974,6 +997,7 @@ class ReaderActivity : AppCompatActivity() {
                         onAddToVocabulary = { addTranslatedWordToVocabulary(translation) },
                         crossPageMessage = crossPageMessage,
                         isExpandingCrossPage = isExpandingCrossPage,
+                        onDrag = { dx, dy -> cardDragX += dx; cardDragY += dy },
                         onOpenSettings = ::openTranslationSettings
                     )
                 }
@@ -1023,6 +1047,8 @@ class ReaderActivity : AppCompatActivity() {
             if (rect != null) {
                 anchorTopPx = (readerContentTopPx + rect.top).toInt()
                 anchorBottomPx = (readerContentTopPx + rect.bottom).toInt()
+                anchorLeftPx = rect.left.toInt()
+                anchorRightPx = rect.right.toInt()
                 return@launch
             }
             val point = tapTranslationController?.focusPoint()
@@ -1052,6 +1078,10 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     private fun showTranslation(state: TranslationCardState) {
+        if (currentTranslationState == null) {
+            cardDragX = 0f
+            cardDragY = 0f
+        }
         currentTranslationState = state
         setFloatingLayerVisible(true)
         updateFloatingAnchor()
