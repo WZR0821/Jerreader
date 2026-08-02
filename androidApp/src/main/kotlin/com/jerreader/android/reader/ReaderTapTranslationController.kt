@@ -1,12 +1,14 @@
 package com.jerreader.android.reader
 
 import android.graphics.PointF
+import android.graphics.RectF
 import android.view.ActionMode
 import android.view.Menu
 import android.view.MenuItem
 import com.jerreader.android.translation.AndroidTranslationSettingsStore
 import com.jerreader.shared.domain.LanguageCode
 import com.jerreader.shared.translation.QuickTranslationUnit
+import com.jerreader.shared.translation.ReaderSentenceSegmenter
 import com.jerreader.shared.translation.ReaderTextNormalizer
 import com.jerreader.shared.translation.TranslationFailure
 import com.jerreader.shared.translation.TranslationInputPolicy
@@ -40,6 +42,7 @@ class ReaderTapTranslationController(
     private val onLookupRequested: (() -> Unit)? = null,
     private val onAnnotateRequested: (() -> Unit)? = null,
     private val onHapticFeedback: (() -> Unit)? = null,
+    private val onHighlightChanged: ((List<RectF>) -> Unit)? = null,
     private val timeSource: () -> Long = System::currentTimeMillis
 ) {
     private var navigator: EpubNavigatorFragment? = null
@@ -132,6 +135,7 @@ class ReaderTapTranslationController(
 
     fun clearSelection() {
         navigator?.clearSelection()
+        onHighlightChanged?.invoke(emptyList())
         currentIdentity = null
         currentState = null
     }
@@ -201,17 +205,202 @@ class ReaderTapTranslationController(
         return PointF(point.x / density, point.y / density)
     }
 
+    /**
+     * Tap selection now runs in three steps instead of duplicating sentence
+     * rules in JavaScript: the page returns the tapped block's text and caret
+     * offset, `ReaderSentenceSegmenter` decides the range with the same rules
+     * the cross-page expansion uses (quotation particles, quoted terminators,
+     * abbreviations), then the page selects exactly that range and returns its
+     * client rects so the reader can draw its own highlight.
+     */
     internal suspend fun translateAt(
         point: PointF,
         unit: QuickTranslationUnit = settings.preferences.value.quickTranslationUnit
     ): TranslationCardState? {
         val navigator = navigator ?: return null
         lastTapPoint = PointF(point.x, point.y)
-        val selected = navigator.evaluateJavascript(tapSelectionScript(point, unit))
-        if (selected != "true") return null
+        val raw = navigator.evaluateJavascript(blockTextScript(point)) ?: return null
+        val block = decodeJson(raw) ?: return null
+        val text = block.optString("text")
+        if (text.isBlank()) return null
+        val caret = block.optInt("offset").coerceIn(0, (text.length - 1).coerceAtLeast(0))
+
+        val range = if (unit == QuickTranslationUnit.PARAGRAPH) {
+            text.indices
+        } else {
+            ReaderSentenceSegmenter.sentenceRange(text, caret, bookLanguageHint()) ?: return null
+        }
+        var start = range.first
+        var end = range.last + 1
+        while (start < end && text[start].isWhitespace()) start++
+        while (end > start && text[end - 1].isWhitespace()) end--
+        if (end <= start) return null
+
+        val selectedRaw = navigator.evaluateJavascript(selectRangeScript(point, start, end)) ?: return null
+        val selected = decodeJson(selectedRaw) ?: return null
+        if (!selected.optBoolean("ok")) return null
+        onHighlightChanged?.invoke(parseRects(selected.optJSONArray("rects")))
+
         val selection = navigator.currentSelection() ?: return null
         return translateSelection(selection)
     }
+
+    private fun decodeJson(raw: String): JSONObject? {
+        if (raw == "null") return null
+        return runCatching {
+            when (val decoded = JSONTokener(raw).nextValue()) {
+                is JSONObject -> decoded
+                is String -> JSONObject(decoded)
+                else -> null
+            }
+        }.getOrNull()
+    }
+
+    private fun parseRects(array: org.json.JSONArray?): List<RectF> {
+        if (array == null) return emptyList()
+        val density = navigator?.publicationView?.resources?.displayMetrics?.density ?: 1f
+        return (0 until array.length()).mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
+            RectF(
+                (item.optDouble("x") * density).toFloat(),
+                (item.optDouble("y") * density).toFloat(),
+                ((item.optDouble("x") + item.optDouble("w")) * density).toFloat(),
+                ((item.optDouble("y") + item.optDouble("h")) * density).toFloat()
+            )
+        }
+    }
+
+    /** Reads the tapped block's text and caret offset, excluding ruby. */
+    private fun blockTextScript(point: PointF): String = """
+        (() => {
+              const textNodes = (root) => {
+                const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+                  acceptNode(node) {
+                    const parent = node.parentElement;
+                    if (!parent || parent.closest('rt,rp,script,style,noscript')) {
+                      return NodeFilter.FILTER_REJECT;
+                    }
+                    return NodeFilter.FILTER_ACCEPT;
+                  }
+                });
+                const list = [];
+                let node = walker.nextNode();
+                while (node) { list.push(node); node = walker.nextNode(); }
+                return list;
+              };
+              const blockAt = (x, y) => {
+                let caret = null;
+                if (document.caretRangeFromPoint) {
+                  caret = document.caretRangeFromPoint(x, y);
+                } else if (document.caretPositionFromPoint) {
+                  const position = document.caretPositionFromPoint(x, y);
+                  if (position) {
+                    caret = document.createRange();
+                    caret.setStart(position.offsetNode, position.offset);
+                    caret.collapse(true);
+                  }
+                }
+                if (!caret || !caret.startContainer ||
+                    caret.startContainer.nodeType !== Node.TEXT_NODE) return null;
+                const element = caret.startContainer.parentElement;
+                if (!element || element.closest(
+                      'a,button,input,textarea,select,option,video,audio,canvas,svg,rt,rp,script,style'
+                    )) return null;
+                const block = element.closest(
+                  'p,li,blockquote,dd,dt,figcaption,h1,h2,h3,h4,h5,h6,td,th,pre'
+                ) || element;
+                return {block: block, caret: caret};
+              };
+          const hit = blockAt(${point.x}, ${point.y});
+          if (!hit) return null;
+          const nodes = textNodes(hit.block);
+          if (!nodes.length || nodes.indexOf(hit.caret.startContainer) < 0) return null;
+          let text = '';
+          let offset = 0;
+          for (const node of nodes) {
+            if (node === hit.caret.startContainer) {
+              offset = text.length +
+                Math.max(0, Math.min(hit.caret.startOffset, node.data.length));
+            }
+            text += node.data;
+          }
+          return JSON.stringify({text: text, offset: offset});
+        })()
+    """.trimIndent()
+
+    /** Selects the resolved range and returns its client rects in CSS pixels. */
+    private fun selectRangeScript(point: PointF, start: Int, end: Int): String = """
+        (() => {
+              const textNodes = (root) => {
+                const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+                  acceptNode(node) {
+                    const parent = node.parentElement;
+                    if (!parent || parent.closest('rt,rp,script,style,noscript')) {
+                      return NodeFilter.FILTER_REJECT;
+                    }
+                    return NodeFilter.FILTER_ACCEPT;
+                  }
+                });
+                const list = [];
+                let node = walker.nextNode();
+                while (node) { list.push(node); node = walker.nextNode(); }
+                return list;
+              };
+              const blockAt = (x, y) => {
+                let caret = null;
+                if (document.caretRangeFromPoint) {
+                  caret = document.caretRangeFromPoint(x, y);
+                } else if (document.caretPositionFromPoint) {
+                  const position = document.caretPositionFromPoint(x, y);
+                  if (position) {
+                    caret = document.createRange();
+                    caret.setStart(position.offsetNode, position.offset);
+                    caret.collapse(true);
+                  }
+                }
+                if (!caret || !caret.startContainer ||
+                    caret.startContainer.nodeType !== Node.TEXT_NODE) return null;
+                const element = caret.startContainer.parentElement;
+                if (!element || element.closest(
+                      'a,button,input,textarea,select,option,video,audio,canvas,svg,rt,rp,script,style'
+                    )) return null;
+                const block = element.closest(
+                  'p,li,blockquote,dd,dt,figcaption,h1,h2,h3,h4,h5,h6,td,th,pre'
+                ) || element;
+                return {block: block, caret: caret};
+              };
+          const hit = blockAt(${point.x}, ${point.y});
+          if (!hit) return JSON.stringify({ok: false});
+          const nodes = textNodes(hit.block);
+          if (!nodes.length) return JSON.stringify({ok: false});
+          const locate = (offset, isEnd) => {
+            let consumed = 0;
+            for (let index = 0; index < nodes.length; index++) {
+              const length = nodes[index].data.length;
+              if (offset < consumed + length ||
+                  (offset === consumed + length && (isEnd || index === nodes.length - 1))) {
+                return {node: nodes[index], offset: offset - consumed};
+              }
+              consumed += length;
+            }
+            const last = nodes[nodes.length - 1];
+            return {node: last, offset: last.data.length};
+          };
+          const from = locate($start, false);
+          const to = locate($end, true);
+          const range = document.createRange();
+          range.setStart(from.node, from.offset);
+          range.setEnd(to.node, to.offset);
+          const selection = window.getSelection();
+          if (!selection) return JSON.stringify({ok: false});
+          selection.removeAllRanges();
+          selection.addRange(range);
+          const rects = Array.from(range.getClientRects())
+            .filter(rect => rect.width > 0.5 && rect.height > 0.5)
+            .map(rect => ({x: rect.left, y: rect.top, w: rect.width, h: rect.height}));
+          return JSON.stringify({ok: selection.toString().trim().length > 0, rects: rects});
+        })()
+    """.trimIndent()
 
     /**
      * Reads the visible Readium document as plain text around [sourceText],

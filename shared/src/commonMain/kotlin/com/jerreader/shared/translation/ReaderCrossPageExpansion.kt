@@ -67,12 +67,20 @@ object ReaderSentenceSegmenter {
 
         var after = index + 1
         while (after < text.length && text[after] in CLOSING_MARKS) after++
+        val closedQuote = after > index + 1
         if (language == LanguageCode.JAPANESE || containsJapanese(text)) {
             // 「本当？」と彼は…… keeps running: a quotation particle right after a
             // closing mark means the sentence has not ended yet.
-            if (after > index + 1 && JAPANESE_QUOTE_PARTICLES.any { text.startsWith(it, after) }) {
+            if (closedQuote && JAPANESE_QUOTE_PARTICLES.any { text.startsWith(it, after) }) {
                 return false
             }
+        } else if (closedQuote) {
+            // "Stop!" he said. — a lower-case word after the closing quote
+            // continues the same sentence.
+            var probe = after
+            while (probe < text.length && text[probe].isWhitespace()) probe++
+            val next = text.getOrNull(probe)
+            if (next != null && next.isLowerCase()) return false
         }
         return true
     }

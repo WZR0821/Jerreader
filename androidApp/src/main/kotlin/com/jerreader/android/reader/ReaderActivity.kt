@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.PointF
+import android.graphics.RectF
 import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
@@ -20,6 +21,10 @@ import android.widget.TextView
 import androidx.activity.ComponentDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -161,6 +166,7 @@ class ReaderActivity : AppCompatActivity() {
     private var cardDragY by mutableStateOf(0f)
     private var anchorLeftPx by mutableStateOf(0)
     private var anchorRightPx by mutableStateOf(0)
+    private var selectionRects by mutableStateOf(emptyList<RectF>())
     private var floatingLayer: ComposeView? = null
     private var readerContentTopPx = 0
     private var readerContentBottomPx = 0
@@ -364,7 +370,10 @@ class ReaderActivity : AppCompatActivity() {
                 top = bars.top + (CONTENT_TOP_INSET_DP * density).toInt(),
                 bottom = bars.bottom + (CONTENT_BOTTOM_INSET_DP * density).toInt()
             )
-            readerContentTopPx = bars.top + (CONTENT_TOP_INSET_DP * density).toInt()
+            // The floating layer already carries the status-bar padding, so the
+            // page offset used for highlights and anchors must exclude it or
+            // everything lands one inset too high.
+            readerContentTopPx = (CONTENT_TOP_INSET_DP * density).toInt()
             overlayView.updatePadding(top = bars.top, bottom = bars.bottom)
             insets
         }
@@ -430,7 +439,8 @@ class ReaderActivity : AppCompatActivity() {
                     onNextPageRequested = ::goToNextPage,
                     onLookupRequested = { wordController.lookupSelectionFromMenu() },
                     onAnnotateRequested = ::requestAnnotationForSelection,
-                    onHapticFeedback = ::performTranslationHaptic
+                    onHapticFeedback = ::performTranslationHaptic,
+                    onHighlightChanged = ::updateSelectionHighlight
                 )
                 tapTranslationController = tapController
                 val factory = EpubNavigatorFactory(openedPublication).createFragmentFactory(
@@ -936,6 +946,9 @@ class ReaderActivity : AppCompatActivity() {
     private fun ReaderFloatingLayer() {
         val translation = currentTranslationState
         val lookup = currentWordLookupState
+        // The self-drawn highlight is still a constant offset off vertically,
+        // so the page keeps its native selection paint until that is resolved.
+        if (DRAW_OWN_SELECTION_HIGHLIGHT) SelectionHighlightLayer()
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val available = maxHeight
             val anchorTop = with(LocalDensity.current) { anchorTopPx.toDp() }
@@ -1065,6 +1078,7 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     private fun dismissTranslation() {
+        selectionRects = emptyList()
         tapTranslationController?.clearSelection()
         currentTranslationState = null
         crossPageMessage = null
@@ -1087,6 +1101,48 @@ class ReaderActivity : AppCompatActivity() {
         updateFloatingAnchor()
     }
 
+
+    /**
+     * The reader draws its own selection highlight, the way iOS uses a
+     * non-interactive UIKit layer. Relying on the WebView's native ::selection
+     * paint means the colour cannot follow the reading theme and the drag
+     * handles fight with Readium's own gestures.
+     */
+    private fun updateSelectionHighlight(rects: List<RectF>) {
+        // Measure where the page actually sits instead of deriving it from the
+        // inset constants; Readium adds its own padding inside the navigator,
+        // so a computed offset put the highlight a line off.
+        val location = IntArray(2)
+        navigator?.publicationView?.getLocationInWindow(location)
+        val overlayLocation = IntArray(2)
+        floatingLayer?.getLocationInWindow(overlayLocation)
+        readerContentTopPx = (location[1] - overlayLocation[1]).coerceAtLeast(0)
+        selectionRects = rects
+        if (rects.isNotEmpty()) {
+            anchorTopPx = (readerContentTopPx + rects.minOf { it.top }).toInt()
+            anchorBottomPx = (readerContentTopPx + rects.maxOf { it.bottom }).toInt()
+            anchorLeftPx = rects.minOf { it.left }.toInt()
+            anchorRightPx = rects.maxOf { it.right }.toInt()
+        }
+    }
+
+    @androidx.compose.runtime.Composable
+    private fun SelectionHighlightLayer() {
+        val rects = selectionRects
+        if (rects.isEmpty()) return
+        val tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
+        val top = readerContentTopPx.toFloat()
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            rects.forEach { rect ->
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(rect.left, rect.top + top),
+                    size = Size(rect.width(), rect.height()),
+                    cornerRadius = CornerRadius(4f, 4f)
+                )
+            }
+        }
+    }
 
     private fun performTranslationHaptic() {
         rootView?.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
@@ -1344,7 +1400,8 @@ class ReaderActivity : AppCompatActivity() {
 
         // Enough clearance that the card never sits on the descenders of
         // the line it was anchored to.
-        private val GAP = 26.dp
+        private const val DRAW_OWN_SELECTION_HIGHLIGHT = false
+        private val GAP = 18.dp
         private const val CONTENT_TOP_INSET_DP = 74
         private const val CONTENT_BOTTOM_INSET_DP = 156
         private const val ANNOTATION_DECORATION_GROUP = "jerreader-reading-annotations"

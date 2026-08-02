@@ -59,6 +59,20 @@ class ReaderCrossPageExpansionTest {
     }
 
     @Test
+    fun keepsEnglishQuotedTerminatorWithItsReportingClause() {
+        val text = "\"Stop!\" he said. Then he left."
+        val range = ReaderSentenceSegmenter.sentenceRange(text, 2, LanguageCode.ENGLISH)
+        assertEquals("\"Stop!\" he said.", range?.let { text.substring(it) })
+    }
+
+    @Test
+    fun stillBreaksWhenTheNextSentenceStartsAfterAQuote() {
+        val text = "\"Stop!\" Then he left."
+        val range = ReaderSentenceSegmenter.sentenceRange(text, 2, LanguageCode.ENGLISH)
+        assertEquals("\"Stop!\"", range?.let { text.substring(it) })
+    }
+
+    @Test
     fun returnsNullWithoutTrustworthyContext() {
         assertNull(
             ReaderCrossPageTranslationResolver.expansion(
