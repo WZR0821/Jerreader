@@ -3,6 +3,7 @@ package com.jerreader.android.library
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import com.jerreader.shared.domain.BookFormat
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
@@ -27,15 +28,28 @@ class ImmutablePublicationStore(
     private val coversDirectory = File(rootDirectory, "covers")
 
     fun copyToStaging(source: Uri): StagedPublication {
-        val displayName = sourceDisplayName(source)
-        require(displayName.substringAfterLast('.', "").equals("epub", ignoreCase = true)) {
-            "M1 仅支持导入 EPUB。"
+        var displayName = sourceDisplayName(source)
+        if (BookFormat.fromFileName(displayName) == null) {
+            val inferredExtension = when (context.contentResolver.getType(source)) {
+                "application/epub+zip" -> "epub"
+                "application/pdf" -> "pdf"
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> "docx"
+                "text/plain" -> "txt"
+                else -> null
+            }
+            if (inferredExtension != null) displayName = "$displayName.$inferredExtension"
+        }
+        val format = requireNotNull(BookFormat.fromFileName(displayName)) {
+            "仅支持 EPUB、PDF、DOCX 和 TXT。"
         }
 
         stagingDirectory.apply {
             check(exists() || mkdirs()) { "无法创建出版物目录。" }
         }
-        val stagedFile = File(stagingDirectory, "${UUID.randomUUID()}.epub.part")
+        val stagedFile = File(
+            stagingDirectory,
+            "${UUID.randomUUID()}.${format.fileExtension}.part"
+        )
 
         try {
             val input = checkNotNull(context.contentResolver.openInputStream(source)) {
@@ -61,6 +75,29 @@ class ImmutablePublicationStore(
         }
     }
 
+    fun stageGeneratedEpub(displayName: String, bytes: ByteArray): StagedPublication {
+        stagingDirectory.apply {
+            check(exists() || mkdirs()) { "无法创建出版物目录。" }
+        }
+        val stagedFile = File(stagingDirectory, "${UUID.randomUUID()}.epub.part")
+        try {
+            FileOutputStream(stagedFile).use { output ->
+                output.write(bytes)
+                output.fd.sync()
+            }
+            check(stagedFile.setReadOnly()) { "无法将转换后的 EPUB 设为只读。" }
+            return StagedPublication(
+                displayName = displayName,
+                file = stagedFile,
+                snapshot = PublicationIntegrity.capture(stagedFile)
+            )
+        } catch (error: Throwable) {
+            stagedFile.setWritable(true)
+            stagedFile.delete()
+            throw error
+        }
+    }
+
     fun commit(staged: StagedPublication, id: String): StoredPublication {
         publicationsDirectory.apply {
             check(exists() || mkdirs()) { "无法创建出版物目录。" }
@@ -68,7 +105,14 @@ class ImmutablePublicationStore(
         require(PublicationIntegrity.isUnchanged(staged.snapshot)) {
             "EPUB 验证过程中发生了变化。"
         }
-        val destination = File(publicationsDirectory, "$id.epub")
+        val storedExtension = staged.file.name
+            .substringBeforeLast(".part")
+            .substringAfterLast('.')
+            .lowercase()
+        require(storedExtension == "epub" || storedExtension == "pdf") {
+            "只有 EPUB 或 PDF 可进入书架。"
+        }
+        val destination = File(publicationsDirectory, "$id.$storedExtension")
         check(!destination.exists()) { "出版物目标已存在。" }
         check(staged.file.renameTo(destination)) { "无法保存出版物副本。" }
         check(destination.setReadOnly()) { "无法将出版物副本设为只读。" }
@@ -95,6 +139,7 @@ class ImmutablePublicationStore(
             output.write(bytes)
             output.fd.sync()
         }
+        if (cover.exists()) check(cover.delete()) { "无法替换旧封面。" }
         check(temporary.renameTo(cover)) { "无法保存封面。" }
         return cover.name
     }

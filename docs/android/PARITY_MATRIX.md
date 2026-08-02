@@ -1,19 +1,28 @@
 # Jerreader Android 功能对照基线
 
-基线为 iOS 1.0.0 build 39 当前已开启功能。“对齐”表示用户结果、数据和错误语义一致，不要求两端系统控件逐像素一致。
+基线为 iOS 1.0.2（内部 build 43）已开启的功能。“对齐”表示用户结果、数据和错误语义一致，不要求两端系统控件逐像素一致。状态列写实际验收结果，不写“底层已有代码”。
 
-| 能力 | iOS 基线 | Android 目标 | 共享边界 | M0 | M1/M2 | M4 点按查词阶段 |
-| --- | --- | --- | --- | --- | --- | --- |
-| EPUB/PDF/DOCX/TXT 导入 | FileImporter/外部打开 | Storage Access Framework | 格式、错误与指纹规则 | EPUB/PDF 技术验证 | M1 仅 EPUB：验证、元数据、封面、SHA-256 去重已完成 | 未扩大格式范围 |
-| 导入文件不变 | SHA-256 + mtime 回归 | SHA-256 + mtime 回归 | 验收夹具 | JVM + AOSP 设备回归通过 | 源文件＋App 内副本的导入/阅读/目录/偏好/退出回归通过 | 英/日点按、临时高亮、词卡和退出后仍验证 bytes + mtime 不变 |
-| EPUB 阅读 | Readium Swift | Readium Kotlin | Locator JSON/偏好合同 | 合成 EPUB Navigator 打开通过，真书待验 | Navigator、分层目录、字号/三主题、完整 Locator 恢复通过 | Readium 普通正文点按和原生长按“查词”接入完成 |
-| PDF 阅读 | Readium/PDFKit | Readium/PDFium，引擎待决策 | 领域选区与锚点 | 打开验证 | 不扩大既有 M0 技术验证，未作产品入口 | 未进入本阶段 |
-| 竖排/ruby/点句/长按 | WebKit + UIKit 桥 | Android WebView + Readium 桥 | 断句、身份与请求状态 | 真书风险验证待做 | 未进入 M1/M2 | 英/日可重排 EPUB 点按通过；复杂竖排/ruby 真书矩阵待后续验收 |
-| 翻译/查词 | Apple/直接 API/代理/中文维基词典 | 大陆无 GMS；离线核心＋可替换真实词典 | `TranslationService`、`LexicalLookupService` | 协议 + Mock | 未进入 M1/M2，无网络请求 | 点按中文释义闭环完成；内置基础词条优先，未知词使用中文维基词典，Mock/Stub 测试不访问外网 |
-| PDF OCR | Vision | 可打包的中/日/拉丁 OCR | OCR 观测和文本重组模型 | 后续里程碑 | 未进入 M1/M2 | 未进入本阶段 |
-| 书架/学习/设置 | SwiftUI | Compose Multiplatform | 共享 UI 与状态 | 一个验证页 | 书架网格、打开、删除确认完成；学习/完整设置未进入本里程碑 | 增加共享底部词语卡；历史/收藏未进入本阶段 |
-| 持久化 | SwiftData | 初期 Room | 仓储协议/备份格式 | 不迁移 iOS 数据 | Room 书籍、Locator 与 EPUB 偏好已完成，按要求无数据迁移 | 查询结果仅临时显示，不做历史或迁移 |
-| 备份 | 文件夹授权 + 版本归档 | SAF 目录 + WorkManager | manifest/校验/迁移规则 | 后续里程碑 | 未进入 M1/M2 | 按用户要求不做 |
-| 语音 | 功能开关关闭 | 保持关闭 | 功能开关 | 不开启 | 继续关闭 | 未进入本阶段 |
+| 能力 | iOS 实现 | Android 实现 | 当前状态 |
+| --- | --- | --- | --- |
+| EPUB/PDF/DOCX/TXT 导入 | FileImporter/外部打开 | Storage Access Framework | 已完成。四种格式共用一条导入链路，DOCX/TXT 本机转成 EPUB 副本 |
+| 导入文件不变 | SHA-256 + mtime 回归 | SHA-256 + mtime 回归 | 已完成。源文件与 App 内副本在导入、阅读、点按、退出后 bytes 与 mtime 不变，设备测试断言 |
+| EPUB 阅读 | Readium Swift | Readium Kotlin 3.3.0 | 已完成。分层目录、翻页/翻章、Locator 跨会话恢复、进度滑杆、阅读时长 |
+| PDF 阅读 | Readium/PDFKit | Readium/PDFium | 已接入产品入口，可打开与翻页；未做真书大规模 QA |
+| 阅读排版 | 字体/字号/行距/段距/边距/主题/背景/方向 | 同项，按书持久化 | 已完成，含冷灰主题、自定义背景与选区色、分页/滚动、原版/横排/竖排 |
+| 目录/全文搜索/书签 | Readium Search + SwiftData | Readium Search + Room | 已完成，集中在同一导航面板 |
+| 划线/批注/笔记 | Readium Decoration + SwiftData | Room + 导航面板 | 部分完成：可保存、编辑、跳转、删除；正文可见高亮尚未用 Decoration 绘制 |
+| 点按翻译 | 短按句/段，长按智能选区 | 短按句/段，长按原生选区菜单 | 已完成并实机验收，含设备像素→CSS 像素换算回归 |
+| 翻译服务 | Apple/直接 API/代理/缓存 | 本机 ML Kit/直接 API/代理/缓存 | 已完成。默认免 Key 本机翻译，GPT/Claude/Kimi/DeepSeek/Gemini/兼容服务与 HTTPS 代理均可配置 |
+| AI 句子结构分析 | ContextExplanationService | 同协议 | 已接入译文卡「AI 解析」，需用户自备 AI 配置 |
+| 跨页句段扩展 | EPUB 章节内补取 / PDF 前后页 | — | 未实现 |
+| 查词 | 中文维基词典 + 系统词典后备 | 内置核心词典 + 中文维基词典 | 已完成，长按选区菜单「查词」与学习页手动查词 |
+| PDF OCR | Vision | ML Kit 文字识别（含日文） | 已实现点句/点段识别与论文双栏隔离；真书 QA 未做 |
+| 书架 | 分组/系列/标签/搜索/筛选/排序/批量 | 同项 | 已完成 |
+| 学习 | 生词本/收藏/历史/导出 | 同项 | 已完成，支持 CSV / Markdown / Anki TSV 导出 |
+| 设置 | 主题/默认排版/翻译服务/提示词 | 同项 | 已完成，主题为 iOS 同五色：海蓝、森林、紫藤、琥珀、莓红 |
+| 视觉体系 | JerreaderTheme 冷灰蓝 | shared/ui/JerreaderTheme.kt | 已对齐，accent 与 canvas/paper 计算式与 iOS 同源 |
+| 操作指南 | AppGuideView | — | 未实现 |
+| 备份 | 文件夹授权 + 版本归档 | SAF 目录 + 归档 | 未实现 |
+| 语音 | 功能开关关闭 | 保持关闭 | 与 iOS 一致，底层保留不开放 |
 
-每个后续里程碑必须在本表增加验收用例和实际验证状态，不得以“已有底层代码”代替功能验收。
+每个后续里程碑必须在本表更新实际验收状态。

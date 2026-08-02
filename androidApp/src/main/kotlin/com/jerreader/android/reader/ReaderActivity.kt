@@ -5,6 +5,7 @@ import android.app.Dialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.PointF
 import android.os.Bundle
@@ -31,23 +32,40 @@ import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.fragment.app.FragmentFactory
 import androidx.fragment.app.commitNow
 import androidx.core.graphics.drawable.toDrawable
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updateLayoutParams
+import androidx.core.view.updatePadding
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.jerreader.android.JerreaderApplication
+import com.jerreader.android.MainActivity
 import com.jerreader.android.R
+import com.jerreader.android.data.ReadingAnnotationEntity
+import com.jerreader.android.data.ReadingBookmarkEntity
 import com.jerreader.android.library.PublicationIntegrity
 import com.jerreader.android.library.PublicationSnapshot
+import com.jerreader.shared.domain.BookFormat
 import com.jerreader.shared.library.LibraryBook
 import com.jerreader.shared.library.ReaderAppearance
-import com.jerreader.shared.library.ReaderThemeOption
 import com.jerreader.shared.domain.LanguageCode
 import com.jerreader.shared.lexical.WordAnalysis
+import com.jerreader.shared.translation.ContextExplanationRequest
+import com.jerreader.shared.translation.ContextExplanationService
+import com.jerreader.shared.translation.TranslationResult
+import com.jerreader.shared.ui.JerreaderTheme
+import com.jerreader.shared.ui.ReaderAnnotationEditor
+import com.jerreader.shared.ui.ReaderAnnotationItem
 import com.jerreader.shared.ui.ReaderAppearancePanel
+import com.jerreader.shared.ui.ReaderBookmarkItem
 import com.jerreader.shared.ui.ReaderChapter
-import com.jerreader.shared.ui.ReaderTableOfContents
+import com.jerreader.shared.ui.ReaderNavigationPanel
+import com.jerreader.shared.ui.ReaderSearchResultItem
 import com.jerreader.shared.ui.ReaderToolbar
+import com.jerreader.shared.ui.TranslationCard
+import com.jerreader.shared.ui.TranslationCardState
 import com.jerreader.shared.ui.WordLookupCard
 import com.jerreader.shared.ui.WordLookupCardState
 import kotlinx.coroutines.delay
@@ -58,15 +76,15 @@ import org.readium.adapter.pdfium.navigator.PdfiumEngineProvider
 import org.readium.r2.navigator.epub.EpubNavigatorFactory
 import org.readium.r2.navigator.epub.EpubNavigatorFragment
 import org.readium.r2.navigator.epub.EpubPreferences
-import org.readium.r2.navigator.epub.EpubPreferencesSerializer
 import org.readium.r2.navigator.pdf.PdfNavigatorFactory
 import org.readium.r2.navigator.pdf.PdfNavigatorFragment
-import org.readium.r2.navigator.preferences.Theme
 import org.readium.r2.shared.ExperimentalReadiumApi
 import org.readium.r2.shared.publication.Link
 import org.readium.r2.shared.publication.Locator
 import org.readium.r2.shared.publication.Publication
 import org.readium.r2.shared.publication.services.isRestricted
+import org.readium.r2.shared.publication.services.positions
+import org.readium.r2.shared.publication.services.search.search
 import org.readium.r2.shared.util.getOrElse
 import java.io.File
 
@@ -79,25 +97,56 @@ class ReaderActivity : AppCompatActivity() {
     private var publication: Publication? = null
     private var book by mutableStateOf<LibraryBook?>(null)
     private var navigator: EpubNavigatorFragment? = null
-    private var currentPreferences = EpubPreferences()
+    private var pdfNavigator: PdfNavigatorFragment<*, *>? = null
+    private var basePreferences = EpubPreferences()
+    private var latestLocator: Locator? = null
     private var latestLocatorJson: String? = null
     private var rootView: FrameLayout? = null
     private var tableOfContents = emptyList<ReaderChapter>()
     private val tableOfContentsLinks = linkedMapOf<String, Link>()
+    private var readingOrder = emptyList<Link>()
+    private var positions = emptyList<Locator>()
     private var wordInteractionController: ReaderWordInteractionController? = null
+    private var tapTranslationController: ReaderTapTranslationController? = null
+    private var pdfTranslationController: PdfTapTranslationController? = null
     private var wordLookupDialog: Dialog? = null
+    private var translationDialog: Dialog? = null
+    private var annotationDialog: Dialog? = null
+    private val sessionStartedAtMillis = System.currentTimeMillis()
+    private val searchLocators = linkedMapOf<String, Locator>()
+    private var pendingAnnotation: PendingAnnotation? = null
 
     internal var currentWordLookupState by mutableStateOf<WordLookupCardState?>(null)
+        private set
+
+    internal var currentTranslationState by mutableStateOf<TranslationCardState?>(null)
         private set
 
     internal var currentAppearance by mutableStateOf(ReaderAppearance())
         private set
 
+    private var bookmarks by mutableStateOf(emptyList<ReadingBookmarkEntity>())
+    private var annotations by mutableStateOf(emptyList<ReadingAnnotationEntity>())
+    private var currentProgress by mutableStateOf(0.0)
+    private var isCurrentPositionBookmarked by mutableStateOf(false)
+    private var currentChapterIndex by mutableStateOf(-1)
+    private var searchQuery by mutableStateOf("")
+    private var searchResults by mutableStateOf(emptyList<ReaderSearchResultItem>())
+    private var isSearching by mutableStateOf(false)
+    private var searchMessage by mutableStateOf<String?>(null)
+
+    private data class PendingAnnotation(
+        val selectedText: String,
+        val locator: Locator,
+        val existingId: String? = null,
+        val note: String = "",
+        val color: String = "yellow"
+    )
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // Android may restore Navigator fragments before the publication is
         // reopened. A dummy factory makes restoration safe until we replace it.
-        val publicationPath = intent.getStringExtra(EXTRA_PUBLICATION_PATH).orEmpty()
-        supportFragmentManager.fragmentFactory = if (publicationPath.endsWith(".pdf", true)) {
+        supportFragmentManager.fragmentFactory = if (looksLikePdf()) {
             PdfNavigatorFragment.createDummyFactory(PdfiumEngineProvider())
         } else {
             EpubNavigatorFragment.createDummyFactory()
@@ -120,18 +169,34 @@ class ReaderActivity : AppCompatActivity() {
     @SuppressLint("LogNotTimber")
     override fun onDestroy() {
         persistLatestLocator()
+        persistReadingTime()
         wordInteractionController?.detach()
         wordInteractionController = null
+        tapTranslationController?.detach()
+        tapTranslationController = null
+        pdfTranslationController?.close()
+        pdfTranslationController = null
         wordLookupDialog?.dismiss()
         wordLookupDialog = null
+        translationDialog?.dismiss()
+        translationDialog = null
+        annotationDialog?.dismiss()
+        annotationDialog = null
         publication?.close()
         publication = null
         navigator = null
+        pdfNavigator = null
 
         if (::expectedSnapshot.isInitialized && !PublicationIntegrity.isUnchanged(expectedSnapshot)) {
             Log.e(INTEGRITY_TAG, "Readium session changed immutable publication bytes or mtime")
         }
         super.onDestroy()
+    }
+
+    private fun looksLikePdf(): Boolean {
+        val declaredFormat = intent.getStringExtra(EXTRA_SOURCE_FORMAT)
+        if (declaredFormat != null) return declaredFormat.equals(BookFormat.PDF.fileExtension, true)
+        return intent.getStringExtra(EXTRA_PUBLICATION_PATH)?.endsWith(".pdf", true) == true
     }
 
     private suspend fun resolveAndOpenPublication() {
@@ -162,11 +227,26 @@ class ReaderActivity : AppCompatActivity() {
             return
         }
 
+        resolvedBook?.let(::observeReaderRecords)
         openPublication(File(snapshot.path), resolvedBook)
     }
 
+    private fun observeReaderRecords(libraryBook: LibraryBook) {
+        lifecycleScope.launch {
+            graph.readerRecords.observeBookmarks(libraryBook.id).collectLatest { records ->
+                bookmarks = records
+                refreshBookmarkState()
+            }
+        }
+        lifecycleScope.launch {
+            graph.readerRecords.observeAnnotations(libraryBook.id).collectLatest { records ->
+                annotations = records
+            }
+        }
+    }
+
     private fun showRoot() {
-        val toolbarHeight = (56 * resources.displayMetrics.density).toInt()
+        val toolbarHeight = (TOOLBAR_HEIGHT_DP * resources.displayMetrics.density).toInt()
         val root = FrameLayout(this).apply { setBackgroundColor(Color.WHITE) }
         val readerContainer = FrameLayout(this).apply { id = R.id.reader_container }
         root.addView(
@@ -184,28 +264,55 @@ class ReaderActivity : AppCompatActivity() {
                 Gravity.CENTER
             )
         )
-        root.addView(
-            ComposeView(this).apply {
+        val toolbarView = ComposeView(this).apply {
                 setViewCompositionStrategy(
                     ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed
                 )
                 setContent {
-                    MaterialTheme {
+                    ReaderTheme {
                         ReaderToolbar(
                             title = book?.title ?: "Jerreader",
                             onBack = onBackPressedDispatcher::onBackPressed,
-                            onTableOfContents = ::showTableOfContents,
+                            onPreviousPage = ::goToPreviousPage,
+                            onNextPage = ::goToNextPage,
+                            onPreviousChapter = { goToAdjacentChapter(-1) },
+                            onNextChapter = { goToAdjacentChapter(1) },
+                            canGoToPreviousChapter = currentChapterIndex > 0,
+                            canGoToNextChapter = currentChapterIndex >= 0 &&
+                                currentChapterIndex < readingOrder.lastIndex,
+                            isBookmarked = isCurrentPositionBookmarked,
+                            onToggleBookmark = ::toggleBookmark,
+                            progress = currentProgress,
+                            showProgress = graph.appSettings.preferences.value.showReadingProgress,
+                            onProgressChange = ::goToProgress,
+                            onTableOfContents = ::showNavigationPanel,
                             onAppearance = ::showAppearance
                         )
                     }
                 }
-            },
+            }
+        root.addView(
+            toolbarView,
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 toolbarHeight,
                 Gravity.TOP
             )
         )
+        // API 35+ draws edge to edge, so the toolbar must reserve the status bar
+        // strip itself and the navigator must stop above the gesture bar.
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            toolbarView.updatePadding(top = bars.top)
+            toolbarView.updateLayoutParams<FrameLayout.LayoutParams> {
+                height = toolbarHeight + bars.top
+            }
+            readerContainer.updateLayoutParams<FrameLayout.LayoutParams> {
+                topMargin = toolbarHeight + bars.top
+                bottomMargin = bars.bottom
+            }
+            insets
+        }
         rootView = root
         setContentView(root)
     }
@@ -230,14 +337,20 @@ class ReaderActivity : AppCompatActivity() {
         }
 
         publication = openedPublication
+        readingOrder = openedPublication.readingOrder
+        positions = runCatching { openedPublication.positions() }.getOrDefault(emptyList())
+
+        val stored = decodeStoredReaderPreferences(
+            json = libraryBook?.preferencesJson,
+            fallback = graph.appSettings.preferences.value.defaultReaderAppearance
+        )
+        basePreferences = stored.epub
+        currentAppearance = stored.appearance
+
         when {
             openedPublication.conformsTo(Publication.Profile.EPUB) -> {
                 buildTableOfContents(openedPublication.tableOfContents)
                 val initialLocator = libraryBook?.locatorJson?.let(::parseLocator)
-                currentPreferences = libraryBook?.preferencesJson
-                    ?.let(::parsePreferences)
-                    ?: EpubPreferences()
-                currentAppearance = currentPreferences.toAppearance()
                 val wordController = ReaderWordInteractionController(
                     scope = lifecycleScope,
                     lookupService = graph.lexicalLookupService,
@@ -245,24 +358,36 @@ class ReaderActivity : AppCompatActivity() {
                     onStateChanged = ::showWordLookup
                 )
                 wordInteractionController = wordController
+                val tapController = ReaderTapTranslationController(
+                    scope = lifecycleScope,
+                    translationService = graph.translationService,
+                    settings = graph.translationSettings,
+                    bookLanguageHint = { currentBookLanguage() },
+                    onStateChanged = ::showTranslation,
+                    onPreviousPageRequested = ::goToPreviousPage,
+                    onNextPageRequested = ::goToNextPage,
+                    onLookupRequested = { wordController.lookupSelectionFromMenu() },
+                    onAnnotateRequested = ::requestAnnotationForSelection
+                )
+                tapTranslationController = tapController
                 val factory = EpubNavigatorFactory(openedPublication).createFragmentFactory(
                     initialLocator = initialLocator,
-                    initialPreferences = currentPreferences,
+                    initialPreferences = basePreferences,
                     configuration = EpubNavigatorFragment.Configuration(
-                        selectionActionModeCallback = wordController.selectionActionModeCallback
+                        selectionActionModeCallback = tapController.selectionActionModeCallback
                     )
                 )
                 attachEpubNavigator(factory)
             }
 
-            // Kept only for the existing M0 integrity harness. M1 imports EPUB
-            // exclusively and does not expose PDF on the production shelf.
             openedPublication.conformsTo(Publication.Profile.PDF) -> {
+                buildTableOfContents(openedPublication.tableOfContents)
+                val initialLocator = libraryBook?.locatorJson?.let(::parseLocator)
                 val factory = PdfNavigatorFactory(
                     openedPublication,
                     PdfiumEngineProvider()
-                ).createFragmentFactory()
-                attachNavigator(factory, PdfNavigatorFragment::class.java)
+                ).createFragmentFactory(initialLocator = initialLocator)
+                attachPdfNavigator(factory, file)
             }
 
             else -> showError("当前出版物不支持阅读。")
@@ -275,10 +400,47 @@ class ReaderActivity : AppCompatActivity() {
             as? EpubNavigatorFragment
             ?: return
         navigator = epubNavigator
-        wordInteractionController?.attach(epubNavigator)
+        // Short taps belong to quick translation; word lookup is reachable from
+        // the native selection menu, so the lookup controller does not register
+        // a competing tap listener.
+        wordInteractionController?.attach(epubNavigator, registerShortTap = false)
+        tapTranslationController?.attach(epubNavigator)
+        observeLocator { epubNavigator.currentLocator.collectLatest(it) }
+    }
+
+    private fun attachPdfNavigator(factory: FragmentFactory, file: File) {
+        attachNavigator(factory, PdfNavigatorFragment::class.java)
+        val fragment = supportFragmentManager.findFragmentByTag(NAVIGATOR_TAG)
+            as? PdfNavigatorFragment<*, *>
+            ?: return
+        pdfNavigator = fragment
+        val controller = PdfTapTranslationController(
+            file = file,
+            scope = lifecycleScope,
+            translationService = graph.translationService,
+            settings = graph.translationSettings,
+            languageHint = { currentBookLanguage() },
+            currentPageIndex = {
+                (fragment.currentLocator.value.locations.position ?: 1) - 1
+            },
+            paperModeEnabled = { currentAppearance.pdfPaperModeEnabled },
+            onStateChanged = ::showTranslation
+        )
+        pdfTranslationController = controller
+        controller.attach(fragment)
+        observeLocator { fragment.currentLocator.collectLatest(it) }
+    }
+
+    private fun observeLocator(collect: suspend (suspend (Locator) -> Unit) -> Unit) {
         lifecycleScope.launch {
-            epubNavigator.currentLocator.collectLatest { locator ->
+            collect { locator ->
+                latestLocator = locator
                 latestLocatorJson = locator.toJSON().toString()
+                currentProgress = locator.locations.totalProgression ?: currentProgress
+                currentChapterIndex = readingOrder.indexOfFirst {
+                    it.url().toString() == locator.href.toString()
+                }
+                refreshBookmarkState()
                 delay(PROGRESS_SAVE_DEBOUNCE_MILLIS)
                 persistLatestLocator()
             }
@@ -319,33 +481,219 @@ class ReaderActivity : AppCompatActivity() {
 
     internal fun navigateToChapter(chapterId: String): Boolean {
         val link = tableOfContentsLinks[chapterId] ?: return false
-        return navigator?.go(link, animated = false) ?: false
+        return navigator?.go(link, animated = false)
+            ?: pdfNavigator?.go(link, animated = false)
+            ?: false
     }
+
+    private fun goToPreviousPage() {
+        navigator?.goBackward(animated = false) ?: pdfNavigator?.goBackward(animated = false)
+    }
+
+    private fun goToNextPage() {
+        navigator?.goForward(animated = false) ?: pdfNavigator?.goForward(animated = false)
+    }
+
+    private fun goToAdjacentChapter(offset: Int) {
+        if (readingOrder.isEmpty()) return
+        val target = (currentChapterIndex + offset).coerceIn(0, readingOrder.lastIndex)
+        if (target == currentChapterIndex) return
+        val link = readingOrder[target]
+        navigator?.go(link, animated = false) ?: pdfNavigator?.go(link, animated = false)
+    }
+
+    private fun goToProgress(progress: Double) {
+        val clamped = progress.coerceIn(0.0, 1.0)
+        currentProgress = clamped
+        if (positions.isEmpty()) return
+        val index = ((positions.size - 1) * clamped).toInt().coerceIn(0, positions.lastIndex)
+        val target = positions[index]
+        navigator?.go(target, animated = false) ?: pdfNavigator?.go(target, animated = false)
+    }
+
+    private fun bookmarkKey(locator: Locator): String = buildString {
+        append(book?.id.orEmpty())
+        append('|')
+        append(locator.href)
+        append('|')
+        append(((locator.locations.progression ?: 0.0) * 10_000).toInt())
+    }
+
+    private fun refreshBookmarkState() {
+        val locator = latestLocator
+        isCurrentPositionBookmarked = locator != null &&
+            bookmarks.any { it.bookmarkKey == bookmarkKey(locator) }
+    }
+
+    private fun toggleBookmark() {
+        val locator = latestLocator ?: return
+        val libraryBook = book ?: return
+        lifecycleScope.launch {
+            graph.readerRecords.toggleBookmark(
+                key = bookmarkKey(locator),
+                bookId = libraryBook.id,
+                bookTitle = libraryBook.title,
+                locatorJson = locator.toJSON().toString(),
+                chapterTitle = currentChapterTitle(locator),
+                excerpt = locator.text.highlight ?: locator.text.after?.take(60),
+                progress = locator.locations.totalProgression ?: currentProgress
+            )
+        }
+    }
+
+    private fun currentChapterTitle(locator: Locator): String =
+        locator.title?.takeIf(String::isNotBlank)
+            ?: readingOrder.firstOrNull { it.url().toString() == locator.href.toString() }
+                ?.title
+                ?.takeIf(String::isNotBlank)
+            ?: "阅读位置"
 
     internal fun applyAppearance(appearance: ReaderAppearance) {
         currentAppearance = appearance
-        currentPreferences = currentPreferences.copy(
-            fontSize = appearance.fontScale,
-            theme = appearance.theme.toReadiumTheme()
-        )
-        navigator?.submitPreferences(currentPreferences)
+        val updated = appearance.toEpubPreferences(basePreferences)
+        basePreferences = updated
+        navigator?.submitPreferences(updated)
 
         val bookId = book?.id ?: return
-        val serialized = EpubPreferencesSerializer().serialize(currentPreferences)
+        val serialized = encodeStoredReaderPreferences(appearance, updated)
         graph.applicationScope.launch {
             graph.repository.updatePreferences(bookId, serialized)
         }
     }
 
-    private fun showTableOfContents() {
+    private fun showNavigationPanel() {
         showComposeDialog { dialog ->
-            ReaderTableOfContents(
+            ReaderNavigationPanel(
                 chapters = tableOfContents,
-                onSelect = { id ->
+                bookmarks = bookmarks.map { record ->
+                    ReaderBookmarkItem(
+                        id = record.id,
+                        title = record.chapterTitle,
+                        detail = record.excerpt?.take(80)
+                            ?: "${(record.progress * 100).toInt()}%",
+                        progress = record.progress
+                    )
+                },
+                annotations = annotations.map { record ->
+                    ReaderAnnotationItem(
+                        id = record.id,
+                        selectedText = record.selectedText,
+                        noteText = record.noteText,
+                        color = record.color,
+                        progress = record.progress
+                    )
+                },
+                searchQuery = searchQuery,
+                searchResults = searchResults,
+                isSearching = isSearching,
+                searchMessage = searchMessage,
+                onSearchQueryChange = { searchQuery = it },
+                onSearch = ::runSearch,
+                onSelectSearchResult = { id ->
+                    searchLocators[id]?.let { locator ->
+                        navigator?.go(locator, animated = false)
+                            ?: pdfNavigator?.go(locator, animated = false)
+                    }
+                    dialog.dismiss()
+                },
+                onSelectChapter = { id ->
                     navigateToChapter(id)
                     dialog.dismiss()
+                },
+                onSelectBookmark = { id ->
+                    bookmarks.firstOrNull { it.id == id }
+                        ?.locatorJson
+                        ?.let(::parseLocator)
+                        ?.let { locator ->
+                            navigator?.go(locator, animated = false)
+                                ?: pdfNavigator?.go(locator, animated = false)
+                        }
+                    dialog.dismiss()
+                },
+                onDeleteBookmark = { id ->
+                    lifecycleScope.launch { graph.readerRecords.deleteBookmark(id) }
+                },
+                onSelectAnnotation = { id ->
+                    annotations.firstOrNull { it.id == id }
+                        ?.locatorJson
+                        ?.let(::parseLocator)
+                        ?.let { locator ->
+                            navigator?.go(locator, animated = false)
+                                ?: pdfNavigator?.go(locator, animated = false)
+                        }
+                    dialog.dismiss()
+                },
+                onEditAnnotation = { id ->
+                    annotations.firstOrNull { it.id == id }?.let { record ->
+                        dialog.dismiss()
+                        parseLocator(record.locatorJson)?.let { locator ->
+                            showAnnotationEditor(
+                                PendingAnnotation(
+                                    selectedText = record.selectedText,
+                                    locator = locator,
+                                    existingId = record.id,
+                                    note = record.noteText,
+                                    color = record.color
+                                )
+                            )
+                        }
+                    }
+                },
+                onDeleteAnnotation = { id ->
+                    lifecycleScope.launch { graph.readerRecords.deleteAnnotation(id) }
                 }
             )
+        }
+    }
+
+    private fun runSearch() {
+        val query = searchQuery.trim()
+        val currentPublication = publication ?: return
+        if (query.isEmpty() || isSearching) return
+        isSearching = true
+        searchMessage = null
+        searchResults = emptyList()
+        searchLocators.clear()
+        lifecycleScope.launch {
+            try {
+                val iterator = currentPublication.search(query)
+                if (iterator == null) {
+                    searchMessage = "当前出版物不支持全文搜索。"
+                    return@launch
+                }
+                val collected = mutableListOf<ReaderSearchResultItem>()
+                var pages = 0
+                while (collected.size < SEARCH_RESULT_LIMIT && pages < SEARCH_PAGE_LIMIT) {
+                    val locators = iterator.next().getOrNull()?.locators ?: break
+                    if (locators.isEmpty()) break
+                    locators.forEach { locator ->
+                        if (collected.size >= SEARCH_RESULT_LIMIT) return@forEach
+                        val id = "search-${searchLocators.size}"
+                        searchLocators[id] = locator
+                        collected += ReaderSearchResultItem(
+                            id = id,
+                            excerpt = buildString {
+                                append(locator.text.before?.takeLast(30).orEmpty())
+                                append(locator.text.highlight.orEmpty())
+                                append(locator.text.after?.take(30).orEmpty())
+                            }.trim(),
+                            chapterTitle = currentChapterTitle(locator)
+                        )
+                    }
+                    pages++
+                }
+                iterator.close()
+                searchResults = collected
+                searchMessage = if (collected.isEmpty()) {
+                    "没有找到匹配结果。"
+                } else {
+                    "找到 ${collected.size} 处匹配。"
+                }
+            } catch (_: Exception) {
+                searchMessage = "当前出版物不支持全文搜索。"
+            } finally {
+                isSearching = false
+            }
         }
     }
 
@@ -353,8 +701,73 @@ class ReaderActivity : AppCompatActivity() {
         showComposeDialog {
             ReaderAppearancePanel(
                 appearance = currentAppearance,
-                onChange = ::applyAppearance
+                onChange = ::applyAppearance,
+                isPdf = pdfNavigator != null
             )
+        }
+    }
+
+    private fun requestAnnotationForSelection() {
+        lifecycleScope.launch {
+            val selection = navigator?.currentSelection() ?: return@launch
+            val text = selection.locator.text.highlight?.takeIf(String::isNotBlank) ?: return@launch
+            showAnnotationEditor(PendingAnnotation(text, selection.locator))
+        }
+    }
+
+    private fun showAnnotationEditor(target: PendingAnnotation) {
+        pendingAnnotation = target
+        annotationDialog?.dismiss()
+        val dialog = ComponentDialog(this)
+        annotationDialog = dialog
+        dialog.setContentView(
+            dialogComposeView {
+                ReaderTheme {
+                    Surface {
+                        ReaderAnnotationEditor(
+                            selectedText = target.selectedText,
+                            initialNote = target.note,
+                            initialColor = target.color,
+                            onSave = { note, color ->
+                                saveAnnotation(target, note, color)
+                                dialog.dismiss()
+                            },
+                            onCancel = dialog::dismiss
+                        )
+                    }
+                }
+            }
+        )
+        dialog.setOnDismissListener {
+            annotationDialog = null
+            pendingAnnotation = null
+        }
+        dialog.show()
+        dialog.window?.setLayout(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+    }
+
+    private fun saveAnnotation(target: PendingAnnotation, note: String, color: String) {
+        val libraryBook = book ?: return
+        lifecycleScope.launch {
+            val existingId = target.existingId
+            if (existingId != null) {
+                graph.readerRecords.updateAnnotation(existingId, note, color)
+            } else {
+                graph.readerRecords.saveAnnotation(
+                    bookId = libraryBook.id,
+                    bookTitle = libraryBook.title,
+                    locatorJson = target.locator.toJSON().toString(),
+                    selectedText = target.selectedText,
+                    noteText = note,
+                    color = color,
+                    chapterTitle = currentChapterTitle(target.locator),
+                    progress = target.locator.locations.totalProgression ?: currentProgress
+                )
+            }
+            navigator?.clearSelection()
         }
     }
 
@@ -368,7 +781,7 @@ class ReaderActivity : AppCompatActivity() {
             dialogComposeView {
                 val visibleState = currentWordLookupState
                 if (visibleState != null) {
-                    MaterialTheme {
+                    ReaderTheme {
                         Surface(
                             modifier = Modifier.clip(
                                 RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp)
@@ -379,7 +792,17 @@ class ReaderActivity : AppCompatActivity() {
                                 state = visibleState,
                                 onDismiss = ::dismissWordLookup,
                                 onRetry = { wordInteractionController?.retry() },
-                                onCopy = ::copyWordEntry
+                                onCopy = ::copyToClipboard,
+                                onFavorite = { explanation ->
+                                    lifecycleScope.launch {
+                                        graph.learningRecords.recordLookup(
+                                            explanation = explanation,
+                                            sourceBookId = book?.id,
+                                            sourceBookTitle = book?.title,
+                                            favorite = true
+                                        )
+                                    }
+                                }
                             )
                         }
                     }
@@ -402,17 +825,123 @@ class ReaderActivity : AppCompatActivity() {
         )
     }
 
+    private fun showTranslation(state: TranslationCardState) {
+        currentTranslationState = state
+        if (translationDialog?.isShowing == true) return
+
+        val dialog = ComponentDialog(this)
+        translationDialog = dialog
+        dialog.setContentView(
+            dialogComposeView {
+                val visibleState = currentTranslationState
+                if (visibleState != null) {
+                    ReaderTheme {
+                        Surface(
+                            modifier = Modifier.clip(
+                                RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp)
+                            ),
+                            tonalElevation = 6.dp
+                        ) {
+                            TranslationCard(
+                                state = visibleState,
+                                onDismiss = { dialog.dismiss() },
+                                onRetry = ::retryTranslation,
+                                onCopy = ::copyToClipboard,
+                                onFavorite = { result -> favoriteTranslation(visibleState, result) },
+                                onExplain = { explainTranslation(visibleState) },
+                                onAnnotate = ::annotateTranslatedText,
+                                onOpenSettings = ::openTranslationSettings
+                            )
+                        }
+                    }
+                }
+            }
+        )
+        dialog.window?.apply {
+            setBackgroundDrawable(Color.TRANSPARENT.toDrawable())
+            setGravity(Gravity.BOTTOM)
+        }
+        dialog.setOnDismissListener {
+            tapTranslationController?.clearSelection()
+            currentTranslationState = null
+            translationDialog = null
+        }
+        dialog.show()
+        dialog.window?.setLayout(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+    }
+
+    private fun retryTranslation() {
+        pdfTranslationController?.retry() ?: tapTranslationController?.retry()
+    }
+
+    private fun favoriteTranslation(state: TranslationCardState, result: TranslationResult) {
+        lifecycleScope.launch {
+            graph.learningRecords.saveTranslationFavorite(
+                sourceText = state.sourceText,
+                result = result,
+                bookId = book?.id,
+                bookTitle = book?.title,
+                locatorJson = latestLocatorJson
+            )
+        }
+    }
+
+    private fun explainTranslation(state: TranslationCardState) {
+        val service = graph.translationService as? ContextExplanationService ?: return
+        lifecycleScope.launch {
+            val explained = runCatching {
+                service.explain(
+                    ContextExplanationRequest(
+                        focusedText = state.sourceText,
+                        contextText = null,
+                        sourceLanguage = currentBookLanguage()
+                    )
+                )
+            }.getOrNull() ?: return@launch
+            val current = currentTranslationState
+            if (current is TranslationCardState.Success && current.sourceText == state.sourceText) {
+                currentTranslationState = current.copy(analysisText = explained.explanation)
+            }
+        }
+    }
+
+    private fun annotateTranslatedText(text: String) {
+        val locator = latestLocator ?: return
+        translationDialog?.dismiss()
+        showAnnotationEditor(PendingAnnotation(selectedText = text, locator = locator))
+    }
+
+    private fun openTranslationSettings() {
+        translationDialog?.dismiss()
+        startActivity(
+            Intent(this, MainActivity::class.java)
+                .putExtra(MainActivity.EXTRA_OPEN_SETTINGS, true)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        )
+    }
+
     private fun dismissWordLookup() {
         wordLookupDialog?.dismiss()
     }
 
-    private fun copyWordEntry(text: String) {
+    private fun copyToClipboard(text: String) {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("Jerreader 词条", text))
+        clipboard.setPrimaryClip(ClipData.newPlainText("Jerreader", text))
     }
 
     internal suspend fun lookupAtForTesting(point: PointF): WordLookupCardState? =
         wordInteractionController?.lookupAt(point)
+
+    internal suspend fun translateAtForTesting(point: PointF): TranslationCardState? =
+        tapTranslationController?.translateAt(point)
+            ?: pdfTranslationController?.translateAt(point)
+
+    /** Feeds a navigator-pixel point through the real Readium tap conversion. */
+    internal suspend fun translateAtDevicePointForTesting(point: PointF): TranslationCardState? =
+        tapTranslationController?.translateAtDevicePoint(point)
 
     internal fun analyzeSelectedTextForTesting(
         text: String,
@@ -422,7 +951,7 @@ class ReaderActivity : AppCompatActivity() {
     private fun showComposeDialog(content: @androidx.compose.runtime.Composable (Dialog) -> Unit) {
         val dialog = ComponentDialog(this)
         dialog.setContentView(dialogComposeView {
-            MaterialTheme {
+            ReaderTheme {
                 Surface { content(dialog) }
             }
         })
@@ -433,6 +962,11 @@ class ReaderActivity : AppCompatActivity() {
             )
         }
         dialog.show()
+    }
+
+    @androidx.compose.runtime.Composable
+    private fun ReaderTheme(content: @androidx.compose.runtime.Composable () -> Unit) {
+        JerreaderTheme(accent = graph.appSettings.preferences.value.theme, content = content)
     }
 
     private fun dialogComposeView(
@@ -448,12 +982,23 @@ class ReaderActivity : AppCompatActivity() {
     private fun persistLatestLocator() {
         val bookId = book?.id ?: return
         val locatorJson = latestLocatorJson ?: return
+        val progress = currentProgress
         graph.applicationScope.launch {
             graph.repository.updateReadingProgress(
                 id = bookId,
                 locatorJson = locatorJson,
-                openedAtEpochMillis = System.currentTimeMillis()
+                openedAtEpochMillis = System.currentTimeMillis(),
+                progress = progress
             )
+        }
+    }
+
+    private fun persistReadingTime() {
+        val bookId = book?.id ?: return
+        val seconds = (System.currentTimeMillis() - sessionStartedAtMillis) / 1000.0
+        if (seconds < MINIMUM_RECORDED_READING_SECONDS) return
+        graph.applicationScope.launch {
+            graph.repository.addReadingTime(bookId, seconds)
         }
     }
 
@@ -487,32 +1032,14 @@ class ReaderActivity : AppCompatActivity() {
         Locator.fromJSON(JSONObject(json))
     }.getOrNull()
 
-    private fun parsePreferences(json: String): EpubPreferences? = runCatching {
-        EpubPreferencesSerializer().deserialize(json)
-    }.getOrNull()
-
     private fun currentBookLanguage(): LanguageCode? {
         val tag = book?.language?.lowercase().orEmpty()
         return when {
             tag.startsWith("ja") -> LanguageCode.JAPANESE
             tag.startsWith("en") -> LanguageCode.ENGLISH
+            tag.startsWith("zh") -> LanguageCode.CHINESE_SIMPLIFIED
             else -> null
         }
-    }
-
-    private fun EpubPreferences.toAppearance(): ReaderAppearance = ReaderAppearance(
-        fontScale = fontSize ?: 1.0,
-        theme = when (theme) {
-            Theme.DARK -> ReaderThemeOption.DARK
-            Theme.SEPIA -> ReaderThemeOption.SEPIA
-            else -> ReaderThemeOption.LIGHT
-        }
-    )
-
-    private fun ReaderThemeOption.toReadiumTheme(): Theme = when (this) {
-        ReaderThemeOption.LIGHT -> Theme.LIGHT
-        ReaderThemeOption.SEPIA -> Theme.SEPIA
-        ReaderThemeOption.DARK -> Theme.DARK
     }
 
     companion object {
@@ -520,9 +1047,14 @@ class ReaderActivity : AppCompatActivity() {
         const val EXTRA_PUBLICATION_PATH = "com.jerreader.reader.PUBLICATION_PATH"
         const val EXTRA_EXPECTED_SHA256 = "com.jerreader.reader.EXPECTED_SHA256"
         const val EXTRA_EXPECTED_LAST_MODIFIED = "com.jerreader.reader.EXPECTED_LAST_MODIFIED"
+        const val EXTRA_SOURCE_FORMAT = "com.jerreader.reader.SOURCE_FORMAT"
 
+        private const val TOOLBAR_HEIGHT_DP = 140
         private const val NAVIGATOR_TAG = "JerreaderNavigator"
         private const val INTEGRITY_TAG = "JerreaderIntegrity"
         private const val PROGRESS_SAVE_DEBOUNCE_MILLIS = 500L
+        private const val MINIMUM_RECORDED_READING_SECONDS = 3.0
+        private const val SEARCH_RESULT_LIMIT = 80
+        private const val SEARCH_PAGE_LIMIT = 6
     }
 }

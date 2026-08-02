@@ -14,6 +14,9 @@ class RoomLibraryRepository(private val dao: BookDao) : LibraryRepository {
     override suspend fun bookWithFingerprint(fingerprint: String): LibraryBook? =
         dao.findByFingerprint(fingerprint)?.toDomain()
 
+    override suspend fun bookWithSourceFingerprint(fingerprint: String): LibraryBook? =
+        dao.findBySourceFingerprint(fingerprint)?.toDomain()
+
     override suspend fun add(book: LibraryBook) {
         dao.insert(book.toEntity())
     }
@@ -23,12 +26,44 @@ class RoomLibraryRepository(private val dao: BookDao) : LibraryRepository {
     override suspend fun updateReadingProgress(
         id: String,
         locatorJson: String,
-        openedAtEpochMillis: Long
+        openedAtEpochMillis: Long,
+        progress: Double
     ) {
-        dao.updateReadingProgress(id, locatorJson, openedAtEpochMillis)
+        dao.updateReadingProgress(id, locatorJson, openedAtEpochMillis, progress.coerceIn(0.0, 1.0))
+    }
+
+    override suspend fun addReadingTime(id: String, seconds: Double) {
+        dao.addReadingTime(id, seconds.coerceAtLeast(0.0))
     }
 
     override suspend fun updatePreferences(id: String, preferencesJson: String) {
         dao.updatePreferences(id, preferencesJson)
+    }
+
+    override suspend fun updateOrganization(
+        id: String,
+        title: String,
+        author: String?,
+        language: String?,
+        category: String,
+        series: String,
+        tags: List<String>
+    ) {
+        dao.updateOrganization(
+            id = id,
+            title = title.trim().ifEmpty { "未命名书籍" },
+            author = author?.trim()?.takeIf(String::isNotBlank),
+            language = language?.trim()?.takeIf(String::isNotBlank),
+            category = category.trim(),
+            series = series.trim(),
+            tagsText = tags.map(String::trim)
+                .filter(String::isNotBlank)
+                .distinctBy(String::lowercase)
+                .joinToString("\u001F")
+        )
+    }
+
+    override suspend fun updateCover(id: String, coverFileName: String?) {
+        dao.updateCover(id, coverFileName)
     }
 }

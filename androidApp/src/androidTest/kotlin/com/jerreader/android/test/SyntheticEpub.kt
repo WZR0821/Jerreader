@@ -93,7 +93,7 @@ fun createSyntheticEpub(
                   <body>
                     <h1>第一章</h1>
                     <p>这是不含版权内容的合成 EPUB 测试夹具。</p>
-                    <p id="english-sentence">She <span id="english-word">went</span> home.</p>
+                    <p id="english-sentence">She <span id="english-word">went</span> home. Then she opened a book.</p>
                     <p id="japanese-sentence">昨日ご飯を<span id="japanese-word">食べました</span>。</p>
                   </body>
                 </html>

@@ -3,8 +3,8 @@ package com.jerreader.shared.lexical
 import com.jerreader.shared.domain.LanguageCode
 
 /**
- * A small, real offline safety net for the most common words and the M4
- * acceptance fixtures. It is deliberately separate from the Mock so tests can
+ * A small, real offline safety net for common English and Japanese words.
+ * It is deliberately separate from the Mock so tests can
  * verify the production fallback without pretending to cover a full dictionary.
  */
 class BundledLexicalLookupService : LexicalLookupService {

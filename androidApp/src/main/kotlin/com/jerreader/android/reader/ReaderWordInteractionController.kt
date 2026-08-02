@@ -34,6 +34,7 @@ class ReaderWordInteractionController(
     private var navigator: EpubNavigatorFragment? = null
     private var lookupJob: Job? = null
     private var lastAnalysis: WordAnalysis? = null
+    private var inputListenerRegistered = false
 
     val selectionActionModeCallback: ActionMode.Callback = object : BaseActionModeCallback() {
         override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
@@ -54,21 +55,23 @@ class ReaderWordInteractionController(
     private val inputListener = object : InputListener {
         override fun onTap(event: TapEvent): Boolean {
             lookupJob?.cancel()
-            lookupJob = scope.launch { lookupAt(event.point) }
+            lookupJob = scope.launch { lookupAt(toCssPoint(event.point)) }
             // Readium filters links and other interactive elements before this
             // callback. Consuming a plain tap gives it one meaning: word lookup.
             return true
         }
     }
 
-    fun attach(navigator: EpubNavigatorFragment) {
+    fun attach(navigator: EpubNavigatorFragment, registerShortTap: Boolean = true) {
         detach()
         this.navigator = navigator
-        navigator.addInputListener(inputListener)
+        inputListenerRegistered = registerShortTap
+        if (registerShortTap) navigator.addInputListener(inputListener)
     }
 
     fun detach() {
-        navigator?.removeInputListener(inputListener)
+        if (inputListenerRegistered) navigator?.removeInputListener(inputListener)
+        inputListenerRegistered = false
         navigator = null
         lookupJob?.cancel()
         lookupJob = null
@@ -81,6 +84,21 @@ class ReaderWordInteractionController(
     fun retry() {
         val analysis = lastAnalysis ?: return
         startLookup(analysis)
+    }
+
+    /**
+     * Readium reports taps in navigator view pixels; `caretRangeFromPoint`
+     * expects CSS pixels, which equal dp on a `width=device-width` page.
+     */
+    private fun toCssPoint(point: PointF): PointF {
+        val density = navigator?.publicationView?.resources?.displayMetrics?.density ?: 0f
+        if (density <= 0f) return PointF(point.x, point.y)
+        return PointF(point.x / density, point.y / density)
+    }
+
+    fun lookupSelectionFromMenu() {
+        lookupJob?.cancel()
+        lookupJob = scope.launch { lookupCurrentSelection() }
     }
 
     internal suspend fun lookupAt(point: PointF): WordLookupCardState? {

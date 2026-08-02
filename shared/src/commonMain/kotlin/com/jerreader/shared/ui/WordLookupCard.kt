@@ -44,6 +44,8 @@ fun WordLookupCard(
     onDismiss: () -> Unit,
     onRetry: () -> Unit,
     onCopy: (String) -> Unit,
+    onFavorite: ((WordExplanation) -> Unit)? = null,
+    onSpeak: ((WordExplanation) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -99,7 +101,9 @@ fun WordLookupCard(
             is WordLookupCardState.Success -> SuccessContent(
                 analysis = state.analysis,
                 explanation = state.explanation,
-                onCopy = onCopy
+                onCopy = onCopy,
+                onFavorite = onFavorite,
+                onSpeak = onSpeak
             )
         }
     }
@@ -109,7 +113,9 @@ fun WordLookupCard(
 private fun SuccessContent(
     analysis: WordAnalysis,
     explanation: WordExplanation,
-    onCopy: (String) -> Unit
+    onCopy: (String) -> Unit,
+    onFavorite: ((WordExplanation) -> Unit)?,
+    onSpeak: ((WordExplanation) -> Unit)?
 ) {
     val displayedLemma = explanation.lemma
         ?: analysis.lemma?.takeIf { it != analysis.normalizedForm }
@@ -152,18 +158,26 @@ private fun SuccessContent(
             }
         }
         item {
-            TextButton(
-                onClick = {
-                    onCopy(
-                        buildString {
-                            append(explanation.surfaceForm)
-                            displayedLemma?.let { append(" [$it]") }
-                            append("：")
-                            append(explanation.definitions.joinToString("；"))
-                        }
-                    )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(
+                    onClick = {
+                        onCopy(
+                            buildString {
+                                append(explanation.surfaceForm)
+                                displayedLemma?.let { append(" [$it]") }
+                                append("：")
+                                append(explanation.definitions.joinToString("；"))
+                            }
+                        )
+                    }
+                ) { Text("复制词条") }
+                onFavorite?.let { favorite ->
+                    Button(onClick = { favorite(explanation) }) { Text("加入生词本") }
                 }
-            ) { Text("复制词条") }
+                onSpeak?.let { speak ->
+                    TextButton(onClick = { speak(explanation) }) { Text("朗读") }
+                }
+            }
         }
     }
 }

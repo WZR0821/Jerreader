@@ -46,11 +46,13 @@ class LibraryViewModel(
         initialValue = LibraryUiState()
     )
 
-    fun importEpub(source: Uri) {
+    fun importEpub(source: Uri) = importPublication(source)
+
+    fun importPublication(source: Uri) {
         if (operation.value.isImporting) return
         viewModelScope.launch {
             operation.value = LibraryOperationState(isImporting = true)
-            runCatching { importService.importEpub(source) }
+            runCatching { importService.importPublication(source) }
                 .onSuccess { outcome ->
                     operation.value = LibraryOperationState(
                         message = when (outcome) {
@@ -62,7 +64,7 @@ class LibraryViewModel(
                 }
                 .onFailure { error ->
                     operation.value = LibraryOperationState(
-                        message = error.message ?: "无法导入该 EPUB。"
+                        message = error.message ?: "无法导入该电子书。"
                     )
                 }
         }
@@ -77,6 +79,50 @@ class LibraryViewModel(
                 .onFailure { error ->
                     operation.value = LibraryOperationState(
                         message = error.message ?: "无法删除该书籍。"
+                    )
+                }
+        }
+    }
+
+    fun updateBook(
+        bookId: String,
+        title: String,
+        author: String?,
+        language: String?,
+        category: String,
+        series: String,
+        tags: List<String>
+    ) {
+        viewModelScope.launch {
+            runCatching {
+                repository.updateOrganization(
+                    id = bookId,
+                    title = title,
+                    author = author,
+                    language = language,
+                    category = category,
+                    series = series,
+                    tags = tags
+                )
+            }.onSuccess {
+                operation.value = LibraryOperationState(message = "书籍信息已更新。")
+            }.onFailure { error ->
+                operation.value = LibraryOperationState(
+                    message = error.message ?: "无法更新书籍信息。"
+                )
+            }
+        }
+    }
+
+    fun updateCover(bookId: String, source: Uri) {
+        viewModelScope.launch {
+            runCatching { bookService.updateCover(bookId, source) }
+                .onSuccess {
+                    operation.value = LibraryOperationState(message = "封面已更新。")
+                }
+                .onFailure { error ->
+                    operation.value = LibraryOperationState(
+                        message = error.message ?: "无法更新封面。"
                     )
                 }
         }

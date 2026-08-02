@@ -12,8 +12,8 @@ android {
         applicationId = "com.jerreader.android"
         minSdk = 23
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.4.0-m4-tap"
+        versionCode = 43
+        versionName = "1.0.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -62,6 +62,9 @@ dependencies {
     implementation(libs.readium.streamer)
     implementation(libs.readium.navigator)
     implementation(libs.readium.pdfium)
+    implementation(libs.mlkit.text.recognition)
+    implementation(libs.mlkit.text.recognition.japanese)
+    implementation(libs.mlkit.translate)
 
     ksp(libs.androidx.room.compiler)
 

@@ -2,7 +2,7 @@ package com.jerreader.shared.translation
 
 import com.jerreader.shared.domain.LanguageCode
 
-class MockTranslationService : TranslationService {
+class MockTranslationService : TranslationService, ContextExplanationService {
     override val identifier: String = "mock-v1"
 
     override suspend fun translate(request: TranslationRequest): TranslationResult {
@@ -19,6 +19,14 @@ class MockTranslationService : TranslationService {
             translatedText = translated,
             sourceLanguage = sourceLanguage,
             targetLanguage = request.targetLanguage,
+            providerIdentifier = identifier
+        )
+    }
+
+    override suspend fun explain(request: ContextExplanationRequest): ContextExplanationResult {
+        TranslationInputPolicy.validate(request.focusedText)
+        return ContextExplanationResult(
+            explanation = "[测试解析] ${request.focusedText}",
             providerIdentifier = identifier
         )
     }

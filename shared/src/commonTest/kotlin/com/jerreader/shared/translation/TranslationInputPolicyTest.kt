@@ -19,4 +19,14 @@ class TranslationInputPolicyTest {
             TranslationInputPolicy.validate("a".repeat(2_001))
         }
     }
+
+    @Test
+    fun rejectsInvisibleUnicodeOnlyInput() {
+        assertFailsWith<TranslationFailure.EmptyInput> {
+            TranslationInputPolicy.validate("\u200B\u200D\uFEFF")
+        }
+        assertFailsWith<TranslationFailure.EmptyInput> {
+            TranslationInputPolicy.validate("\u0301\u0308")
+        }
+    }
 }

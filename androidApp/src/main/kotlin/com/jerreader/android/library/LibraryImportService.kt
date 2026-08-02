@@ -2,6 +2,7 @@ package com.jerreader.android.library
 
 import android.graphics.Bitmap
 import android.net.Uri
+import com.jerreader.shared.domain.BookFormat
 import com.jerreader.android.reader.ReadiumEnvironment
 import com.jerreader.shared.library.LibraryBook
 import com.jerreader.shared.library.LibraryImportOutcome
@@ -19,13 +20,31 @@ class LibraryImportService(
     private val store: ImmutablePublicationStore,
     private val readium: ReadiumEnvironment,
     private val repository: LibraryRepository,
+    private val converter: DocumentToEpubConverter = DocumentToEpubConverter(),
     private val now: () -> Long = System::currentTimeMillis
 ) {
-    suspend fun importEpub(source: Uri): LibraryImportOutcome = withContext(Dispatchers.IO) {
-        val staged = store.copyToStaging(source)
-        repository.bookWithFingerprint(staged.snapshot.sha256)?.let { existing ->
+    suspend fun importEpub(source: Uri): LibraryImportOutcome = importPublication(source)
+
+    suspend fun importPublication(source: Uri): LibraryImportOutcome = withContext(Dispatchers.IO) {
+        var staged = store.copyToStaging(source)
+        val sourceFormat = BookFormat.fromFileName(staged.displayName)
+            ?: throw LibraryImportException.UnsupportedFormat
+        val sourceFingerprint = staged.snapshot.sha256
+        repository.bookWithSourceFingerprint(sourceFingerprint)?.let { existing ->
             store.discard(staged)
             return@withContext LibraryImportOutcome.AlreadyImported(existing)
+        }
+
+        if (sourceFormat == BookFormat.DOCX || sourceFormat == BookFormat.TXT) {
+            try {
+                val converted = converter.convert(staged, sourceFormat)
+                val displayName = staged.displayName
+                store.discard(staged)
+                staged = store.stageGeneratedEpub(displayName, converted)
+            } catch (error: Throwable) {
+                store.discard(staged)
+                throw error
+            }
         }
 
         var stored: StoredPublication? = null
@@ -43,7 +62,12 @@ class LibraryImportService(
 
             try {
                 if (publication.isRestricted) throw LibraryImportException.RestrictedPublication
-                if (!publication.conformsTo(Publication.Profile.EPUB)) {
+                val expectedProfile = if (sourceFormat == BookFormat.PDF) {
+                    Publication.Profile.PDF
+                } else {
+                    Publication.Profile.EPUB
+                }
+                if (!publication.conformsTo(expectedProfile)) {
                     throw LibraryImportException.UnsupportedFormat
                 }
 
@@ -76,7 +100,9 @@ class LibraryImportService(
                     importedAtEpochMillis = now(),
                     lastOpenedAtEpochMillis = null,
                     locatorJson = null,
-                    preferencesJson = null
+                    preferencesJson = null,
+                    sourceFormat = sourceFormat.fileExtension,
+                    sourceFingerprint = sourceFingerprint
                 )
                 repository.add(book)
                 LibraryImportOutcome.Imported(book)
@@ -101,7 +127,9 @@ class LibraryImportService(
 }
 
 sealed class LibraryImportException(message: String) : Exception(message) {
-    data object InvalidEpub : LibraryImportException("EPUB 已损坏或无法解析。")
-    data object RestrictedPublication : LibraryImportException("该 EPUB 受保护，Jerreader 不会尝试绕过 DRM。")
-    data object UnsupportedFormat : LibraryImportException("当前文件不是可支持的 EPUB。")
+    data object InvalidEpub : LibraryImportException("文件已损坏或无法解析。")
+    data object InvalidDocument : LibraryImportException("DOCX 文档已损坏或无法读取。")
+    data object EmptyDocument : LibraryImportException("文档中没有可阅读的正文。")
+    data object RestrictedPublication : LibraryImportException("该出版物受保护，Jerreader 不会尝试绕过 DRM。")
+    data object UnsupportedFormat : LibraryImportException("仅支持 EPUB、PDF、DOCX 和 TXT。")
 }

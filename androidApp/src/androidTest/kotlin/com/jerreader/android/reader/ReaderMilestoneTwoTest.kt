@@ -66,9 +66,10 @@ class ReaderMilestoneTwoTest {
                 val saved = awaitSavedState(book.id)
                 val href = JSONObject(checkNotNull(saved.locatorJson)).getString("href")
                 assertTrue("Full Locator did not point to chapter two: $href", href.contains("chapter-two"))
-                val preferences = EpubPreferencesSerializer().deserialize(
-                    checkNotNull(saved.preferencesJson)
-                )
+                val preferences = decodeStoredReaderPreferences(
+                    checkNotNull(saved.preferencesJson),
+                    ReaderAppearance()
+                ).epub
                 assertEquals(1.3, preferences.fontSize ?: 0.0, 0.001)
                 assertEquals(Theme.DARK, preferences.theme)
             }
@@ -102,6 +103,21 @@ class ReaderMilestoneTwoTest {
             graph.bookService.delete(book.id)
             source.delete()
         }
+    }
+
+    @Test
+    fun legacyReadiumPreferencesRemainReadable() {
+        val legacyJson = EpubPreferencesSerializer().serialize(
+            ReaderAppearance(
+                fontScale = 1.25,
+                theme = ReaderThemeOption.DARK
+            ).toEpubPreferences()
+        )
+
+        val decoded = decodeStoredReaderPreferences(legacyJson, ReaderAppearance())
+
+        assertEquals(1.25, decoded.epub.fontSize ?: 0.0, 0.001)
+        assertEquals(Theme.DARK, decoded.epub.theme)
     }
 
     private fun waitForNavigator(scenario: ActivityScenario<ReaderActivity>) {
