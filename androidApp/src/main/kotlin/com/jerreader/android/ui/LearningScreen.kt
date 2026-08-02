@@ -23,6 +23,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -36,6 +37,12 @@ import com.jerreader.android.AppGraph
 import com.jerreader.shared.ui.JerreaderHintCard
 import com.jerreader.shared.ui.JerreaderIcon
 import com.jerreader.shared.ui.JerreaderSegmentedNav
+import com.jerreader.shared.ui.JerreaderCard
+import com.jerreader.shared.ui.JerreaderFieldLabel
+import com.jerreader.shared.ui.JerreaderPrimaryButton
+import com.jerreader.shared.ui.JerreaderRow
+import com.jerreader.shared.ui.JerreaderSegmented
+import com.jerreader.shared.ui.JerreaderSuggestionChip
 import com.jerreader.android.data.TranslationFavoriteEntity
 import com.jerreader.android.data.WordLookupEntity
 import com.jerreader.android.learning.LearningRecordRepository
@@ -174,44 +181,67 @@ private fun LookupTool(graph: AppGraph) {
     var loading by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    Text("查词", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-    Text("查询日语或英语词语，并保留所在句子的语境。")
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilterChip(
-            selected = language == null,
-            onClick = { language = null },
-            label = { Text("自动") }
+    // iOS wraps the whole form in one white card with bold field labels.
+    JerreaderCard {
+        JerreaderSegmented(
+            options = listOf<Pair<LanguageCode?, String>>(
+                null to "自动",
+                LanguageCode.JAPANESE to "日语",
+                LanguageCode.ENGLISH to "英语"
+            ),
+            selected = language,
+            onSelect = { language = it },
+            modifier = Modifier.padding(bottom = 10.dp)
         )
-        FilterChip(
-            selected = language == LanguageCode.ENGLISH,
-            onClick = { language = LanguageCode.ENGLISH },
-            label = { Text("英语") }
+        Text(
+            "会结合词形和上下文自动选择日语或英语词典。",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 12.dp)
         )
-        FilterChip(
-            selected = language == LanguageCode.JAPANESE,
-            onClick = { language = LanguageCode.JAPANESE },
-            label = { Text("日语") }
+        JerreaderFieldLabel("日语或英语单词/词形")
+        OutlinedTextField(
+            value = word,
+            onValueChange = { word = it },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("例如：食べました", style = MaterialTheme.typography.bodyMedium) },
+            textStyle = MaterialTheme.typography.bodyMedium,
+            singleLine = true
         )
+        JerreaderFieldLabel("上下文（可选）", modifier = Modifier.padding(top = 14.dp))
+        OutlinedTextField(
+            value = context,
+            onValueChange = { context = it },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = {
+                Text("输入词语所在的句子，有助于保留学习语境", style = MaterialTheme.typography.bodyMedium)
+            },
+            textStyle = MaterialTheme.typography.bodyMedium,
+            minLines = 2
+        )
+        Row(
+            modifier = Modifier.padding(top = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                "试一试",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            JerreaderSuggestionChip(text = "食べました", onClick = { word = "食べました" })
+        }
+        JerreaderRow(
+            label = "同时加入生词本",
+            detail = "只查词并保留查询历史",
+            modifier = Modifier.padding(top = 10.dp)
+        ) {
+            Switch(checked = addToVocabulary, onCheckedChange = { addToVocabulary = it })
+        }
     }
-    OutlinedTextField(
-        value = word,
-        onValueChange = { word = it },
-        modifier = Modifier.fillMaxWidth(),
-        label = { Text("词语") },
-        singleLine = true
-    )
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text("同时加入生词本")
-        Switch(checked = addToVocabulary, onCheckedChange = { addToVocabulary = it })
-    }
-    OutlinedTextField(
-        value = context,
-        onValueChange = { context = it },
-        modifier = Modifier.fillMaxWidth(),
-        label = { Text("上下文（可选）") },
-        minLines = 2
-    )
-    Button(
+    JerreaderPrimaryButton(
+        text = if (loading) "查询中…" else "查询词语",
+        icon = JerreaderIcon.SEARCH,
         enabled = word.isNotBlank() && !loading,
         onClick = {
             scope.launch {
@@ -234,7 +264,7 @@ private fun LookupTool(graph: AppGraph) {
                 loading = false
             }
         }
-    ) { Text(if (loading) "查询中…" else "查询") }
+    )
     status?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     result?.let { explanation ->
         Text(explanation.surfaceForm, style = MaterialTheme.typography.titleLarge)

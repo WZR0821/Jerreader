@@ -372,3 +372,77 @@ fun JerreaderHintCard(
         }
     }
 }
+
+/** Bold field label above an input, as used across the iOS learning forms. */
+@Composable
+fun JerreaderFieldLabel(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text,
+        modifier = modifier.padding(bottom = 4.dp),
+        style = MaterialTheme.typography.titleSmall
+    )
+}
+
+/** Full-width primary action, matching the iOS 「查询词语」 button. */
+@Composable
+fun JerreaderPrimaryButton(
+    text: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    icon: JerreaderIcon? = null,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = if (enabled) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+        },
+        onClick = onClick,
+        enabled = enabled
+    ) {
+        Row(
+            modifier = Modifier.padding(vertical = 15.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            icon?.let {
+                JerreaderGlyph(
+                    icon = it,
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size(18.dp).padding(end = 2.dp)
+                )
+            }
+            Text(
+                text,
+                modifier = Modifier.padding(start = if (icon == null) 0.dp else 8.dp),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onPrimary
+            )
+        }
+    }
+}
+
+/** Small tinted suggestion chip, like the iOS 「试一试」 example. */
+@Composable
+fun JerreaderSuggestionChip(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(9.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        onClick = onClick
+    ) {
+        Text(
+            text,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary
+        )
+    }
+}
