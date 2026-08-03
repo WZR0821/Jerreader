@@ -1116,7 +1116,8 @@ class ReaderActivity : AppCompatActivity() {
         navigator?.publicationView?.getLocationInWindow(location)
         val overlayLocation = IntArray(2)
         floatingLayer?.getLocationInWindow(overlayLocation)
-        readerContentTopPx = (location[1] - overlayLocation[1]).coerceAtLeast(0)
+        val overlayPadTop = floatingLayer?.paddingTop ?: 0
+        readerContentTopPx = (location[1] - overlayLocation[1] - overlayPadTop).coerceAtLeast(0)
         selectionRects = rects
         if (rects.isNotEmpty()) {
             anchorTopPx = (readerContentTopPx + rects.minOf { it.top }).toInt()

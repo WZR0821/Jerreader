@@ -134,7 +134,9 @@ class ReaderTapTranslationController(
     }
 
     fun clearSelection() {
+        val target = navigator
         navigator?.clearSelection()
+        scope.launch { target?.evaluateJavascript(clearHighlightScript()) }
         onHighlightChanged?.invoke(emptyList())
         currentIdentity = null
         currentState = null
@@ -329,7 +331,9 @@ class ReaderTapTranslationController(
     """.trimIndent()
 
     /** Selects the resolved range and returns its client rects in CSS pixels. */
-    private fun selectRangeScript(point: PointF, start: Int, end: Int): String = """
+    private fun selectRangeScript(point: PointF, start: Int, end: Int): String {
+        val tint = selectionTint()
+        return """
         (() => {
               const textNodes = (root) => {
                 const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
@@ -396,9 +400,54 @@ class ReaderTapTranslationController(
           selection.removeAllRanges();
           selection.addRange(range);
           const rects = Array.from(range.getClientRects())
-            .filter(rect => rect.width > 0.5 && rect.height > 0.5)
-            .map(rect => ({x: rect.left, y: rect.top, w: rect.width, h: rect.height}));
-          return JSON.stringify({ok: selection.toString().trim().length > 0, rects: rects});
+            .filter(rect => rect.width > 0.5 && rect.height > 0.5);
+
+          // Draw the highlight inside the page instead of over it. The rects and
+          // these fixed-position tiles share one coordinate space, so no
+          // conversion across the WebView boundary can drift, and the layer is
+          // click-through so Readium keeps every gesture.
+          const layerId = 'jerreader-highlight';
+          document.getElementById(layerId)?.remove();
+          const layer = document.createElement('div');
+          layer.id = layerId;
+          layer.style.cssText =
+            'position:fixed;left:0;top:0;right:0;bottom:0;pointer-events:none;z-index:2147483000;';
+          rects.forEach(rect => {
+            const tile = document.createElement('div');
+            tile.style.cssText =
+              'position:fixed;pointer-events:none;border-radius:3px;background:$tint;' +
+              'left:' + rect.left + 'px;top:' + rect.top + 'px;' +
+              'width:' + rect.width + 'px;height:' + rect.height + 'px;';
+            layer.appendChild(tile);
+          });
+          (document.body || document.documentElement).appendChild(layer);
+
+          const styleId = 'jerreader-selection-style';
+          if (!document.getElementById(styleId)) {
+            const style = document.createElement('style');
+            style.id = styleId;
+            style.textContent =
+              '::selection { background: transparent !important; }' +
+              '::-moz-selection { background: transparent !important; }';
+            (document.head || document.documentElement).appendChild(style);
+          }
+
+          return JSON.stringify({
+            ok: selection.toString().trim().length > 0,
+            rects: rects.map(r => ({x: r.left, y: r.top, w: r.width, h: r.height}))
+          });
+        })()
+        """.trimIndent()
+    }
+
+    /** Selection fill, following the reader theme like the iOS overlay. */
+    private fun selectionTint(): String = "rgba(51, 99, 143, 0.28)"
+
+    /** Removes the in-page highlight layer. */
+    private fun clearHighlightScript(): String = """
+        (() => {
+          document.getElementById('jerreader-highlight')?.remove();
+          return true;
         })()
     """.trimIndent()
 
