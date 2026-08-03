@@ -7,6 +7,8 @@ import android.view.Menu
 import android.view.MenuItem
 import com.jerreader.android.translation.AndroidTranslationSettingsStore
 import com.jerreader.shared.domain.LanguageCode
+import com.jerreader.shared.library.ReaderAppearance
+import com.jerreader.shared.library.ReaderSelectionVisualStyle
 import com.jerreader.shared.translation.QuickTranslationUnit
 import com.jerreader.shared.translation.ReaderSentenceSegmenter
 import com.jerreader.shared.translation.ReaderTextNormalizer
@@ -43,6 +45,7 @@ class ReaderTapTranslationController(
     private val onAnnotateRequested: (() -> Unit)? = null,
     private val onHapticFeedback: (() -> Unit)? = null,
     private val onHighlightChanged: ((List<RectF>) -> Unit)? = null,
+    private val appearance: () -> ReaderAppearance = { ReaderAppearance() },
     private val timeSource: () -> Long = System::currentTimeMillis
 ) {
     private var navigator: EpubNavigatorFragment? = null
@@ -332,7 +335,9 @@ class ReaderTapTranslationController(
 
     /** Selects the resolved range and returns its client rects in CSS pixels. */
     private fun selectRangeScript(point: PointF, start: Int, end: Int): String {
-        val tint = selectionTint()
+        val palette = ReaderSelectionVisualStyle.palette(appearance())
+        val tint = palette.fillCss
+        val stroke = palette.strokeCss
         return """
         (() => {
               const textNodes = (root) => {
@@ -415,7 +420,8 @@ class ReaderTapTranslationController(
           rects.forEach(rect => {
             const tile = document.createElement('div');
             tile.style.cssText =
-              'position:fixed;pointer-events:none;border-radius:3px;background:$tint;' +
+              'position:fixed;pointer-events:none;border-radius:3px;' +
+              'background:$tint;box-shadow:inset 0 0 0 1px $stroke;' +
               'left:' + rect.left + 'px;top:' + rect.top + 'px;' +
               'width:' + rect.width + 'px;height:' + rect.height + 'px;';
             layer.appendChild(tile);
@@ -439,9 +445,6 @@ class ReaderTapTranslationController(
         })()
         """.trimIndent()
     }
-
-    /** Selection fill, following the reader theme like the iOS overlay. */
-    private fun selectionTint(): String = "rgba(51, 99, 143, 0.28)"
 
     /** Removes the in-page highlight layer. */
     private fun clearHighlightScript(): String = """

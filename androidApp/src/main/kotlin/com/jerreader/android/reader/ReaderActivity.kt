@@ -440,7 +440,8 @@ class ReaderActivity : AppCompatActivity() {
                     onLookupRequested = { wordController.lookupSelectionFromMenu() },
                     onAnnotateRequested = ::requestAnnotationForSelection,
                     onHapticFeedback = ::performTranslationHaptic,
-                    onHighlightChanged = ::updateSelectionHighlight
+                    onHighlightChanged = ::updateSelectionHighlight,
+                    appearance = { currentAppearance }
                 )
                 tapTranslationController = tapController
                 val factory = EpubNavigatorFactory(openedPublication).createFragmentFactory(
