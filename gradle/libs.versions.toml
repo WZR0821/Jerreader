@@ -18,11 +18,14 @@ room = "2.8.4"
 ksp = "2.3.9"
 mlkitTextRecognition = "16.0.1"
 mlkitTranslate = "17.0.3"
+androidPdfViewer = "3.2.8"
+androidxDocumentFile = "1.1.0"
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidxActivity" }
 androidx-appcompat = { module = "androidx.appcompat:appcompat", version.ref = "androidxAppcompat" }
 androidx-core = { module = "androidx.core:core-ktx", version.ref = "androidxCore" }
+androidx-documentfile = { module = "androidx.documentfile:documentfile", version.ref = "androidxDocumentFile" }
 androidx-fragment = { module = "androidx.fragment:fragment-ktx", version.ref = "androidxFragment" }
 androidx-lifecycle-runtime = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "androidxLifecycle" }
 androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "androidxLifecycle" }
@@ -47,6 +50,7 @@ readium-pdfium = { module = "org.readium.kotlin-toolkit:readium-adapter-pdfium",
 mlkit-text-recognition = { module = "com.google.mlkit:text-recognition", version.ref = "mlkitTextRecognition" }
 mlkit-text-recognition-japanese = { module = "com.google.mlkit:text-recognition-japanese", version.ref = "mlkitTextRecognition" }
 mlkit-translate = { module = "com.google.mlkit:translate", version.ref = "mlkitTranslate" }
+android-pdf-viewer = { module = "com.github.marain87:AndroidPdfViewer", version.ref = "androidPdfViewer" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

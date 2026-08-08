@@ -64,6 +64,67 @@ class AndroidAppSettingsStore(context: Context) {
         )
     }
 
+    /**
+     * Applies the non-sensitive preferences held in a backup archive. Anything
+     * absent from the payload keeps its current value, so an archive written by
+     * an older version cannot reset settings it never knew about.
+     */
+    fun restoreFromBackup(payload: org.json.JSONObject) {
+        val current = mutablePreferences.value
+        val appearance = payload.optJSONObject("readerAppearance")
+        val restored = AndroidAppPreferences(
+            theme = enumValue(payload.optString("theme"), current.theme),
+            defaultReaderAppearance = appearance?.let {
+                ReaderAppearance(
+                    fontScale = it.optDouble("fontScale", current.defaultReaderAppearance.fontScale),
+                    theme = enumValue(it.optString("theme"), current.defaultReaderAppearance.theme),
+                    scroll = it.optBoolean("scroll", current.defaultReaderAppearance.scroll),
+                    font = enumValue(it.optString("font"), current.defaultReaderAppearance.font),
+                    lineHeight = it.optDouble(
+                        "lineHeight",
+                        current.defaultReaderAppearance.lineHeight
+                    ),
+                    paragraphSpacing = it.optDouble(
+                        "paragraphSpacing",
+                        current.defaultReaderAppearance.paragraphSpacing
+                    ),
+                    pageMargins = it.optDouble(
+                        "pageMargins",
+                        current.defaultReaderAppearance.pageMargins
+                    ),
+                    orientation = enumValue(
+                        it.optString("orientation"),
+                        current.defaultReaderAppearance.orientation
+                    ),
+                    customBackgroundHex = it.optString(
+                        "customBackgroundHex",
+                        current.defaultReaderAppearance.customBackgroundHex
+                    ),
+                    customSelectionColorHex = it.optString(
+                        "customSelectionColorHex",
+                        current.defaultReaderAppearance.customSelectionColorHex
+                    ),
+                    pdfPaperModeEnabled = it.optBoolean(
+                        "pdfPaperModeEnabled",
+                        current.defaultReaderAppearance.pdfPaperModeEnabled
+                    )
+                )
+            } ?: current.defaultReaderAppearance,
+            showReadingProgress = payload.optBoolean(
+                "showReadingProgress",
+                current.showReadingProgress
+            ),
+            applyReaderDefaultsToExistingBooks = payload.optBoolean(
+                "applyReaderDefaultsToExistingBooks",
+                current.applyReaderDefaultsToExistingBooks
+            )
+        )
+        updateTheme(restored.theme)
+        updateReaderAppearance(restored.defaultReaderAppearance)
+        updateShowReadingProgress(restored.showReadingProgress)
+        updateApplyReaderDefaultsToExistingBooks(restored.applyReaderDefaultsToExistingBooks)
+    }
+
     private fun load(): AndroidAppPreferences = AndroidAppPreferences(
         theme = enumValue(storage.getString(KEY_THEME, null), JerreaderAccent.OCEAN),
         defaultReaderAppearance = ReaderAppearance(

@@ -10,11 +10,33 @@ extension UTType {
     )
 }
 
+enum LibraryBackupImportPolicy {
+    /// File Provider extensions do not always resolve a custom filename
+    /// extension to its exported UTI before the iCloud item is materialized.
+    /// Keep the precise type first, then allow ordinary archive/data items so
+    /// an existing `.jerreader-backup` never appears disabled in Files. The
+    /// archive service still validates the manifest and every entry before it
+    /// writes anything.
+    static var allowedContentTypes: [UTType] {
+        // Some File Provider implementations expose a previously created
+        // custom-extension file as a dynamic UTI which conforms only to
+        // `public.item`. Without this final fallback the very same iCloud
+        // backup can become grey after the provider refreshes its metadata.
+        // Import remains safe because LibraryBackupService validates the ZIP,
+        // manifest version, entry digests and payload before restoring.
+        [.jerreaderBackup, .archive, .data, .item]
+    }
+}
+
 /// A local backup center for side-loaded installations.
 struct LibraryBackupSettingsView: View {
     @Environment(\.modelContext) private var modelContext
 
     @ObservedObject var translationSettings: TranslationSettingsStore
+    /// Set by the empty-library entry point, so a fresh installation lands
+    /// directly on the file picker instead of having to find the restore row.
+    var automaticallyPresentsImport = false
+
     @StateObject private var policy = LibraryBackupPolicyStore()
     @StateObject private var operationCoordinator =
         LibraryBackupOperationCoordinator.shared
@@ -22,8 +44,11 @@ struct LibraryBackupSettingsView: View {
     @State private var manualScopes = LibraryBackupOptions.full.scopes
     @State private var backups: [LibraryBackupArchiveInfo] = []
     @State private var state: BackupUIState = .idle
-    @State private var isShowingImporter = false
+    @State private var restoreImportRequest: BackupImportRequest?
+    @State private var deferredBackupImportResult: Result<URL, Error>?
     @State private var isShowingFolderPicker = false
+    @State private var folderPickerStart: URL?
+    @State private var suggestedFolder: BackupFolderSuggestion?
     @State private var backupLocationName = LibraryBackupDirectoryStore().displayName
     @State private var hasCustomBackupLocation = LibraryBackupDirectoryStore()
         .hasCustomDirectory
@@ -34,6 +59,7 @@ struct LibraryBackupSettingsView: View {
     @State private var message: BackupMessage?
     @State private var pendingRestoreURL: URL?
     @State private var pendingDelete: LibraryBackupArchiveInfo?
+    @State private var didPresentInitialImport = false
 
     private enum BackupUIState: Equatable {
         case idle
@@ -50,6 +76,15 @@ struct LibraryBackupSettingsView: View {
         let id = UUID()
         let title: String
         let body: String
+    }
+
+    /// A folder an imported archive says it came from, which this installation
+    /// has no grant for yet. Offered as a row rather than another alert: the
+    /// restore result is already an alert, and stacking presentations here is
+    /// exactly what broke the document picker before.
+    private struct BackupFolderSuggestion: Equatable {
+        let url: URL
+        let name: String
     }
 
     var body: some View {
@@ -70,6 +105,7 @@ struct LibraryBackupSettingsView: View {
         .navigationTitle("备份中心")
         .navigationBarTitleDisplayMode(.inline)
         .task { await refreshBackups() }
+        .task { await presentInitialImportIfNeeded() }
         .onReceive(
             NotificationCenter.default.publisher(for: .libraryBackupDidChange)
         ) { _ in
@@ -93,25 +129,22 @@ struct LibraryBackupSettingsView: View {
         .onChange(of: policy.maximumTotalBytes) { _, _ in
             Task { await pruneAndRefresh() }
         }
-        .sheet(isPresented: $isShowingImporter) {
+        .sheet(
+            item: $restoreImportRequest,
+            onDismiss: finishBackupImportPresentation
+        ) { request in
             BackupImportPicker { result in
-                isShowingImporter = false
-                switch result {
-                case let .success(url):
-                    pendingRestoreURL = url
-                case let .failure(error) where error is CancellationError:
-                    break
-                case let .failure(error):
-                    message = BackupMessage(
-                        title: "没有选择备份",
-                        body: error.localizedDescription
-                    )
-                }
+                deferredBackupImportResult = result
+                restoreImportRequest = nil
             }
+            // Force a fresh UIDocumentPicker and coordinator for every tap.
+            // Reusing a provider session can retain an obsolete allowed-type
+            // snapshot and grey out a backup which was selectable initially.
+            .id(request.id)
             .ignoresSafeArea()
         }
         .sheet(isPresented: $isShowingFolderPicker) {
-            BackupFolderPicker { result in
+            BackupFolderPicker(startDirectory: folderPickerStart) { result in
                 isShowingFolderPicker = false
                 switch result {
                 case let .success(url):
@@ -191,7 +224,27 @@ struct LibraryBackupSettingsView: View {
                     .foregroundStyle(.orange)
             }
 
+            if let suggestedFolder {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label(
+                        "刚恢复的备份来自「\(suggestedFolder.name)」",
+                        systemImage: "arrow.uturn.backward.circle"
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                    Button {
+                        folderPickerStart = suggestedFolder.url
+                        isShowingFolderPicker = true
+                    } label: {
+                        Label("继续备份到这个文件夹", systemImage: "folder.badge.gearshape")
+                    }
+                    .disabled(isBusy)
+                }
+            }
+
             Button {
+                folderPickerStart = nil
                 isShowingFolderPicker = true
             } label: {
                 Label("选择备份文件夹", systemImage: "folder.badge.plus")
@@ -349,7 +402,8 @@ struct LibraryBackupSettingsView: View {
     private var restoreSection: some View {
         Section {
             Button {
-                isShowingImporter = true
+                deferredBackupImportResult = nil
+                restoreImportRequest = BackupImportRequest()
             } label: {
                 HStack {
                     Label("从备份文件恢复", systemImage: "square.and.arrow.down")
@@ -535,8 +589,11 @@ struct LibraryBackupSettingsView: View {
             }
             if result.didRestoreSettings {
                 translationSettings.reloadNonSensitivePreferences()
-                policy.reloadPreferences()
             }
+            // The regimen travels in the manifest whether or not the settings
+            // scope was included, so the store is reloaded either way.
+            policy.reloadPreferences()
+            let folderText = inheritBackupFolder(from: result.inheritedProfile)
             await refreshBackups()
             let restoredText = result.restored.isEmpty
                 ? "备份中的数据已存在，没有产生重复记录。"
@@ -544,14 +601,80 @@ struct LibraryBackupSettingsView: View {
             let settingsText = result.didRestoreSettings
                 ? " 阅读与翻译偏好也已恢复；API Key 未包含在备份中。"
                 : ""
+            let policyText = result.inheritedProfile == nil
+                ? ""
+                : " 备份计划（频率、保留、范围）已按这份备份继续。"
             message = BackupMessage(
                 title: "恢复完成",
-                body: restoredText + settingsText
+                body: restoredText + settingsText + policyText + folderText
             )
         } catch {
             message = BackupMessage(
                 title: "恢复没有完成",
                 body: backupErrorMessage(error)
+            )
+        }
+    }
+
+    /// Opens the document picker for the empty-library entry point.
+    ///
+    /// The wait is not cosmetic: this screen is itself being presented as a
+    /// sheet, and a second presentation started inside that transition is
+    /// silently dropped by UIKit.
+    @MainActor
+    private func presentInitialImportIfNeeded() async {
+        guard automaticallyPresentsImport, !didPresentInitialImport else { return }
+        didPresentInitialImport = true
+        try? await Task.sleep(for: .milliseconds(400))
+        guard restoreImportRequest == nil, !isBusy else { return }
+        deferredBackupImportResult = nil
+        restoreImportRequest = BackupImportRequest()
+    }
+
+    /// Tries to continue backing up where the archive came from, and returns
+    /// the sentence describing what happened.
+    ///
+    /// Silent adoption only ever works when this installation can already
+    /// reach that folder — the app's own container, or a folder still granted
+    /// from before. iOS hands out per-item authorization, so a folder from a
+    /// previous installation needs the user to confirm it once; the suggestion
+    /// row turns that into a single tap on the right folder.
+    @MainActor
+    @discardableResult
+    private func inheritBackupFolder(
+        from profile: LibraryBackupProfile?
+    ) -> String {
+        guard let profile, let folder = profile.folderURL else { return "" }
+        let name = profile.folderDisplayName ?? folder.lastPathComponent
+        let store = LibraryBackupDirectoryStore()
+        if store.isSelectedDirectory(folder) {
+            suggestedFolder = nil
+            return ""
+        }
+        if store.adoptDirectory(folder) {
+            suggestedFolder = nil
+            reloadBackupLocationDescription()
+            return " 备份文件夹已继续使用「\(name)」。"
+        }
+        suggestedFolder = BackupFolderSuggestion(url: folder, name: name)
+        return " 这份备份原本存放在「\(name)」，可在上方“备份位置”里一键继续用它。"
+    }
+
+    private func finishBackupImportPresentation() {
+        guard let result = deferredBackupImportResult else { return }
+        deferredBackupImportResult = nil
+        switch result {
+        case let .success(url):
+            // A confirmation dialog cannot be presented while the document
+            // picker sheet is still dismissing. Promote the selection only
+            // from `onDismiss`, after UIKit has released that presentation.
+            pendingRestoreURL = url
+        case let .failure(error) where error is CancellationError:
+            break
+        case let .failure(error):
+            message = BackupMessage(
+                title: "没有选择备份",
+                body: error.localizedDescription
             )
         }
     }
@@ -606,8 +729,10 @@ struct LibraryBackupSettingsView: View {
 
     @MainActor
     private func selectBackupFolder(_ url: URL) async {
+        folderPickerStart = nil
         do {
             try LibraryBackupDirectoryStore().selectDirectory(url)
+            suggestedFolder = nil
             reloadBackupLocationDescription()
             await refreshBackups()
             guard backupLocationError == nil else { return }
@@ -731,8 +856,13 @@ private struct ManagedBackupRow: View {
                 .lineLimit(2)
             }
             Spacer(minLength: 8)
+
+            Button("恢复", action: onRestore)
+                .font(.caption.weight(.semibold))
+                .buttonStyle(.bordered)
+                .accessibilityHint("直接恢复当前文件夹中的这份备份")
+
             Menu {
-                Button("恢复", systemImage: "arrow.counterclockwise", action: onRestore)
                 Button("导出副本", systemImage: "square.and.arrow.up", action: onShare)
                 Button(
                     "删除",
@@ -752,6 +882,10 @@ private struct ManagedBackupRow: View {
 private struct BackupSharedFile: Identifiable {
     let id = UUID()
     let url: URL
+}
+
+private struct BackupImportRequest: Identifiable {
+    let id = UUID()
 }
 
 private struct BackupShareSheet: UIViewControllerRepresentable {
@@ -779,12 +913,23 @@ private struct BackupImportPicker: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
         let picker = UIDocumentPickerViewController(
-            forOpeningContentTypes: [.jerreaderBackup],
+            forOpeningContentTypes: LibraryBackupImportPolicy.allowedContentTypes,
             asCopy: true
         )
         picker.allowsMultipleSelection = false
         picker.shouldShowFileExtensions = true
         picker.delegate = context.coordinator
+
+        // Reopen the folder the user already selected for automatic/manual
+        // backups. Retaining its access object for the picker's lifetime also
+        // gives iCloud/File Provider enough time to materialize a placeholder
+        // before `asCopy` returns the local restoration copy.
+        if let access = try? LibraryBackupDirectoryStore()
+            .selectedDirectoryAccess()
+        {
+            context.coordinator.directoryAccess = access
+            picker.directoryURL = access.url
+        }
         return picker
     }
 
@@ -795,6 +940,7 @@ private struct BackupImportPicker: UIViewControllerRepresentable {
 
     final class Coordinator: NSObject, UIDocumentPickerDelegate {
         let onResult: (Result<URL, Error>) -> Void
+        var directoryAccess: LibraryBackupDirectoryAccess?
 
         init(onResult: @escaping (Result<URL, Error>) -> Void) {
             self.onResult = onResult
@@ -805,18 +951,21 @@ private struct BackupImportPicker: UIViewControllerRepresentable {
             didPickDocumentsAt urls: [URL]
         ) {
             guard let url = urls.first else { return }
+            directoryAccess = nil
             onResult(.success(url))
         }
 
         func documentPickerWasCancelled(
             _ controller: UIDocumentPickerViewController
         ) {
+            directoryAccess = nil
             onResult(.failure(CancellationError()))
         }
     }
 }
 
 private struct BackupFolderPicker: UIViewControllerRepresentable {
+    var startDirectory: URL?
     let onResult: (Result<URL, Error>) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -829,6 +978,12 @@ private struct BackupFolderPicker: UIViewControllerRepresentable {
         )
         picker.allowsMultipleSelection = false
         picker.delegate = context.coordinator
+        // Opening on the folder an imported archive names turns "find that
+        // folder again" into a single confirmation. The picker runs out of
+        // process, so it can start there without this app holding a grant.
+        if let startDirectory {
+            picker.directoryURL = startDirectory
+        }
         return picker
     }
 

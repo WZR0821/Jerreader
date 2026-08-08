@@ -36,5 +36,6 @@ data class ReadingAnnotationEntity(
     val chapterTitle: String,
     val progress: Double,
     val createdAtEpochMillis: Long,
-    val updatedAtEpochMillis: Long
+    val updatedAtEpochMillis: Long,
+    val geometryJson: String? = null
 )

@@ -1,23 +1,32 @@
 package com.jerreader.android.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -25,6 +34,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
@@ -32,17 +42,34 @@ import android.content.Intent
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import androidx.core.content.FileProvider
 import androidx.compose.foundation.layout.statusBarsPadding
 import com.jerreader.android.AppGraph
-import com.jerreader.shared.ui.JerreaderHintCard
+import com.jerreader.shared.ui.JerreaderDivider
+import com.jerreader.shared.ui.JerreaderErrorCard
+import com.jerreader.shared.ui.JerreaderGlyph
+import com.jerreader.shared.ui.JerreaderCollectionControls
+import com.jerreader.shared.ui.JerreaderCollectionSectionHeader
+import com.jerreader.shared.ui.JerreaderCountBadge
+import com.jerreader.shared.ui.JerreaderEmptyState
 import com.jerreader.shared.ui.JerreaderIcon
+import com.jerreader.shared.ui.JerreaderInlineAction
+import com.jerreader.shared.ui.JerreaderInlineMenu
+import com.jerreader.shared.ui.JerreaderLanguageBar
+import com.jerreader.shared.ui.JerreaderMenuField
 import com.jerreader.shared.ui.JerreaderSegmentedNav
+import com.jerreader.shared.ui.JerreaderSegmentedPicker
+import com.jerreader.shared.ui.JerreaderSwapButton
+import com.jerreader.shared.ui.JerreaderTranslatorCard
 import com.jerreader.shared.ui.JerreaderCard
-import com.jerreader.shared.ui.JerreaderFieldLabel
-import com.jerreader.shared.ui.JerreaderPrimaryButton
-import com.jerreader.shared.ui.JerreaderRow
-import com.jerreader.shared.ui.JerreaderSegmented
-import com.jerreader.shared.ui.JerreaderSuggestionChip
+import com.jerreader.shared.ui.JerreaderRecordCard
+import com.jerreader.shared.ui.JerreaderRelativeTime
+import com.jerreader.shared.ui.JerreaderRowIconButton
+import com.jerreader.shared.ui.JerreaderSearchField
+import com.jerreader.shared.ui.JerreaderToolbarIconButton
+import com.jerreader.shared.ui.JerreaderTranslationFavoriteRow
+import com.jerreader.shared.ui.JerreaderWordRecordRow
+import com.jerreader.shared.ui.LocalJerreaderColors
 import com.jerreader.android.data.TranslationFavoriteEntity
 import com.jerreader.android.data.WordLookupEntity
 import com.jerreader.android.learning.LearningRecordRepository
@@ -52,12 +79,24 @@ import com.jerreader.shared.translation.TranslationRequest
 import com.jerreader.shared.translation.TranslationResult
 import com.jerreader.shared.translation.ContextExplanationRequest
 import com.jerreader.shared.translation.ContextExplanationService
+import com.jerreader.shared.translation.StandaloneLexicalLookupPolicy
+import com.jerreader.shared.translation.StandaloneTranslationMode
+import com.jerreader.shared.translation.StandaloneTranslationRequestPolicy
+import com.jerreader.shared.translation.TranslationProviderMode
 import com.jerreader.shared.translation.TranslationSourceChoice
+import com.jerreader.android.translation.StandaloneTranslationOverride
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
+/**
+ * Matches the iOS learning hub: manual lookup is no longer its own tab, it is
+ * the word mode of the translate page, so one entry point both translates a
+ * term and shows its dictionary entry.
+ */
 private enum class LearningTab(val title: String) {
-    LOOKUP("查词"),
     TRANSLATE("翻译"),
     VOCABULARY("生词本"),
     HISTORY("历史")
@@ -72,12 +111,13 @@ private enum class LearningExportFormat(val title: String, val mimeType: String)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LearningScreen(graph: AppGraph, bottomBar: @Composable () -> Unit) {
-    var tab by remember { mutableStateOf(LearningTab.LOOKUP) }
+    var tab by remember { mutableStateOf(LearningTab.TRANSLATE) }
     val words by graph.learningRecords.observeWords()
         .collectAsStateWithLifecycle(initialValue = emptyList())
     val translationFavorites by graph.learningRecords.observeTranslationFavorites()
         .collectAsStateWithLifecycle(initialValue = emptyList())
     val context = LocalContext.current
+    val exportScope = rememberCoroutineScope()
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
@@ -96,13 +136,15 @@ fun LearningScreen(graph: AppGraph, bottomBar: @Composable () -> Unit) {
                 .fillMaxSize()
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp),
+                .padding(vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // iOS uses a pill segmented navigation here, not a chip row.
+            // iOS uses a pill segmented navigation here, not a chip row. The
+            // record tabs run their control bar edge to edge, so the page
+            // padding is applied per section instead of to the whole column.
             JerreaderSegmentedNav(
+                modifier = Modifier.padding(horizontal = 16.dp),
                 options = listOf(
-                    Triple(LearningTab.LOOKUP, "查词", JerreaderIcon.SEARCH),
                     Triple(LearningTab.TRANSLATE, "翻译", JerreaderIcon.SPEECH_BUBBLE),
                     Triple(LearningTab.VOCABULARY, "生词本", JerreaderIcon.BOOKMARK_OUTLINE),
                     Triple(LearningTab.HISTORY, "历史", JerreaderIcon.CLOCK)
@@ -110,19 +152,13 @@ fun LearningScreen(graph: AppGraph, bottomBar: @Composable () -> Unit) {
                 selected = tab,
                 onSelect = { tab = it }
             )
-            JerreaderHintCard(
-                badge = if (tab == LearningTab.TRANSLATE) "译" else "あ",
-                title = when (tab) {
-                    LearningTab.LOOKUP -> "读懂一个词，也保留它的语境。"
-                    LearningTab.TRANSLATE -> "翻译一段话，随手收藏。"
-                    LearningTab.VOCABULARY -> "生词和译文都在这里。"
-                    LearningTab.HISTORY -> "查过的词都留有记录。"
-                },
-                detail = "查询结果、收藏与上下文只保存在本机"
-            )
             when (tab) {
-                LearningTab.LOOKUP -> LookupTool(graph)
-                LearningTab.TRANSLATE -> TranslationTool(graph)
+                LearningTab.TRANSLATE -> Column(
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    TranslationTool(graph)
+                }
                 LearningTab.VOCABULARY -> VocabularySection(
                     words = words.filter(WordLookupEntity::isFavorite),
                     translations = translationFavorites,
@@ -138,15 +174,39 @@ fun LearningScreen(graph: AppGraph, bottomBar: @Composable () -> Unit) {
                     },
                     onExport = { format ->
                         val text = buildLearningExport(words, translationFavorites, format)
-                        context.startActivity(
-                            Intent.createChooser(
-                                Intent(Intent.ACTION_SEND)
-                                    .setType(format.mimeType)
-                                    .putExtra(Intent.EXTRA_SUBJECT, "Jerreader 学习导出·${format.title}")
-                                    .putExtra(Intent.EXTRA_TEXT, text),
-                                "导出学习记录"
+                        exportScope.launch {
+                            val file = withContext(Dispatchers.IO) {
+                                val extension = when (format) {
+                                    LearningExportFormat.CSV -> "csv"
+                                    LearningExportFormat.MARKDOWN -> "md"
+                                    LearningExportFormat.ANKI_TSV -> "tsv"
+                                }
+                                File(
+                                    context.cacheDir,
+                                    "jerreader-learning-${System.currentTimeMillis()}.$extension"
+                                ).apply { writeText(text, Charsets.UTF_8) }
+                            }
+                            val uri = FileProvider.getUriForFile(
+                                context,
+                                "${context.packageName}.fileprovider",
+                                file
                             )
-                        )
+                            withContext(Dispatchers.Main.immediate) {
+                                context.startActivity(
+                                    Intent.createChooser(
+                                        Intent(Intent.ACTION_SEND)
+                                            .setType(format.mimeType)
+                                            .putExtra(
+                                                Intent.EXTRA_SUBJECT,
+                                                "Jerreader 学习导出·${format.title}"
+                                            )
+                                            .putExtra(Intent.EXTRA_STREAM, uri)
+                                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
+                                        "导出学习记录"
+                                    )
+                                )
+                            }
+                        }
                     }
                 )
                 LearningTab.HISTORY -> HistorySection(
@@ -168,304 +228,559 @@ fun LearningScreen(graph: AppGraph, bottomBar: @Composable () -> Unit) {
     }
 }
 
-@Composable
-private fun LookupTool(graph: AppGraph) {
-    var word by remember { mutableStateOf("") }
-    var context by remember { mutableStateOf("") }
-    var language by remember { mutableStateOf<LanguageCode?>(null) }
-    var result by remember { mutableStateOf<WordExplanation?>(null) }
-    var addToVocabulary by remember { mutableStateOf(false) }
-    var aiAnalysis by remember { mutableStateOf<String?>(null) }
-    var analyzing by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf<String?>(null) }
-    var loading by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-
-    // iOS wraps the whole form in one white card with bold field labels.
-    JerreaderCard {
-        JerreaderSegmented(
-            options = listOf<Pair<LanguageCode?, String>>(
-                null to "自动",
-                LanguageCode.JAPANESE to "日语",
-                LanguageCode.ENGLISH to "英语"
-            ),
-            selected = language,
-            onSelect = { language = it },
-            modifier = Modifier.padding(bottom = 10.dp)
-        )
-        Text(
-            "会结合词形和上下文自动选择日语或英语词典。",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(bottom = 12.dp)
-        )
-        JerreaderFieldLabel("日语或英语单词/词形")
-        OutlinedTextField(
-            value = word,
-            onValueChange = { word = it },
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("例如：食べました", style = MaterialTheme.typography.bodyMedium) },
-            textStyle = MaterialTheme.typography.bodyMedium,
-            singleLine = true
-        )
-        JerreaderFieldLabel("上下文（可选）", modifier = Modifier.padding(top = 14.dp))
-        OutlinedTextField(
-            value = context,
-            onValueChange = { context = it },
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = {
-                Text("输入词语所在的句子，有助于保留学习语境", style = MaterialTheme.typography.bodyMedium)
-            },
-            textStyle = MaterialTheme.typography.bodyMedium,
-            minLines = 2
-        )
-        Row(
-            modifier = Modifier.padding(top = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text(
-                "试一试",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            JerreaderSuggestionChip(text = "食べました", onClick = { word = "食べました" })
-        }
-        JerreaderRow(
-            label = "同时加入生词本",
-            detail = "只查词并保留查询历史",
-            modifier = Modifier.padding(top = 10.dp)
-        ) {
-            Switch(checked = addToVocabulary, onCheckedChange = { addToVocabulary = it })
-        }
-    }
-    JerreaderPrimaryButton(
-        text = if (loading) "查询中…" else "查询词语",
-        icon = JerreaderIcon.SEARCH,
-        enabled = word.isNotBlank() && !loading,
-        onClick = {
-            scope.launch {
-                loading = true
-                status = null
-                result = null
-                aiAnalysis = null
-                val resolvedLanguage = language ?: detectLookupLanguage(word, context)
-                runCatching {
-                    graph.lexicalLookupService.lookup(
-                        word = word,
-                        sentenceContext = context.ifBlank { null },
-                        language = resolvedLanguage
-                    )
-                }.onSuccess {
-                    result = it
-                    graph.learningRecords.recordLookup(it, favorite = addToVocabulary)
-                }
-                    .onFailure { status = it.message ?: "查词失败。" }
-                loading = false
-            }
-        }
-    )
-    status?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-    result?.let { explanation ->
-        Text(explanation.surfaceForm, style = MaterialTheme.typography.titleLarge)
-        explanation.reading?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        explanation.partOfSpeech?.let { Text(it) }
-        explanation.definitions.forEachIndexed { index, definition ->
-            Text("${index + 1}. $definition")
-        }
-        explanation.usageNote?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = {
-                scope.launch {
-                    runCatching {
-                        graph.speechService.speak(
-                            explanation.reading ?: explanation.surfaceForm,
-                            explanation.language
-                        )
-                    }.onFailure { status = it.message }
-                }
-            }) { Text("朗读") }
-            Button(onClick = {
-                scope.launch {
-                    graph.learningRecords.setWordFavorite(
-                        LearningRecordRepository.wordKey(explanation),
-                        true
-                    )
-                }
-            }) { Text("加入生词本") }
-        }
-        if (explanation.language == LanguageCode.JAPANESE) {
-            Button(
-                enabled = !analyzing && graph.translationService is ContextExplanationService,
-                onClick = {
-                    val service = graph.translationService as? ContextExplanationService
-                        ?: return@Button
-                    scope.launch {
-                        analyzing = true
-                        runCatching {
-                            service.explain(
-                                ContextExplanationRequest(
-                                    focusedText = explanation.surfaceForm,
-                                    contextText = explanation.sentenceContext,
-                                    sourceLanguage = explanation.language
-                                )
-                            )
-                        }.onSuccess { output ->
-                            aiAnalysis = output.explanation
-                            graph.learningRecords.updateWordAnalysis(
-                                LearningRecordRepository.wordKey(explanation),
-                                output.explanation,
-                                output.providerIdentifier
-                            )
-                        }.onFailure { status = it.message ?: "AI 解析失败。" }
-                        analyzing = false
-                    }
-                }
-            ) { Text(if (analyzing) "解析中…" else "AI 日语深度解析") }
-            aiAnalysis?.let { Text(it) }
-        }
-    }
-}
-
-private fun detectLookupLanguage(word: String, context: String): LanguageCode {
-    val sample = word + context
-    return if (sample.any { it in '\u3040'..'\u30ff' } ||
-        word.any { it in '\u3400'..'\u9fff' }
-    ) {
-        LanguageCode.JAPANESE
-    } else {
-        LanguageCode.ENGLISH
-    }
-}
-
+/**
+ * The standalone translator, ported from the iOS `TranslateToolView`. It owns
+ * its direction, mode and provider so experimenting here never rewrites the
+ * settings the reader uses, and word mode follows a successful translation with
+ * a real dictionary entry instead of leaving the user to look the word up again.
+ */
 @Composable
 private fun TranslationTool(graph: AppGraph) {
-    var input by remember { mutableStateOf("") }
-    var result by remember { mutableStateOf<TranslationResult?>(null) }
-    var status by remember { mutableStateOf<String?>(null) }
-    var loading by remember { mutableStateOf(false) }
-    var saved by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
     val preferences by graph.translationSettings.preferences.collectAsStateWithLifecycle()
+    var mode by remember { mutableStateOf(StandaloneTranslationMode.SENTENCE) }
+    var providerMode by remember { mutableStateOf(preferences.providerMode) }
     var sourceChoice by remember { mutableStateOf(preferences.sourceChoice) }
     var targetLanguage by remember { mutableStateOf(preferences.targetLanguage) }
+    var input by remember { mutableStateOf("") }
+    var result by remember { mutableStateOf<TranslationResult?>(null) }
+    var translatedSourceText by remember { mutableStateOf<String?>(null) }
+    var explanation by remember { mutableStateOf<WordExplanation?>(null) }
+    var dictionaryNote by remember { mutableStateOf<String?>(null) }
+    var analysis by remember { mutableStateOf<String?>(null) }
+    var status by remember { mutableStateOf<String?>(null) }
+    var loading by remember { mutableStateOf(false) }
+    var analyzing by remember { mutableStateOf(false) }
+    var savedFavorite by remember { mutableStateOf(false) }
+    var addedToVocabulary by remember { mutableStateOf(false) }
+    var copied by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    Text("翻译", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-    Text("输入或粘贴文字，使用“设置 → 翻译与 AI”中的服务配置。")
-    Text("原文语言")
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        TranslationSourceChoice.entries.forEach { choice ->
-            FilterChip(
-                selected = sourceChoice == choice,
-                onClick = { sourceChoice = choice },
-                label = {
-                    Text(
-                        when (choice) {
-                            TranslationSourceChoice.AUTOMATIC -> "自动"
-                            TranslationSourceChoice.JAPANESE -> "日语"
-                            TranslationSourceChoice.ENGLISH -> "英语"
-                            TranslationSourceChoice.CHINESE_SIMPLIFIED -> "中文"
-                        }
-                    )
-                }
-            )
+    // Follow the reader's languages until this page has produced something.
+    LaunchedEffect(preferences.sourceChoice, preferences.targetLanguage) {
+        if (!loading && result == null) {
+            sourceChoice = preferences.sourceChoice
+            targetLanguage = preferences.targetLanguage
         }
     }
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
-    ) {
-        Text("译文语言")
-        Button(
-            enabled = sourceChoice.language != null,
-            onClick = {
-                val oldSource = sourceChoice.language ?: return@Button
-                sourceChoice = when (targetLanguage) {
-                    LanguageCode.CHINESE_SIMPLIFIED -> TranslationSourceChoice.CHINESE_SIMPLIFIED
-                    LanguageCode.ENGLISH -> TranslationSourceChoice.ENGLISH
-                    LanguageCode.JAPANESE -> TranslationSourceChoice.JAPANESE
-                }
-                targetLanguage = oldSource
-                result?.let {
-                    input = it.translatedText
-                    result = null
-                }
+    LaunchedEffect(preferences.providerMode) {
+        if (!loading && result == null) providerMode = preferences.providerMode
+    }
+
+    val clearOutput = {
+        result = null
+        translatedSourceText = null
+        explanation = null
+        dictionaryNote = null
+        analysis = null
+        savedFavorite = false
+        addedToVocabulary = false
+        copied = false
+        status = null
+    }
+
+    val runTranslation: () -> Unit = {
+        scope.launch {
+            loading = true
+            clearOutput()
+            val prepared = runCatching {
+                StandaloneTranslationRequestPolicy.makeInput(
+                    text = input,
+                    sourceChoice = sourceChoice,
+                    targetLanguage = targetLanguage,
+                    mode = mode
+                )
+            }.getOrElse { error ->
+                status = error.message ?: "请检查输入后重试。"
+                loading = false
+                return@launch
             }
-        ) { Text("交换语言") }
-    }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        LanguageCode.entries.forEach { language ->
-            FilterChip(
-                selected = targetLanguage == language,
-                onClick = { targetLanguage = language },
-                label = { Text(languageName(language)) }
-            )
-        }
-    }
-    OutlinedTextField(
-        value = input,
-        onValueChange = { input = it.take(2000) },
-        modifier = Modifier.fillMaxWidth(),
-        label = { Text("原文") },
-        minLines = 6
-    )
-    Text("${input.length} / 2000", style = MaterialTheme.typography.labelSmall)
-    if (input.isNotEmpty()) {
-        Button(onClick = {
-            input = ""
-            result = null
-            status = null
-        }) { Text("清空") }
-    }
-    Button(
-        enabled = input.isNotBlank() && !loading,
-        onClick = {
-            scope.launch {
-                loading = true
-                result = null
-                saved = false
-                status = null
-                runCatching {
-                    graph.translationService.translate(
-                        TranslationRequest(
-                            text = input,
-                            sourceLanguage = sourceChoice.language,
-                            targetLanguage = targetLanguage
+            runCatching {
+                graph.cachedTranslationService.translate(
+                    TranslationRequest(
+                        text = prepared.text,
+                        sourceLanguage = prepared.sourceLanguage,
+                        targetLanguage = prepared.targetLanguage
+                    ),
+                    StandaloneTranslationOverride(
+                        providerMode = providerMode,
+                        promptTemplate = mode.promptTemplate(
+                            preferences.translationPromptTemplate
                         )
                     )
-                }.onSuccess { result = it }
-                    .onFailure { status = it.message ?: "翻译失败。" }
-                loading = false
-            }
-        }
-    ) { Text(if (loading) "翻译中…" else "翻译") }
-    status?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-    result?.let {
-        Text("译文", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        Text(it.translatedText, style = MaterialTheme.typography.bodyLarge)
-        Text(
-            it.providerIdentifier + if (it.isFromCache) " · 缓存" else "",
-            style = MaterialTheme.typography.labelSmall
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = {
-                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("Jerreader 译文", it.translatedText))
-            }) { Text("复制") }
-            Button(
-                enabled = !saved,
-                onClick = {
-                    scope.launch {
-                        graph.learningRecords.saveTranslationFavorite(input, it)
-                        saved = true
+                )
+            }.onSuccess { translated ->
+                result = translated
+                translatedSourceText = prepared.text
+                if (StandaloneLexicalLookupPolicy.supports(
+                        prepared.mode,
+                        prepared.sourceLanguage
+                    )
+                ) {
+                    runCatching {
+                        graph.lexicalLookupService.lookup(
+                            word = prepared.text,
+                            sentenceContext = null,
+                            language = prepared.sourceLanguage
+                        )
+                    }.onSuccess { found ->
+                        explanation = found
+                        runCatching { graph.learningRecords.recordLookup(found) }
+                            .onFailure { dictionaryNote = "词典结果暂时无法写入历史。" }
+                    }.onFailure {
+                        // iOS keeps the translation as a degraded definition
+                        // rather than dropping the word on the floor.
+                        dictionaryNote = "联网词典暂时不可用，本次译文将作为释义保留。"
                     }
                 }
-            ) { Text(if (saved) "已收藏" else "收藏译文") }
+            }.onFailure { status = it.message ?: "翻译失败，请重试。" }
+            loading = false
+        }
+        Unit
+    }
+
+    // Mode and service sit above the card on iOS, not inside it.
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        JerreaderSegmentedPicker(
+            options = StandaloneTranslationMode.entries.map { it to it.title },
+            selected = mode,
+            onSelect = {
+                if (it != mode) {
+                    mode = it
+                    clearOutput()
+                    input = input.take(it.maximumCharacterCount)
+                }
+            }
+        )
+        JerreaderMenuField(
+            label = "服务",
+            icon = providerSymbol(providerMode),
+            options = listOf(
+                TranslationProviderMode.ON_DEVICE to "本机翻译",
+                TranslationProviderMode.DIRECT_API to "AI API",
+                TranslationProviderMode.BACKEND_PROXY to "AI 代理"
+            ),
+            selected = providerMode,
+            onSelect = {
+                if (it != providerMode) {
+                    providerMode = it
+                    clearOutput()
+                }
+            }
+        )
+    }
+
+    JerreaderTranslatorCard {
+        JerreaderLanguageBar {
+            JerreaderInlineMenu(
+                options = TranslationSourceChoice.entries.map { it to sourceChoiceName(it) },
+                selected = sourceChoice,
+                onSelect = {
+                    sourceChoice = it
+                    clearOutput()
+                },
+                modifier = Modifier.weight(1f)
+            )
+            JerreaderSwapButton(
+                enabled = sourceChoice.language != null,
+                onClick = onClick@{
+                    val previousSource = sourceChoice.language ?: return@onClick
+                    sourceChoice = when (targetLanguage) {
+                        LanguageCode.CHINESE_SIMPLIFIED -> TranslationSourceChoice.CHINESE_SIMPLIFIED
+                        LanguageCode.ENGLISH -> TranslationSourceChoice.ENGLISH
+                        LanguageCode.JAPANESE -> TranslationSourceChoice.JAPANESE
+                    }
+                    targetLanguage = previousSource
+                    // Swapping after a translation continues from the result,
+                    // the way the iOS tool hands the译文 back as the new原文.
+                    result?.let { input = it.translatedText }
+                    clearOutput()
+                }
+            )
+            JerreaderInlineMenu(
+                options = LanguageCode.entries.map { it to languageName(it) },
+                selected = targetLanguage,
+                onSelect = {
+                    targetLanguage = it
+                    clearOutput()
+                },
+                modifier = Modifier.weight(1f)
+            )
+        }
+        JerreaderDivider()
+
+        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = if (mode == StandaloneTranslationMode.WORD) 46.dp else 84.dp)
+            ) {
+                if (input.isEmpty()) {
+                    Text(
+                        mode.placeholder,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                BasicTextField(
+                    value = input,
+                    onValueChange = {
+                        input = it.take(mode.maximumCharacterCount)
+                        if (result != null && input != translatedSourceText) clearOutput()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(
+                        color = MaterialTheme.colorScheme.onSurface
+                    ),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    singleLine = mode == StandaloneTranslationMode.WORD
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    "${input.length} / ${groupedCount(mode.maximumCharacterCount)}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                if (input.isNotEmpty()) {
+                    TextButton(onClick = {
+                        input = ""
+                        clearOutput()
+                    }) { Text("清空") }
+                }
+                TranslateActionButton(
+                    loading = loading,
+                    enabled = input.isNotBlank() && !loading,
+                    onClick = runTranslation
+                )
+            }
+        }
+        JerreaderDivider(modifier = Modifier.padding(horizontal = 14.dp))
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = if (mode == StandaloneTranslationMode.WORD) 104.dp else 126.dp)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                JerreaderGlyph(
+                    icon = JerreaderIcon.SPEECH_BUBBLE,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(15.dp)
+                )
+                Text(
+                    languageName(targetLanguage),
+                    modifier = Modifier.padding(start = 6.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                if (result?.isFromCache == true) {
+                    Text(
+                        "缓存",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            val translated = result
+            when {
+                loading -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        loadingNote(providerMode),
+                        modifier = Modifier.padding(start = 10.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                translated != null -> {
+                    Text(translated.translatedText, style = MaterialTheme.typography.bodyLarge)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(18.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        JerreaderInlineAction(
+                            text = if (copied) "已复制" else "复制",
+                            icon = JerreaderIcon.COPY,
+                            onClick = {
+                                val clipboard = context
+                                    .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                clipboard.setPrimaryClip(
+                                    ClipData.newPlainText(
+                                        "Jerreader 译文",
+                                        translated.translatedText
+                                    )
+                                )
+                                copied = true
+                            }
+                        )
+                        JerreaderInlineAction(
+                            text = if (savedFavorite) "已收藏" else "收藏",
+                            icon = if (savedFavorite) {
+                                JerreaderIcon.STAR_FILLED
+                            } else {
+                                JerreaderIcon.STAR_OUTLINE
+                            },
+                            enabled = !savedFavorite,
+                            onClick = {
+                                scope.launch {
+                                    val sourceText = translatedSourceText ?: return@launch
+                                    runCatching {
+                                        graph.learningRecords.saveTranslationFavorite(
+                                            sourceText,
+                                            translated
+                                        )
+                                    }.onSuccess { savedFavorite = true }
+                                        .onFailure { error ->
+                                            status = "收藏失败：${error.message ?: "请稍后重试。"}"
+                                        }
+                                }
+                            }
+                        )
+                    }
+                    val hasContextExplanation =
+                        graph.translationService is ContextExplanationService
+                    if (mode == StandaloneTranslationMode.WORD || hasContextExplanation) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(18.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (mode == StandaloneTranslationMode.WORD) {
+                                JerreaderInlineAction(
+                                    text = if (addedToVocabulary) "已加入生词本" else "加入生词本",
+                                    icon = JerreaderIcon.BOOKMARK_OUTLINE,
+                                    enabled = !addedToVocabulary,
+                                    onClick = {
+                                        scope.launch {
+                                            val sourceText = translatedSourceText
+                                                ?: return@launch
+                                            val entry = explanation ?: WordExplanation(
+                                                surfaceForm = sourceText,
+                                                lemma = null,
+                                                reading = null,
+                                                language = translated.sourceLanguage,
+                                                partOfSpeech = null,
+                                                definitions = listOf(translated.translatedText),
+                                                usageNote = "释义来自本次译文。",
+                                                providerIdentifier = translated.providerIdentifier
+                                            )
+                                            runCatching {
+                                                graph.learningRecords.recordLookup(
+                                                    entry,
+                                                    favorite = true
+                                                )
+                                            }.onSuccess { addedToVocabulary = true }
+                                                .onFailure { error ->
+                                                    status = "加入生词本失败：" +
+                                                        (error.message ?: "请稍后重试。")
+                                                }
+                                        }
+                                    }
+                                )
+                            }
+                            if (hasContextExplanation) {
+                                JerreaderInlineAction(
+                                    text = if (analyzing) "解析中…" else "AI 结构分析",
+                                    icon = JerreaderIcon.TREND,
+                                    enabled = !analyzing,
+                                    onClick = {
+                                        val service = graph.translationService
+                                            as? ContextExplanationService
+                                        if (service != null) {
+                                            scope.launch {
+                                                analyzing = true
+                                                runCatching {
+                                                    service.explain(
+                                                        ContextExplanationRequest(
+                                                            focusedText = translatedSourceText
+                                                                .orEmpty(),
+                                                            contextText = null,
+                                                            sourceLanguage =
+                                                                translated.sourceLanguage
+                                                        )
+                                                    )
+                                                }.onSuccess { analysis = it.explanation }
+                                                    .onFailure {
+                                                        status = it.message
+                                                            ?: "AI 解析不可用，请先配置 AI 服务。"
+                                                    }
+                                                analyzing = false
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    analysis?.let {
+                        Text(
+                            "语法与结构分析",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(it, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                else -> Text(
+                    "译文会显示在这里",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+
+    Row(verticalAlignment = Alignment.Top) {
+        JerreaderGlyph(
+            icon = providerSymbol(providerMode),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 2.dp).size(13.dp)
+        )
+        Text(
+            providerNote(providerMode),
+            modifier = Modifier.padding(start = 6.dp),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+
+    status?.let { JerreaderErrorCard(it) }
+
+    dictionaryNote?.let {
+        Text(
+            it,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+
+    explanation?.let { entry ->
+        JerreaderCard {
+            Text(
+                "词典详情",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                entry.lemma ?: entry.surfaceForm,
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.padding(top = 6.dp)
+            )
+            listOfNotNull(
+                entry.reading?.let { "读音：$it" },
+                entry.partOfSpeech?.let { "词性：$it" },
+                entry.inflectionNote
+            ).forEach {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            entry.definitions.forEachIndexed { index, definition ->
+                Text("${index + 1}. $definition", modifier = Modifier.padding(top = 4.dp))
+            }
+            entry.examples.forEach { example ->
+                Text(
+                    example.sourceText,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+                example.translatedText?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Text(
+                "词典结果已自动记入历史；收藏后会保留在生词本。",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 10.dp)
+            )
         }
     }
 }
+
+/** The filled 「翻译」 action inside the card, matching the iOS button. */
+@Composable
+private fun TranslateActionButton(loading: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = if (enabled || loading) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+        },
+        onClick = onClick,
+        enabled = enabled
+    ) {
+        Row(
+            modifier = Modifier.heightIn(min = 44.dp).padding(horizontal = 18.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (loading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(15.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onPrimary
+                )
+                Spacer(modifier = Modifier.size(8.dp))
+            }
+            Text(
+                if (loading) "翻译中" else "翻译",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onPrimary
+            )
+        }
+    }
+}
+
+/** `0 / 2,000`, the way the iOS counter groups its limit. */
+private fun groupedCount(value: Int): String =
+    value.toString().reversed().chunked(3).joinToString(",").reversed()
+
+private fun providerSymbol(mode: TranslationProviderMode): JerreaderIcon = when (mode) {
+    TranslationProviderMode.ON_DEVICE -> JerreaderIcon.LOCK
+    TranslationProviderMode.DIRECT_API -> JerreaderIcon.SLIDERS
+    TranslationProviderMode.BACKEND_PROXY -> JerreaderIcon.SHIELD
+}
+
+private fun loadingNote(mode: TranslationProviderMode): String = when (mode) {
+    TranslationProviderMode.ON_DEVICE -> "正在使用本机翻译…"
+    else -> "正在请求 AI 翻译…"
+}
+
+private fun providerNote(mode: TranslationProviderMode): String = when (mode) {
+    TranslationProviderMode.ON_DEVICE ->
+        "Android 本机翻译，无需 API Key；首次使用某个语言方向会下载语言模型。"
+    TranslationProviderMode.DIRECT_API ->
+        "直接调用你在「设置 → 翻译与 AI」中配置的 AI API 与模型。"
+    TranslationProviderMode.BACKEND_PROXY ->
+        "使用你在「设置 → 翻译与 AI」中配置的 HTTPS 代理。"
+}
+
+private fun sourceChoiceName(choice: TranslationSourceChoice): String = when (choice) {
+    TranslationSourceChoice.AUTOMATIC -> "自动识别"
+    TranslationSourceChoice.JAPANESE -> "日语"
+    TranslationSourceChoice.ENGLISH -> "英语"
+    TranslationSourceChoice.CHINESE_SIMPLIFIED -> "中文"
+}
+
 
 @Composable
 private fun VocabularySection(
@@ -488,46 +803,128 @@ private fun VocabularySection(
             record.translatedText.contains(term, ignoreCase = true) ||
             record.bookTitle?.contains(term, ignoreCase = true) == true
     }
-    Text("生词本", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        LearningExportFormat.entries.forEach { format ->
-            Button(onClick = { onExport(format) }) { Text("导出 ${format.title}") }
+    val accent = LocalJerreaderColors.current.accent
+    val now = rememberNowMillis()
+    var exportMenuOpen by remember { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        JerreaderCollectionControls {
+            JerreaderSearchField(
+                value = search,
+                onValueChange = { search = it },
+                placeholder = "搜索词语、原文或译文",
+                modifier = Modifier.weight(1f)
+            )
+            JerreaderCountBadge(count = words.size + translations.size)
+            Box {
+                JerreaderToolbarIconButton(
+                    icon = JerreaderIcon.SHARE,
+                    enabled = words.isNotEmpty() || translations.isNotEmpty(),
+                    onClick = { exportMenuOpen = true }
+                )
+                DropdownMenu(
+                    expanded = exportMenuOpen,
+                    onDismissRequest = { exportMenuOpen = false }
+                ) {
+                    LearningExportFormat.entries.forEach { format ->
+                        DropdownMenuItem(
+                            text = { Text("导出 ${format.title}") },
+                            onClick = {
+                                exportMenuOpen = false
+                                onExport(format)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+        if (visibleWords.isEmpty() && visibleTranslations.isEmpty()) {
+            JerreaderEmptyState(
+                title = if (term.isEmpty()) "收藏还是空的" else "没有匹配内容",
+                message = if (term.isEmpty()) {
+                    "在翻译的词语模式收藏词典结果，或在阅读中的译文卡片点按星标，内容就会出现在这里。"
+                } else {
+                    "请尝试搜索其他词语、原文、译文或书名。"
+                },
+                icon = if (term.isEmpty()) JerreaderIcon.BOOKMARK_OUTLINE else JerreaderIcon.SEARCH
+            )
+        }
+        if (visibleWords.isNotEmpty()) {
+            JerreaderCollectionSectionHeader(
+                title = "收藏词语",
+                detail = "词条收藏保存在本机，清空查词历史不会删除它们。"
+            )
+            visibleWords.forEach { record ->
+                JerreaderRecordCard {
+                    JerreaderWordRecordRow(
+                        surfaceForm = record.surfaceForm,
+                        lemma = record.lemma,
+                        reading = record.reading,
+                        definitions = record.definitionsText
+                            .split(LearningRecordRepository.DEFINITION_SEPARATOR)
+                            .joinToString("；"),
+                        languageName = languageTagName(record.language),
+                        partOfSpeech = record.partOfSpeech,
+                        trailingNote = JerreaderRelativeTime.format(
+                            record.lastLookedUpAtEpochMillis,
+                            now
+                        ),
+                        trailing = {
+                            JerreaderRowIconButton(
+                                icon = JerreaderIcon.STAR_FILLED,
+                                tint = accent,
+                                onClick = { onToggleWord(record.lookupKey, false) }
+                            )
+                        }
+                    )
+                }
+            }
+        }
+        if (visibleTranslations.isNotEmpty()) {
+            JerreaderCollectionSectionHeader(
+                title = "收藏译文",
+                detail = "阅读中点按译文卡片上的星标即可保存。"
+            )
+            visibleTranslations.forEach { favorite ->
+                JerreaderRecordCard {
+                    JerreaderTranslationFavoriteRow(
+                        languagePair = "${languageTagName(favorite.sourceLanguage)} → " +
+                            languageTagName(favorite.targetLanguage),
+                        translatedText = favorite.translatedText,
+                        sourceText = favorite.sourceText,
+                        bookTitle = favorite.bookTitle,
+                        trailingNote = JerreaderRelativeTime.format(
+                            favorite.updatedAtEpochMillis,
+                            now
+                        ),
+                        trailing = {
+                            JerreaderRowIconButton(
+                                icon = JerreaderIcon.STAR_FILLED,
+                                tint = accent,
+                                onClick = { onDeleteTranslation(favorite.favoriteKey) }
+                            )
+                        }
+                    )
+                }
+            }
         }
     }
-    OutlinedTextField(
-        value = search,
-        onValueChange = { search = it },
-        modifier = Modifier.fillMaxWidth(),
-        label = { Text("搜索词语、原文或译文") },
-        singleLine = true
-    )
-    if (visibleWords.isEmpty() && visibleTranslations.isEmpty()) {
-        Text("还没有收藏内容。查词或翻译后即可收藏到本机。")
+}
+
+/**
+ * A clock that only ticks once a minute. The relative-time labels never need
+ * finer resolution than that, and recomposing a whole list every frame to
+ * redraw "3 分钟前" would be pure waste.
+ */
+@Composable
+private fun rememberNowMillis(): Long {
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(60_000)
+            now = System.currentTimeMillis()
+        }
     }
-    visibleWords.forEach { record ->
-        LearningRecordCard(
-            title = record.lemma ?: record.surfaceForm,
-            detail = record.definitionsText.split(LearningRecordRepository.DEFINITION_SEPARATOR)
-                .joinToString("；"),
-            meta = listOfNotNull(
-                record.reading,
-                record.partOfSpeech,
-                record.inflectionNote,
-                record.sourceBookTitle?.let { "《$it》" }
-            ).joinToString(" · "),
-            primaryAction = "取消收藏",
-            onPrimaryAction = { onToggleWord(record.lookupKey, false) }
-        )
-    }
-    visibleTranslations.forEach { favorite ->
-        LearningRecordCard(
-            title = favorite.sourceText,
-            detail = favorite.translatedText,
-            meta = favorite.providerIdentifier,
-            primaryAction = "删除",
-            onPrimaryAction = { onDeleteTranslation(favorite.favoriteKey) }
-        )
-    }
+    return now
 }
 
 private fun buildLearningExport(
@@ -611,31 +1008,100 @@ private fun HistorySection(
             record.definitionsText.contains(term, ignoreCase = true) ||
             record.sentenceContext?.contains(term, ignoreCase = true) == true
     }
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text("查询历史", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-        if (records.isNotEmpty()) Button(onClick = onClear) { Text("清空历史") }
+    val colors = LocalJerreaderColors.current
+    val now = rememberNowMillis()
+    var confirmingClear by remember { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        JerreaderCollectionControls {
+            JerreaderSearchField(
+                value = search,
+                onValueChange = { search = it },
+                placeholder = "搜索查词历史",
+                modifier = Modifier.weight(1f)
+            )
+            JerreaderCountBadge(count = records.size)
+            JerreaderToolbarIconButton(
+                icon = JerreaderIcon.TRASH,
+                enabled = records.isNotEmpty(),
+                onClick = { confirmingClear = true }
+            )
+        }
+        if (visibleRecords.isEmpty()) {
+            JerreaderEmptyState(
+                title = if (term.isEmpty()) "还没有查词记录" else "没有匹配记录",
+                message = if (term.isEmpty()) {
+                    "在“翻译”的词语模式完成一次词典查询后，结果会自动保存在这里。"
+                } else {
+                    "请尝试其他词语、读音、释义或上下文。"
+                },
+                icon = if (term.isEmpty()) JerreaderIcon.CLOCK else JerreaderIcon.SEARCH
+            )
+        } else {
+            JerreaderCollectionSectionHeader(
+                title = "最近查询",
+                detail = "共 ${records.size} 个词条，按最近查询时间排列。"
+            )
+            visibleRecords.forEach { record ->
+                JerreaderRecordCard {
+                    JerreaderWordRecordRow(
+                        surfaceForm = record.surfaceForm,
+                        lemma = record.lemma,
+                        reading = record.reading,
+                        definitions = record.definitionsText
+                            .split(LearningRecordRepository.DEFINITION_SEPARATOR)
+                            .joinToString("；"),
+                        languageName = languageTagName(record.language),
+                        partOfSpeech = record.partOfSpeech,
+                        trailingNote = JerreaderRelativeTime.format(
+                            record.lastLookedUpAtEpochMillis,
+                            now
+                        ),
+                        trailing = {
+                            JerreaderRowIconButton(
+                                icon = if (record.isFavorite) {
+                                    JerreaderIcon.STAR_FILLED
+                                } else {
+                                    JerreaderIcon.STAR_OUTLINE
+                                },
+                                tint = if (record.isFavorite) {
+                                    colors.accent
+                                } else {
+                                    colors.secondaryText
+                                },
+                                onClick = { onFavorite(record.lookupKey, !record.isFavorite) }
+                            )
+                            JerreaderRowIconButton(
+                                icon = JerreaderIcon.TRASH,
+                                tint = colors.secondaryText,
+                                onClick = { onDelete(record.lookupKey) }
+                            )
+                        }
+                    )
+                }
+            }
+        }
     }
-    OutlinedTextField(
-        value = search,
-        onValueChange = { search = it },
-        modifier = Modifier.fillMaxWidth(),
-        label = { Text("搜索查词历史") },
-        singleLine = true
-    )
-    if (visibleRecords.isEmpty()) Text("还没有匹配的查词历史。")
-    visibleRecords.forEach { record ->
-        LearningRecordCard(
-            title = record.lemma ?: record.surfaceForm,
-            detail = record.definitionsText.split(LearningRecordRepository.DEFINITION_SEPARATOR)
-                .joinToString("；"),
-            meta = "查询 ${record.lookupCount} 次${record.sourceBookTitle?.let { " · 《$it》" }.orEmpty()}",
-            primaryAction = if (record.isFavorite) "取消收藏" else "收藏",
-            onPrimaryAction = { onFavorite(record.lookupKey, !record.isFavorite) },
-            secondaryAction = "删除",
-            onSecondaryAction = { onDelete(record.lookupKey) }
+    if (confirmingClear) {
+        AlertDialog(
+            onDismissRequest = { confirmingClear = false },
+            title = { Text("清空查词历史？") },
+            text = { Text("未收藏的记录会被删除；已收藏词条仍会保留在生词本中。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmingClear = false
+                    onClear()
+                }) { Text("清空历史") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmingClear = false }) { Text("取消") }
+            }
         )
     }
 }
+
+/** The record tables store a BCP-47 tag; iOS shows the language's own name. */
+private fun languageTagName(tag: String): String =
+    LanguageCode.fromTag(tag)?.let(::languageName) ?: tag
 
 private fun languageName(language: LanguageCode): String = when (language) {
     LanguageCode.CHINESE_SIMPLIFIED -> "简体中文"
@@ -643,30 +1109,3 @@ private fun languageName(language: LanguageCode): String = when (language) {
     LanguageCode.JAPANESE -> "日语"
 }
 
-@Composable
-private fun LearningRecordCard(
-    title: String,
-    detail: String,
-    meta: String,
-    primaryAction: String,
-    onPrimaryAction: () -> Unit,
-    secondaryAction: String? = null,
-    onSecondaryAction: (() -> Unit)? = null
-) {
-    androidx.compose.material3.Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            if (meta.isNotBlank()) Text(meta, style = MaterialTheme.typography.labelSmall)
-            Text(detail)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onPrimaryAction) { Text(primaryAction) }
-                if (secondaryAction != null && onSecondaryAction != null) {
-                    Button(onClick = onSecondaryAction) { Text(secondaryAction) }
-                }
-            }
-        }
-    }
-}

@@ -16,115 +16,208 @@ struct AppSettingsView: View {
             ZStack {
                 JerreaderCanvasBackground()
 
-                Form {
-                    Section {
-                        NavigationLink {
-                            AppThemeColorSettingsView()
-                        } label: {
-                            SettingsNavigationLabel(
-                                title: "界面主题",
-                                detail: "选择 App 界面的整体色系",
-                                systemImage: "paintpalette"
-                            )
-                        }
-
-                        NavigationLink {
-                            GlobalReaderDefaultsView()
-                        } label: {
-                            SettingsNavigationLabel(
-                                title: "默认阅读排版",
-                                detail: "字体、间距、背景、翻页与日文版式",
-                                systemImage: "textformat.size"
-                            )
-                        }
-
-                        NavigationLink {
-                            TranslationSettingsDetailView(
-                                settings: translationSettings,
-                                quickSentenceEnabled: quickSentenceBinding,
-                                disablesTapPageTurnsDuringQuickTranslation:
-                                    disablesTapPageTurnsDuringQuickTranslationBinding,
-                                showsQuickSentenceToggle: true
-                            )
-                        } label: {
-                            SettingsNavigationLabel(
-                                title: "翻译与 AI",
-                                detail: "服务商、三语互译、提示词与交互",
-                                systemImage: "character.bubble"
-                            )
-                        }
-                    } header: {
-                        SettingsSectionHeader(title: "偏好", systemImage: "slider.horizontal.3")
-                    }
-
-                    Section {
-                        NavigationLink {
-                            AppGuideView()
-                        } label: {
-                            SettingsNavigationLabel(
-                                title: "操作指南",
-                                detail: "导入、阅读、PDF/OCR 与 API 配置",
-                                systemImage: "questionmark.circle"
-                            )
-                        }
-
-                        NavigationLink {
-                            LibraryBackupSettingsView(
-                                translationSettings: translationSettings
-                            )
-                        } label: {
-                            SettingsNavigationLabel(
-                                title: "备份与恢复",
-                                detail: "自选文件夹，备份书库、进度、生词与批注",
-                                systemImage: "externaldrive"
-                            )
-                        }
-
-                        NavigationLink {
-                            DataPrivacySettingsView()
-                        } label: {
-                            SettingsNavigationLabel(
-                                title: "数据与隐私",
-                                detail: "本机数据、在线请求与密钥存储",
-                                systemImage: "hand.raised"
-                            )
-                        }
-                    } header: {
-                        SettingsSectionHeader(title: "支持", systemImage: "info.circle")
-                    }
-
-                    Section {
-                        LabeledContent("Jerreader") {
-                            Text(versionText)
-                                .foregroundStyle(.secondary)
-                        }
-                        LabeledContent("最低系统") {
-                            Text("iOS 18")
-                                .foregroundStyle(.secondary)
-                        }
-
-                        LabeledContent("作者") {
-                            Text("WANG ZIRUI")
-                                .font(.system(.body, design: .serif).weight(.semibold))
-                                .foregroundStyle(JerreaderTheme.accent)
-                                .accessibilityLabel("作者 WANG ZIRUI")
-                        }
-                    } header: {
-                        SettingsSectionHeader(title: "关于", systemImage: "info.circle")
-                    }
+                ScrollView {
+                    settingsContent
+                    .padding(.horizontal, JerreaderTheme.pagePadding)
+                    .padding(.vertical, 20)
+                    .frame(maxWidth: 800, alignment: .top)
+                    .frame(maxWidth: .infinity, alignment: .top)
                 }
-                .scrollContentBackground(.hidden)
-                .contentMargins(.top, 8, for: .scrollContent)
-                .listSectionSpacing(18)
-                // A full-width Form becomes difficult to scan on landscape
-                // iPad. Keep a readable measure while preserving the native
-                // compact-width layout on iPhone.
-                .frame(maxWidth: 760)
             }
-            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("设置")
+            .navigationBarTitleDisplayMode(.large)
         }
         .tint(JerreaderTheme.accent(for: themeColor))
+    }
+
+    @ViewBuilder
+    private var settingsContent: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 18) {
+                VStack(spacing: 22) {
+                    preferencesSection
+                    aboutSection
+                }
+                .frame(minWidth: 320, maxWidth: .infinity, alignment: .top)
+
+                supportSection
+                    .frame(minWidth: 320, maxWidth: .infinity, alignment: .top)
+            }
+            .frame(maxWidth: .infinity, alignment: .top)
+
+            VStack(spacing: 22) {
+                preferencesSection
+                supportSection
+                aboutSection
+            }
+        }
+    }
+
+    private var preferencesSection: some View {
+        settingsSection(
+            title: "偏好",
+            systemImage: "slider.horizontal.3"
+        ) {
+            settingsLink(
+                title: "界面主题",
+                detail: "选择 App 界面的整体色系",
+                systemImage: "paintpalette"
+            ) {
+                AppThemeColorSettingsView()
+            }
+            settingsDivider
+            settingsLink(
+                title: "默认阅读排版",
+                detail: "字体、间距、背景、翻页与日文版式",
+                systemImage: "textformat.size"
+            ) {
+                GlobalReaderDefaultsView()
+            }
+            settingsDivider
+            settingsLink(
+                title: "翻译与 AI",
+                detail: "服务商、三语互译、提示词与交互",
+                systemImage: "character.bubble"
+            ) {
+                TranslationSettingsDetailView(
+                    settings: translationSettings,
+                    quickSentenceEnabled: quickSentenceBinding,
+                    disablesTapPageTurnsDuringQuickTranslation:
+                        disablesTapPageTurnsDuringQuickTranslationBinding,
+                    showsQuickSentenceToggle: true
+                )
+            }
+        }
+    }
+
+    private var supportSection: some View {
+        settingsSection(
+            title: "支持",
+            systemImage: "info.circle"
+        ) {
+            settingsLink(
+                title: "操作指南",
+                detail: "导入、阅读、PDF/OCR 与 API 配置",
+                systemImage: "questionmark.circle"
+            ) {
+                AppGuideView()
+            }
+            settingsDivider
+            settingsLink(
+                title: "备份与恢复",
+                detail: "自选文件夹，备份书库、进度、生词与批注",
+                systemImage: "externaldrive"
+            ) {
+                LibraryBackupSettingsView(
+                    translationSettings: translationSettings
+                )
+            }
+            settingsDivider
+            settingsLink(
+                title: "数据与隐私",
+                detail: "本机数据、在线请求与密钥存储",
+                systemImage: "hand.raised"
+            ) {
+                DataPrivacySettingsView()
+            }
+        }
+    }
+
+    private var aboutSection: some View {
+        settingsSection(
+            title: "关于",
+            systemImage: "info.circle"
+        ) {
+            aboutRow(title: "Jerreader", value: versionText)
+            settingsDivider
+            aboutRow(title: "最低系统", value: "iOS 18")
+            settingsDivider
+            aboutRow(
+                title: "作者",
+                value: "WANG ZIRUI",
+                highlightsValue: true
+            )
+        }
+    }
+
+    private func settingsSection<Content: View>(
+        title: String,
+        systemImage: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(title, systemImage: systemImage)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 5)
+
+            VStack(spacing: 0) {
+                content()
+            }
+            .background(
+                JerreaderTheme.paper,
+                in: RoundedRectangle(cornerRadius: 15, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .stroke(JerreaderTheme.line, lineWidth: 0.7)
+            }
+        }
+    }
+
+    private func settingsLink<Destination: View>(
+        title: String,
+        detail: String,
+        systemImage: String,
+        @ViewBuilder destination: () -> Destination
+    ) -> some View {
+        NavigationLink {
+            destination()
+        } label: {
+            HStack(spacing: 10) {
+                SettingsNavigationLabel(
+                    title: title,
+                    detail: detail,
+                    systemImage: systemImage
+                )
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 13)
+            .frame(minHeight: 60)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var settingsDivider: some View {
+        Divider().padding(.leading, 45)
+    }
+
+    private func aboutRow(
+        title: String,
+        value: String,
+        highlightsValue: Bool = false
+    ) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(value)
+                .font(
+                    highlightsValue
+                        ? .system(.subheadline, design: .serif).weight(.semibold)
+                        : .subheadline
+                )
+                .foregroundStyle(
+                    highlightsValue ? JerreaderTheme.accent : .secondary
+                )
+        }
+        .font(.subheadline)
+        .padding(.horizontal, 13)
+        .frame(minHeight: 52)
+        .accessibilityElement(children: .combine)
     }
 
     private var quickSentenceBinding: Binding<Bool> {
@@ -170,7 +263,7 @@ private struct AppThemeColorSettingsView: View {
                         HStack(spacing: 14) {
                             Circle()
                                 .fill(JerreaderTheme.accent(for: choice))
-                                .frame(width: 34, height: 34)
+                                .frame(width: 32, height: 32)
                                 .overlay {
                                     Circle().stroke(.white.opacity(0.7), lineWidth: 1)
                                 }
@@ -188,6 +281,7 @@ private struct AppThemeColorSettingsView: View {
                                     .foregroundStyle(JerreaderTheme.accent(for: choice))
                             }
                         }
+                        .frame(minHeight: 56)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -220,12 +314,12 @@ private struct SettingsNavigationLabel: View {
                 Text(detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         } icon: {
             Image(systemName: systemImage)
                 .foregroundStyle(JerreaderTheme.accent)
         }
-        .padding(.vertical, 3)
     }
 }
 
@@ -246,6 +340,12 @@ private struct GlobalReaderDefaultsView: View {
     private var paragraphSpacing = 0.0
     @AppStorage(ReaderAppearanceDefaults.pageMarginsKey)
     private var pageMargins = 1.0
+    @AppStorage("reader.defaults.pageMarginTop")
+    private var pageMarginTop = 1.0
+    @AppStorage("reader.defaults.pageMarginBottom")
+    private var pageMarginBottom = 1.0
+    @AppStorage("reader.defaults.pageMarginHorizontal")
+    private var pageMarginHorizontal = 1.0
     @AppStorage(ReaderAppearanceDefaults.customBackgroundHexKey)
     private var customBackgroundHex = ""
     @AppStorage(ReaderAppearanceDefaults.customSelectionColorHexKey)
@@ -261,6 +361,7 @@ private struct GlobalReaderDefaultsView: View {
     @State private var didApply = false
     @State private var applyErrorMessage: String?
     @State private var synchronizationTask: Task<Void, Never>?
+    @State private var isPageMarginDetailExpanded = false
 
     var body: some View {
         Form {
@@ -272,10 +373,31 @@ private struct GlobalReaderDefaultsView: View {
                 Text(
                     appliesToExistingBooks
                         ? "已开启：本页每次修改都会立即同步到书架中的现有书籍；单本书之后仍可单独调整。"
-                        : "关闭时只作为新导入书籍的默认值，也可以在页面底部手动应用一次。"
+                        : "关闭时只作为新导入书籍的默认值；也可用下方按钮手动应用一次。"
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+                if appliesToExistingBooks {
+                    Label(
+                        "已自动同步到 \(books.count) 本现有书籍",
+                        systemImage: "checkmark.circle.fill"
+                    )
+                    .foregroundStyle(.secondary)
+                } else {
+                    Button {
+                        isConfirmingApply = true
+                    } label: {
+                        Label(
+                            "立即应用到书架中的现有书籍",
+                            systemImage: "books.vertical"
+                        )
+                    }
+                }
+
+                Text("同步只覆盖阅读排版和选区配色，不会修改阅读位置、书签、划线、批注或笔记。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             } header: {
                 Text("应用范围")
             }
@@ -335,6 +457,36 @@ private struct GlobalReaderDefaultsView: View {
                         .monospacedDigit()
                 }
                 Slider(value: $pageMargins, in: 0.5 ... 2, step: 0.1)
+
+                DisclosureGroup(isExpanded: $isPageMarginDetailExpanded) {
+                    VStack(spacing: 12) {
+                        pageMarginControl(
+                            title: "上",
+                            value: $pageMarginTop
+                        )
+                        pageMarginControl(
+                            title: "下",
+                            value: $pageMarginBottom
+                        )
+                        pageMarginControl(
+                            title: "左右",
+                            value: $pageMarginHorizontal
+                        )
+                    }
+                    .padding(.top, 6)
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("分别设置")
+                            Text("上 / 下 / 左右")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "rectangle.split.3x1")
+                            .foregroundStyle(JerreaderTheme.accent)
+                    }
+                }
             }
 
             Section("背景") {
@@ -376,27 +528,6 @@ private struct GlobalReaderDefaultsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section {
-                if appliesToExistingBooks {
-                    Label(
-                        "已自动同步到 \(books.count) 本现有书籍",
-                        systemImage: "checkmark.circle.fill"
-                    )
-                    .foregroundStyle(.secondary)
-                } else {
-                    Button {
-                        isConfirmingApply = true
-                    } label: {
-                        Label(
-                            "立即应用到书架中的现有书籍",
-                            systemImage: "books.vertical"
-                        )
-                    }
-                }
-                Text("同步只覆盖阅读排版和选区配色，不会修改阅读位置、书签、划线、批注或笔记。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
         }
         .scrollContentBackground(.hidden)
         .background(JerreaderCanvasBackground())
@@ -562,6 +693,20 @@ private struct GlobalReaderDefaultsView: View {
             customSelectionColorHex: customSelectionColorHex,
             japaneseTextOrientation: japaneseOrientationBinding.wrappedValue
         )
+    }
+
+    private func pageMarginControl(
+        title: String,
+        value: Binding<Double>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            LabeledContent(title) {
+                Text(value.wrappedValue.formatted(.number.precision(.fractionLength(1))))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            Slider(value: value, in: 0.5 ... 2, step: 0.1)
+        }
     }
 
     private func applyToExistingBooks(showsConfirmation: Bool = true) {
@@ -973,25 +1118,19 @@ struct TranslationPreferencesSection: View {
                 if isSelected {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.caption)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(JerreaderTheme.onPrimaryAction)
                         .padding(7)
                         .transition(.scale.combined(with: .opacity))
                 }
             }
-            .foregroundStyle(isSelected ? Color.white : JerreaderTheme.accent)
+            .foregroundStyle(isSelected ? JerreaderTheme.onPrimaryAction : JerreaderTheme.accent)
             .frame(maxWidth: .infinity)
             .frame(height: 68)
             .background {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(
                         isSelected
-                            ? AnyShapeStyle(
-                                LinearGradient(
-                                    colors: [JerreaderTheme.primaryAction, JerreaderTheme.accent],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
+                            ? AnyShapeStyle(JerreaderTheme.primaryAction)
                             : AnyShapeStyle(JerreaderTheme.accentFill)
                     )
             }
@@ -1000,9 +1139,9 @@ struct TranslationPreferencesSection: View {
                     .stroke(JerreaderTheme.accent.opacity(isSelected ? 0 : 0.18), lineWidth: 1)
             }
             .shadow(
-                color: isSelected ? JerreaderTheme.accent.opacity(0.20) : .clear,
-                radius: 8,
-                y: 4
+                color: isSelected ? JerreaderTheme.shadow : .clear,
+                radius: 5,
+                y: 2
             )
         }
         .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.96))
@@ -1199,7 +1338,7 @@ private struct DirectAIProviderMark: View {
                     .padding(.horizontal, 3)
             }
         }
-        .foregroundStyle(isSelected ? Color.white : JerreaderTheme.accent)
+        .foregroundStyle(isSelected ? JerreaderTheme.onPrimaryAction : JerreaderTheme.accent)
         .frame(width: 28, height: 28)
         .background(
             isSelected ? Color.white.opacity(0.16) : JerreaderTheme.accent.opacity(0.10),

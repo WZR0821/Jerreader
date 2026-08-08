@@ -45,6 +45,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Checkbox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -57,6 +58,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.jerreader.shared.library.LibraryBook
+import kotlinx.coroutines.delay
 
 data class LibraryUiState(
     val books: List<LibraryBook> = emptyList(),
@@ -72,6 +74,12 @@ fun JerreaderLibraryApp(
     onImport: () -> Unit,
     onOpenBook: (String) -> Unit,
     onDeleteBook: (String) -> Unit,
+    /**
+     * Offered on an empty shelf, which is what a reinstall looks like. Null
+     * hides the entry point on hosts that have no backup centre.
+     */
+    onRestoreBackup: (() -> Unit)? = null,
+    onDismissMessage: () -> Unit = {},
     onChangeCover: (String) -> Unit = {},
     onUpdateBook: (
         id: String,
@@ -82,6 +90,26 @@ fun JerreaderLibraryApp(
         series: String,
         tags: List<String>
     ) -> Unit = { _, _, _, _, _, _, _ -> },
+    onBatchUpdateBooks: (
+        selectedIds: Set<String>,
+        category: String,
+        series: String,
+        language: String,
+        tags: List<String>
+    ) -> Unit = { selectedIds, category, series, language, tags ->
+        state.books.filter { it.id in selectedIds }.forEach { book ->
+            onUpdateBook(
+                book.id,
+                book.title,
+                book.author,
+                language.ifBlank { book.language },
+                category.ifBlank { book.category },
+                series.ifBlank { book.series },
+                (book.tags + tags).map(String::trim).filter(String::isNotBlank)
+                    .distinctBy(String::lowercase)
+            )
+        }
+    },
     modifier: Modifier = Modifier,
     coverContent: (@Composable (LibraryBook) -> Unit)? = null,
     bottomBar: @Composable () -> Unit = {}
@@ -169,6 +197,39 @@ fun JerreaderLibraryApp(
                 )
                 // iOS pins the search field directly under the large title.
                 LibrarySearchField(searchQuery) { searchQuery = it }
+                LibraryChipRow {
+                    FilterChip(
+                        selected = selectedCategory == null,
+                        onClick = { selectedCategory = null },
+                        label = { Text("全部分类") }
+                    )
+                    categories.forEach { category ->
+                        FilterChip(
+                            selected = selectedCategory == category,
+                            onClick = {
+                                selectedCategory = category.takeUnless { selectedCategory == it }
+                            },
+                            label = { Text(category) }
+                        )
+                    }
+                    FilterChip(
+                        selected = selectedFormat == null,
+                        onClick = { selectedFormat = null },
+                        label = { Text("全部格式") }
+                    )
+                    state.books.map { it.sourceFormat.lowercase() }
+                        .distinct()
+                        .sorted()
+                        .forEach { format ->
+                            FilterChip(
+                                selected = selectedFormat == format,
+                                onClick = {
+                                    selectedFormat = format.takeUnless { selectedFormat == it }
+                                },
+                                label = { Text(format.uppercase()) }
+                            )
+                        }
+                }
                 Spacer(Modifier.padding(bottom = 8.dp))
             }
         }
@@ -178,6 +239,7 @@ fun JerreaderLibraryApp(
                 state.isLoading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                 state.books.isEmpty() -> EmptyLibrary(
                     onImport = onImport,
+                    onRestoreBackup = onRestoreBackup,
                     modifier = Modifier.align(Alignment.Center)
                 )
                 else -> LazyVerticalGrid(
@@ -238,6 +300,10 @@ fun JerreaderLibraryApp(
             }
 
             state.message?.let { message ->
+                LaunchedEffect(message) {
+                    delay(MESSAGE_DISPLAY_MILLIS)
+                    onDismissMessage()
+                }
                 Card(
                     modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
                     colors = CardDefaults.cardColors(
@@ -288,18 +354,7 @@ fun JerreaderLibraryApp(
             books = state.books,
             onDismiss = { isBatchEditing = false },
             onApply = { selectedIds, category, series, language, tags ->
-                state.books.filter { it.id in selectedIds }.forEach { book ->
-                    onUpdateBook(
-                        book.id,
-                        book.title,
-                        book.author,
-                        language.ifBlank { book.language },
-                        category.ifBlank { book.category },
-                        series.ifBlank { book.series },
-                        (book.tags + tags).map(String::trim).filter(String::isNotBlank)
-                            .distinctBy(String::lowercase)
-                    )
-                }
+                onBatchUpdateBooks(selectedIds, category, series, language, tags)
                 isBatchEditing = false
             }
         )
@@ -362,8 +417,14 @@ private fun LibraryChipRow(content: @Composable () -> Unit) {
     ) { content() }
 }
 
+private const val MESSAGE_DISPLAY_MILLIS = 3_000L
+
 @Composable
-private fun EmptyLibrary(onImport: () -> Unit, modifier: Modifier = Modifier) {
+private fun EmptyLibrary(
+    onImport: () -> Unit,
+    onRestoreBackup: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
     Column(
         modifier = modifier.padding(horizontal = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -399,6 +460,15 @@ private fun EmptyLibrary(onImport: () -> Unit, modifier: Modifier = Modifier) {
             onClick = onImport,
             modifier = Modifier.padding(top = 4.dp)
         )
+        if (onRestoreBackup != null) {
+            TextButton(onClick = onRestoreBackup) { Text("从备份恢复") }
+            Text(
+                "装过 Jerreader 的话，选中以前的备份文件即可恢复书架、进度和备份计划。",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+        }
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)

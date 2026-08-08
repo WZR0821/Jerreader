@@ -41,10 +41,10 @@ fun LibraryReadingOverview(
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(21.dp),
+        shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-        shadowElevation = 6.dp
+        shadowElevation = 4.dp
     ) {
         Column(
             modifier = Modifier.padding(17.dp),
@@ -173,10 +173,10 @@ fun LibraryRecentlyViewedRow(
     Surface(
         onClick = onOpen,
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-        shadowElevation = 5.dp
+        shadowElevation = 3.dp
     ) {
         Row(
             modifier = Modifier.padding(14.dp),
@@ -340,7 +340,7 @@ fun JerreaderHintCard(
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.secondaryContainer
     ) {
         Row(

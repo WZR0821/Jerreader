@@ -3,8 +3,19 @@ import SwiftUI
 struct LearningHubView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var translationSettings: TranslationSettingsStore
-    @State private var section: LearningSection = .lookup
+    @State private var section: LearningSection = .translate
     @Namespace private var sectionSelection
+
+    init(translationSettings: TranslationSettingsStore) {
+        self.translationSettings = translationSettings
+#if DEBUG
+        if ProcessInfo.processInfo.arguments
+            .contains("--jerreader-standalone-translator-ui-test")
+        {
+            _section = State(initialValue: .translate)
+        }
+#endif
+    }
 
     var body: some View {
         NavigationStack {
@@ -15,7 +26,12 @@ struct LearningHubView: View {
                 .padding(.bottom, 12)
                 .frame(maxWidth: 680)
                 .frame(maxWidth: .infinity)
-                .background(.ultraThinMaterial)
+                .background(JerreaderTheme.canvas)
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(JerreaderTheme.line)
+                        .frame(height: 0.5)
+                }
 
                 ZStack(alignment: .top) {
                     sectionContent
@@ -53,9 +69,9 @@ struct LearningHubView: View {
                         .font(.footnote.weight(.semibold))
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
-                        .foregroundStyle(isSelected ? Color.white : JerreaderTheme.accent)
+                        .foregroundStyle(isSelected ? JerreaderTheme.onPrimaryAction : JerreaderTheme.accent)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 42)
+                        .frame(minHeight: 48)
                         .background {
                             if isSelected {
                                 RoundedRectangle(cornerRadius: 13, style: .continuous)
@@ -63,11 +79,6 @@ struct LearningHubView: View {
                                     .matchedGeometryEffect(
                                         id: "learning-section",
                                         in: sectionSelection
-                                    )
-                                    .shadow(
-                                        color: JerreaderTheme.accent.opacity(0.18),
-                                        radius: 7,
-                                        y: 3
                                     )
                             }
                         }
@@ -79,23 +90,20 @@ struct LearningHubView: View {
         }
         .padding(4)
         .background(
-            JerreaderTheme.paper.opacity(0.94),
-            in: RoundedRectangle(cornerRadius: 17, style: .continuous)
+            JerreaderTheme.paper.opacity(0.96),
+            in: RoundedRectangle(cornerRadius: 15, style: .continuous)
         )
         .overlay {
-            RoundedRectangle(cornerRadius: 17, style: .continuous)
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
                 .stroke(JerreaderTheme.line, lineWidth: 0.75)
         }
-        .shadow(color: JerreaderTheme.shadow.opacity(0.6), radius: 10, y: 4)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("切换查词、生词本或历史")
+        .accessibilityLabel("切换翻译、生词本或历史")
     }
 
     @ViewBuilder
     private var sectionContent: some View {
         switch section {
-        case .lookup:
-            LookupView(translationSettings: translationSettings)
         case .translate:
             TranslateToolView(translationSettings: translationSettings)
         case .vocabulary:
@@ -107,7 +115,6 @@ struct LearningHubView: View {
 }
 
 private enum LearningSection: String, CaseIterable, Identifiable {
-    case lookup
     case translate
     case vocabulary
     case history
@@ -116,7 +123,6 @@ private enum LearningSection: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .lookup: return "查词"
         case .translate: return "翻译"
         case .vocabulary: return "生词本"
         case .history: return "历史"
@@ -125,7 +131,6 @@ private enum LearningSection: String, CaseIterable, Identifiable {
 
     var systemImage: String {
         switch self {
-        case .lookup: return "magnifyingglass"
         case .translate: return "character.bubble"
         case .vocabulary: return "bookmark.fill"
         case .history: return "clock.arrow.circlepath"

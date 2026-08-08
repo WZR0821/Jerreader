@@ -16,7 +16,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ReadingAnnotationEntity::class,
         TranslationCacheEntity::class
     ],
-    version = 3,
+    version = 5,
     exportSchema = true
 )
 abstract class JerreaderDatabase : RoomDatabase() {
@@ -30,7 +30,12 @@ abstract class JerreaderDatabase : RoomDatabase() {
             context.applicationContext,
             JerreaderDatabase::class.java,
             "jerreader-library.db"
-        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
+        ).addMigrations(
+            MIGRATION_1_2,
+            MIGRATION_2_3,
+            MIGRATION_3_4,
+            MIGRATION_4_5
+        ).build()
 
         private val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -137,6 +142,30 @@ abstract class JerreaderDatabase : RoomDatabase() {
                 """.trimIndent())
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_translation_cache_serviceNamespace ON translation_cache(serviceNamespace)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_translation_cache_lastAccessedAtEpochMillis ON translation_cache(lastAccessedAtEpochMillis)")
+            }
+        }
+
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Book-scoped learning and reader records are deleted explicitly
+                // by the repository. Indexes keep that cleanup bounded for large
+                // local libraries without changing the imported book bytes.
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_word_lookup_records_sourceBookId " +
+                        "ON word_lookup_records(sourceBookId)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_translation_favorites_bookId " +
+                        "ON translation_favorites(bookId)"
+                )
+            }
+        }
+
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE reading_annotations ADD COLUMN geometryJson TEXT"
+                )
             }
         }
     }

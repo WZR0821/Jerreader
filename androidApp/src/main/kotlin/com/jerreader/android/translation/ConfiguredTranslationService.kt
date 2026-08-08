@@ -59,15 +59,29 @@ class ConfiguredTranslationService(
 ) : TranslationService, ContextExplanationService {
     override val identifier: String = "configured-ai"
 
-    override suspend fun translate(request: TranslationRequest): TranslationResult {
+    override suspend fun translate(request: TranslationRequest): TranslationResult =
+        translate(request, override = null)
+
+    /**
+     * [override] is the standalone translate page choosing a provider and a
+     * prompt for one request only. An overridden provider is used as picked: it
+     * would be surprising for the page to quietly answer from the service the
+     * reader is configured with, so no fallback switch happens there.
+     */
+    suspend fun translate(
+        request: TranslationRequest,
+        override: StandaloneTranslationOverride?
+    ): TranslationResult {
         val text = TranslationInputPolicy.validate(request.text)
         val normalizedRequest = request.copy(text = text)
         val preferences = settings.preferences.value
+        val mode = override?.providerMode ?: preferences.providerMode
         return try {
-            translateUsing(preferences.providerMode, normalizedRequest)
+            translateUsing(mode, normalizedRequest, override?.promptTemplate)
         } catch (error: CancellationException) {
             throw error
         } catch (error: TranslationFailure) {
+            if (override != null) throw error
             if (error is TranslationFailure.EmptyInput ||
                 error is TranslationFailure.TextTooLong ||
                 error is TranslationFailure.UnsupportedLanguage
@@ -76,18 +90,19 @@ class ConfiguredTranslationService(
             }
             val fallback = preferences.fallbackMode.providerMode
             if (fallback == null || fallback == preferences.providerMode) throw error
-            translateUsing(fallback, normalizedRequest)
+            translateUsing(fallback, normalizedRequest, null)
         }
     }
 
     private suspend fun translateUsing(
         mode: TranslationProviderMode,
-        request: TranslationRequest
+        request: TranslationRequest,
+        promptTemplate: String?
     ): TranslationResult {
         if (mode == TranslationProviderMode.ON_DEVICE) {
             return onDeviceService.translate(request)
         }
-        val configuration = settings.currentServiceConfiguration(mode)
+        val configuration = settings.currentServiceConfiguration(mode, promptTemplate)
         validateConfiguration(configuration)
         val source = request.sourceLanguage ?: detectLanguage(request.text)
         val translated = performTextRequest(

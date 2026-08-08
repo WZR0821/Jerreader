@@ -106,7 +106,7 @@ class UrlConnectionDictionaryHttpClient : DictionaryHttpClient {
             readTimeout = 8_000
             requestMethod = "GET"
             setRequestProperty("Accept", "application/json")
-            setRequestProperty("User-Agent", "Jerreader/1.0.2 (Android dictionary lookup)")
+            setRequestProperty("User-Agent", "Jerreader/1.0.3 (Android dictionary lookup)")
         }
         try {
             val status = connection.responseCode

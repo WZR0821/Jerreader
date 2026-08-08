@@ -5,13 +5,18 @@ import android.net.Uri
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.jerreader.android.data.JerreaderDatabase
+import com.jerreader.android.data.ReadingAnnotationEntity
+import com.jerreader.android.data.ReadingBookmarkEntity
 import com.jerreader.android.data.RoomLibraryRepository
+import com.jerreader.android.data.TranslationFavoriteEntity
+import com.jerreader.android.data.WordLookupEntity
 import com.jerreader.android.reader.ReadiumEnvironment
 import com.jerreader.android.test.createSyntheticEpub
 import com.jerreader.shared.library.LibraryBook
 import com.jerreader.shared.library.LibraryImportOutcome
 import java.io.File
 import java.util.UUID
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -28,7 +33,7 @@ class LibraryMilestoneOneTest {
             context,
             JerreaderDatabase::class.java
         ).build()
-        val repository = RoomLibraryRepository(database.bookDao())
+        val repository = RoomLibraryRepository(database.bookDao(), database)
         val root = File(context.cacheDir, "jerreader-m1-$testId").apply { mkdirs() }
         val source = File(root, "m1-source.epub")
         createSyntheticEpub(source, identifier = testId)
@@ -59,12 +64,86 @@ class LibraryMilestoneOneTest {
             assertEquals(sourceSnapshot.sha256, storedSnapshot.sha256)
             assertTrue(PublicationIntegrity.isUnchanged(sourceSnapshot))
 
+            database.readerRecordDao().upsertBookmark(
+                ReadingBookmarkEntity(
+                    id = "bookmark-$testId",
+                    bookmarkKey = "bookmark-key-$testId",
+                    bookId = book.id,
+                    bookTitle = book.title,
+                    locatorJson = "{}",
+                    chapterTitle = "测试章节",
+                    excerpt = "摘录",
+                    progress = 0.2,
+                    createdAtEpochMillis = 1_700_200_000_000
+                )
+            )
+            database.readerRecordDao().upsertAnnotation(
+                ReadingAnnotationEntity(
+                    id = "annotation-$testId",
+                    annotationKey = "annotation-key-$testId",
+                    bookId = book.id,
+                    bookTitle = book.title,
+                    locatorJson = "{}",
+                    selectedText = "批注",
+                    noteText = "备注",
+                    color = "yellow",
+                    chapterTitle = "测试章节",
+                    progress = 0.2,
+                    createdAtEpochMillis = 1_700_200_000_000,
+                    updatedAtEpochMillis = 1_700_200_000_000,
+                    geometryJson = "[{\"x\":0.1,\"y\":0.1,\"w\":0.2,\"h\":0.1}]"
+                )
+            )
+            database.learningDao().upsertWord(
+                WordLookupEntity(
+                    lookupKey = "word-$testId",
+                    surfaceForm = "word",
+                    lemma = "word",
+                    reading = null,
+                    language = "ENGLISH",
+                    partOfSpeech = "noun",
+                    definitionsText = "词",
+                    inflectionNote = null,
+                    usageNote = null,
+                    aiAnalysis = null,
+                    aiProviderIdentifier = null,
+                    sentenceContext = null,
+                    sourceBookId = book.id,
+                    sourceBookTitle = book.title,
+                    providerIdentifier = "test",
+                    lookupCount = 1,
+                    createdAtEpochMillis = 1_700_200_000_000,
+                    lastLookedUpAtEpochMillis = 1_700_200_000_000,
+                    isFavorite = true,
+                    isInHistory = true
+                )
+            )
+            database.learningDao().upsertTranslationFavorite(
+                TranslationFavoriteEntity(
+                    favoriteKey = "favorite-$testId",
+                    sourceText = "source",
+                    translatedText = "译文",
+                    sourceLanguage = "ENGLISH",
+                    targetLanguage = "CHINESE_SIMPLIFIED",
+                    providerIdentifier = "test",
+                    bookId = book.id,
+                    bookTitle = book.title,
+                    locatorJson = "{}",
+                    createdAtEpochMillis = 1_700_200_000_000,
+                    updatedAtEpochMillis = 1_700_200_000_000
+                )
+            )
+
             val duplicate = importer.importEpub(Uri.fromFile(source))
             assertTrue(duplicate is LibraryImportOutcome.AlreadyImported)
             assertEquals(book.id, duplicate.book.id)
 
             bookService.delete(book.id)
             assertNull(repository.book(book.id))
+            assertTrue(database.readerRecordDao().observeBookmarks(book.id).first().isEmpty())
+            assertTrue(database.readerRecordDao().observeAnnotations(book.id).first().isEmpty())
+            assertTrue(database.learningDao().word("word-$testId") == null)
+            assertTrue(database.learningDao().observeTranslationFavorites().first().isEmpty())
             assertFalse(storedFile.exists())
             assertTrue(PublicationIntegrity.isUnchanged(sourceSnapshot))
         } finally {

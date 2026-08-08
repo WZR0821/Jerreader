@@ -34,6 +34,7 @@ final class PDFReaderViewController: UIViewController, PDFNavigatorDelegate,
     private var isQuickSentenceTranslationEnabled = false
     private var quickTranslationUnit = ReaderQuickTranslationUnit.sentence
     private var disablesTapPageTurnsDuringQuickTranslation = true
+    private var isPDFPaperModeEnabled: Bool
     private var ocrCache: [Int: [PDFOCRTextObservation]] = [:]
     private var ocrCacheOrder: [Int] = []
     private static let maximumCachedOCRPages = 12
@@ -58,9 +59,11 @@ final class PDFReaderViewController: UIViewController, PDFNavigatorDelegate,
         theme: ReaderThemeChoice,
         customBackgroundHex: String = "",
         customSelectionColorHex: String = "",
-        bookLanguage: String?
+        bookLanguage: String?,
+        paperModeEnabled: Bool = false
     ) throws {
         self.bookLanguage = bookLanguage
+        isPDFPaperModeEnabled = paperModeEnabled
         let assetRetriever = AssetRetriever(httpClient: DefaultHTTPClient())
         let server = GCDHTTPServer(assetRetriever: assetRetriever)
         httpServer = server
@@ -441,6 +444,13 @@ final class PDFReaderViewController: UIViewController, PDFNavigatorDelegate,
         disablesTapPageTurnsDuringQuickTranslation = disabled
     }
 
+    func setPDFPaperModeEnabled(_ enabled: Bool) {
+        guard isPDFPaperModeEnabled != enabled else { return }
+        isPDFPaperModeEnabled = enabled
+        cancelOCRRecognition()
+        clearTranslationHighlight()
+    }
+
     func applyPreferences(
         fontSize: Double,
         theme: ReaderThemeChoice,
@@ -604,28 +614,47 @@ final class PDFReaderViewController: UIViewController, PDFNavigatorDelegate,
             text: pageText,
             bookLanguage: bookLanguage
         )
-        let segment: ReaderSentenceSegment?
-        switch quickTranslationUnit {
-        case .sentence:
-            segment = PDFTextLayerSentenceSelector.sentence(
-                in: pageText,
-                utf16Offset: hit.utf16Index,
-                language: language
-            )
-        case .paragraph:
-            segment = PDFTextLayerSentenceSelector.paragraph(
-                in: pageText,
-                utf16Offset: hit.utf16Index
-            )
-        }
-        guard let sentence = segment,
-        let selection = page.selection(
-            for: NSRange(
-                location: sentence.utf16Range.lowerBound,
-                length: sentence.utf16Range.count
-            )
-        ) else {
-            return false
+        let selectedText: String
+        let contextText: String?
+        let selection: PDFSelection
+        if isPDFPaperModeEnabled,
+           let paperSelection = paperModeTextSelection(
+               on: page,
+               pageText: pageText,
+               pagePoint: pagePoint,
+               utf16Offset: hit.utf16Index,
+               language: language
+           )
+        {
+            selectedText = paperSelection.result.text
+            contextText = paperSelection.result.contextText
+            selection = paperSelection.selection
+        } else {
+            let segment: ReaderSentenceSegment?
+            switch quickTranslationUnit {
+            case .sentence:
+                segment = PDFTextLayerSentenceSelector.sentence(
+                    in: pageText,
+                    utf16Offset: hit.utf16Index,
+                    language: language
+                )
+            case .paragraph:
+                segment = PDFTextLayerSentenceSelector.paragraph(
+                    in: pageText,
+                    utf16Offset: hit.utf16Index
+                )
+            }
+            guard let segment,
+                  let standardSelection = page.selection(
+                      for: NSRange(
+                          location: segment.utf16Range.lowerBound,
+                          length: segment.utf16Range.count
+                      )
+                  )
+            else { return false }
+            selectedText = segment.text
+            contextText = segment.contextText
+            selection = standardSelection
         }
 
         clearTranslationHighlight()
@@ -653,17 +682,100 @@ final class PDFReaderViewController: UIViewController, PDFNavigatorDelegate,
             .text(
                 pageIndex: pageIndex,
                 selection: (selection.copy() as? PDFSelection) ?? selection,
-                expectedText: sentence.text
+                expectedText: selectedText
             ),
             in: pdfView
         ) ?? pdfView.convert(selection.bounds(for: page), from: page)
         deliverSelection(
-            text: sentence.text,
-            contextText: sentence.contextText,
+            text: selectedText,
+            contextText: contextText,
             frameInPDFView: frame,
             pdfView: pdfView
         )
         return true
+    }
+
+    private func paperModeTextSelection(
+        on page: PDFPage,
+        pageText: String,
+        pagePoint: CGPoint,
+        utf16Offset: Int,
+        language: LanguageCode?
+    ) -> (result: PDFPaperTextSelection, selection: PDFSelection)? {
+        guard let document = page.document else { return nil }
+        let source = pageText as NSString
+        guard source.length > 0,
+              let entirePage = page.selection(
+                  for: NSRange(location: 0, length: source.length)
+              )
+        else { return nil }
+
+        let lines = entirePage.selectionsByLine().compactMap {
+            paperTextLine(from: $0, on: page, source: source)
+        }
+        guard let result = PDFPaperTextSelector.selection(
+            unit: quickTranslationUnit,
+            pageBounds: page.bounds(for: pdfView?.displayBox ?? .cropBox),
+            pagePoint: pagePoint,
+            utf16Offset: utf16Offset,
+            lines: lines,
+            language: language
+        ) else { return nil }
+
+        let pieces = result.pageUTF16Ranges.compactMap {
+            page.selection(for: $0)
+        }
+        guard pieces.count == result.pageUTF16Ranges.count,
+              !pieces.isEmpty
+        else { return nil }
+        let combined = PDFSelection(document: document)
+        for piece in pieces {
+            combined.add(piece)
+        }
+        return (result, combined)
+    }
+
+    private func paperTextLine(
+        from selection: PDFSelection,
+        on page: PDFPage,
+        source: NSString
+    ) -> PDFPaperTextLine? {
+        guard selection.numberOfTextRanges(on: page) > 0 else { return nil }
+        let rawRange = selection.range(at: 0, on: page)
+        guard rawRange.location != NSNotFound,
+              rawRange.location >= 0,
+              rawRange.length > 0,
+              NSMaxRange(rawRange) <= source.length
+        else { return nil }
+
+        // PDFKit line ranges often include CR/LF separators. Strip only those
+        // boundary code units so the fragment length continues to map exactly
+        // back to page UTF-16 offsets; leading spaces remain available to the
+        // existing paragraph-indentation policy.
+        var lower = rawRange.location
+        var upper = NSMaxRange(rawRange)
+        while lower < upper {
+            let unit = source.character(at: lower)
+            guard unit == 10 || unit == 13 else { break }
+            lower += 1
+        }
+        while lower < upper {
+            let unit = source.character(at: upper - 1)
+            guard unit == 10 || unit == 13 else { break }
+            upper -= 1
+        }
+        guard lower < upper else { return nil }
+        let range = NSRange(location: lower, length: upper - lower)
+        let text = source.substring(with: range)
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        let bounds = selection.bounds(for: page).standardized
+        guard !bounds.isEmpty else { return nil }
+        return PDFPaperTextLine(
+            text: text,
+            pageUTF16Range: range,
+            bounds: bounds
+        )
     }
 
     @objc private func handleOCRLongPress(_ gesture: UILongPressGestureRecognizer) {
@@ -846,13 +958,15 @@ final class PDFReaderViewController: UIViewController, PDFNavigatorDelegate,
             selection = PDFOCRTextSelector.sentence(
                 at: point,
                 observations: observations,
-                preferredLanguage: preferredLanguage
+                preferredLanguage: preferredLanguage,
+                paperMode: isPDFPaperModeEnabled
             )
         case .paragraph:
             selection = PDFOCRTextSelector.paragraph(
                 at: point,
                 observations: observations,
-                preferredLanguage: preferredLanguage
+                preferredLanguage: preferredLanguage,
+                paperMode: isPDFPaperModeEnabled
             )
         }
         guard let selection else {

@@ -120,15 +120,110 @@ class AndroidTranslationSettingsStore(
         copy(translationPromptTemplate = value)
     }
 
+    /**
+     * Restores the translation preferences held in a backup archive. The API
+     * key and the proxy credential are never in an archive, so they are left
+     * untouched here and have to be entered again on a new device.
+     */
+    fun restoreFromBackup(payload: org.json.JSONObject) {
+        val current = preferences.value
+        fun <T : Enum<T>> enumOrCurrent(raw: String?, values: Array<T>, fallback: T): T =
+            values.firstOrNull { it.name == raw } ?: fallback
+
+        updateProviderMode(
+            enumOrCurrent(
+                payload.optString("providerMode"),
+                TranslationProviderMode.entries.toTypedArray(),
+                current.providerMode
+            )
+        )
+        updateDirectProvider(
+            enumOrCurrent(
+                payload.optString("directProvider"),
+                DirectAIProvider.entries.toTypedArray(),
+                current.directProvider
+            )
+        )
+        updateDirectEndpoint(payload.optString("directEndpoint", current.directEndpoint))
+        updateDirectModel(payload.optString("directModel", current.directModel))
+        updateBackendEndpoint(payload.optString("backendEndpoint", current.backendEndpoint))
+        updateBackendModel(payload.optString("backendModel", current.backendModel))
+        updateSourceChoice(
+            enumOrCurrent(
+                payload.optString("sourceChoice"),
+                TranslationSourceChoice.entries.toTypedArray(),
+                current.sourceChoice
+            )
+        )
+        updateTargetLanguage(
+            enumOrCurrent(
+                payload.optString("targetLanguage"),
+                LanguageCode.entries.toTypedArray(),
+                current.targetLanguage
+            )
+        )
+        updateQuickTranslationEnabled(
+            payload.optBoolean("quickTranslationEnabled", current.quickTranslationEnabled)
+        )
+        updateQuickTranslationUnit(
+            enumOrCurrent(
+                payload.optString("quickTranslationUnit"),
+                QuickTranslationUnit.entries.toTypedArray(),
+                current.quickTranslationUnit
+            )
+        )
+        updateDisablesTapPageTurns(
+            payload.optBoolean(
+                "disablesTapPageTurnsDuringQuickTranslation",
+                current.disablesTapPageTurnsDuringQuickTranslation
+            )
+        )
+        updateDisplayMode(
+            enumOrCurrent(
+                payload.optString("displayMode"),
+                TranslationDisplayMode.entries.toTypedArray(),
+                current.displayMode
+            )
+        )
+        updateTranslationHaptics(
+            payload.optBoolean("translationHapticsEnabled", current.translationHapticsEnabled)
+        )
+        updateAutomaticRetry(
+            payload.optBoolean("automaticRetryEnabled", current.automaticRetryEnabled)
+        )
+        updateFallbackMode(
+            enumOrCurrent(
+                payload.optString("fallbackMode"),
+                TranslationFallbackMode.entries.toTypedArray(),
+                current.fallbackMode
+            )
+        )
+        updateTranslationPrompt(
+            payload.optString("translationPromptTemplate", current.translationPromptTemplate)
+        )
+        updateGrammarPrompt(
+            payload.optString("grammarAnalysisPromptTemplate", current.grammarAnalysisPromptTemplate)
+        )
+    }
+
     fun updateGrammarPrompt(value: String) = update(KEY_GRAMMAR_PROMPT, value) {
         copy(grammarAnalysisPromptTemplate = value)
     }
 
+    /**
+     * [promptTemplate] lets the standalone translate page run one request with
+     * its own prompt — word mode needs a dictionary answer — without writing
+     * that prompt back into the settings the reader uses.
+     */
     fun currentServiceConfiguration(
-        mode: TranslationProviderMode = preferences.value.providerMode
+        mode: TranslationProviderMode = preferences.value.providerMode,
+        promptTemplate: String? = null
     ): TranslationServiceConfiguration {
         val current = preferences.value
-        val servicePreferences = current.copy(providerMode = mode)
+        val servicePreferences = current.copy(
+            providerMode = mode,
+            translationPromptTemplate = promptTemplate ?: current.translationPromptTemplate
+        )
         return if (mode == TranslationProviderMode.DIRECT_API) {
             TranslationServiceConfiguration(
                 preferences = servicePreferences,
@@ -167,17 +262,26 @@ class AndroidTranslationSettingsStore(
         return null
     }
 
-    fun cacheNamespace(): String {
+    /**
+     * A page that overrides the provider or the prompt must not read back
+     * results the other configuration produced, so both overrides take part in
+     * the namespace exactly as the stored values do.
+     */
+    fun cacheNamespace(
+        mode: TranslationProviderMode? = null,
+        promptTemplate: String? = null
+    ): String {
         val current = preferences.value
         return listOf(
-            current.providerMode.name,
+            (mode ?: current.providerMode).name,
             current.fallbackMode.name,
             current.directProvider.name,
             current.directEndpoint.trim(),
             current.directModel.trim(),
             current.backendEndpoint.trim(),
             current.backendModel.trim(),
-            current.translationPromptTemplate
+            promptTemplate ?: current.translationPromptTemplate,
+            current.grammarAnalysisPromptTemplate
         ).joinToString("\u001F")
     }
 

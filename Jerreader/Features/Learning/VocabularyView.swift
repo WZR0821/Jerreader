@@ -200,7 +200,7 @@ struct VocabularyView: View {
         JerreaderEmptyState(
             title: searchText.isEmpty ? "收藏还是空的" : "没有匹配内容",
             message: searchText.isEmpty
-                ? "收藏查词结果，或在阅读中的译文卡片点按星标，内容就会出现在这里。"
+                ? "在翻译的词语模式收藏词典结果，或在阅读中的译文卡片点按星标，内容就会出现在这里。"
                 : "请尝试搜索其他词语、原文、译文或书名。",
             systemImage: searchText.isEmpty ? "bookmark" : "magnifyingglass"
         )

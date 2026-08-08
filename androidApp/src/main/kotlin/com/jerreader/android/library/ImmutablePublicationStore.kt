@@ -19,6 +19,12 @@ data class StoredPublication(
     val snapshot: PublicationSnapshot
 )
 
+data class StagedDeletion(
+    val directory: File,
+    val publicationFileName: String?,
+    val coverFileName: String?
+)
+
 class ImmutablePublicationStore(
     private val context: Context,
     private val rootDirectory: File = context.filesDir
@@ -115,7 +121,13 @@ class ImmutablePublicationStore(
         val destination = File(publicationsDirectory, "$id.$storedExtension")
         check(!destination.exists()) { "出版物目标已存在。" }
         check(staged.file.renameTo(destination)) { "无法保存出版物副本。" }
-        check(destination.setReadOnly()) { "无法将出版物副本设为只读。" }
+        if (!destination.setReadOnly()) {
+            // A failed permission change must not leave a committed file behind
+            // while the caller still believes the import failed.
+            destination.setWritable(true)
+            destination.delete()
+            throw IllegalStateException("无法将出版物副本设为只读。")
+        }
         return StoredPublication(
             fileName = destination.name,
             snapshot = PublicationIntegrity.capture(destination)
@@ -133,14 +145,22 @@ class ImmutablePublicationStore(
         coversDirectory.apply {
             check(exists() || mkdirs()) { "无法创建封面目录。" }
         }
-        val cover = File(coversDirectory, "$bookId.png")
-        val temporary = File(coversDirectory, "$bookId.png.part")
-        FileOutputStream(temporary).use { output ->
-            output.write(bytes)
-            output.fd.sync()
+        // A new immutable name makes Compose's image key change immediately and
+        // avoids exposing a partially replaced file to another reader surface.
+        val fileName = "$bookId-${UUID.randomUUID()}.jpg"
+        val cover = File(coversDirectory, fileName)
+        val temporary = File(coversDirectory, "$fileName.part")
+        try {
+            FileOutputStream(temporary).use { output ->
+                output.write(bytes)
+                output.fd.sync()
+            }
+            check(temporary.renameTo(cover)) { "无法保存封面。" }
+        } catch (error: Throwable) {
+            temporary.delete()
+            cover.delete()
+            throw error
         }
-        if (cover.exists()) check(cover.delete()) { "无法替换旧封面。" }
-        check(temporary.renameTo(cover)) { "无法保存封面。" }
         return cover.name
     }
 
@@ -159,6 +179,80 @@ class ImmutablePublicationStore(
         return !file.exists() || file.delete()
     }
 
+    /**
+     * Moves both files out of their live locations before the database row is
+     * removed. If the database operation fails, [restoreDeletion] can put them
+     * back without ever leaving a row pointing at a missing publication.
+     */
+    fun stageDeletion(publicationFileName: String?, coverFileName: String?): StagedDeletion {
+        val directory = File(
+            rootDirectory,
+            "publication-deletions/${UUID.randomUUID()}"
+        )
+        check(directory.mkdirs()) { "无法准备删除操作。" }
+        var movedPublication: String? = null
+        var movedCover: String? = null
+        try {
+            publicationFileName?.let { name ->
+                val source = resolvePublication(name)
+                if (source.exists()) {
+                    check(source.renameTo(File(directory, name))) { "无法准备删除出版物。" }
+                    movedPublication = name
+                }
+            }
+            coverFileName?.let { name ->
+                val source = resolveCover(name)
+                if (source.exists()) {
+                    check(source.renameTo(File(directory, name))) { "无法准备删除封面。" }
+                    movedCover = name
+                }
+            }
+            return StagedDeletion(directory, movedPublication, movedCover)
+        } catch (error: Throwable) {
+            restoreDeletion(
+                StagedDeletion(directory, movedPublication, movedCover)
+            )
+            throw error
+        }
+    }
+
+    fun finalizeDeletion(staged: StagedDeletion) {
+        check(!staged.directory.exists() || staged.directory.deleteRecursively()) {
+            "无法完成出版物清理。"
+        }
+    }
+
+    fun restoreDeletion(staged: StagedDeletion) {
+        staged.publicationFileName?.let { name ->
+            val stagedFile = File(staged.directory, name)
+            if (stagedFile.exists()) {
+                val destination = resolvePublication(name)
+                if (!destination.exists()) check(stagedFile.renameTo(destination)) {
+                    "无法恢复出版物。"
+                }
+            }
+        }
+        staged.coverFileName?.let { name ->
+            val stagedFile = File(staged.directory, name)
+            if (stagedFile.exists()) {
+                val destination = resolveCover(name)
+                if (!destination.exists()) check(stagedFile.renameTo(destination)) {
+                    "无法恢复封面。"
+                }
+            }
+        }
+        staged.directory.deleteRecursively()
+    }
+
+    /** Reclaims only our own abandoned deletion staging directories. */
+    fun reclaimAbandonedDeletions(now: Long = System.currentTimeMillis()) {
+        File(rootDirectory, "publication-deletions")
+            .listFiles()
+            ?.filter(File::isDirectory)
+            ?.filter { now - it.lastModified() >= ABANDONED_DELETION_MIN_AGE_MILLIS }
+            ?.forEach { it.deleteRecursively() }
+    }
+
     private fun sourceDisplayName(source: Uri): String {
         context.contentResolver.query(
             source,
@@ -175,5 +269,9 @@ class ImmutablePublicationStore(
             }
         }
         return source.lastPathSegment?.substringAfterLast('/') ?: "publication"
+    }
+
+    private companion object {
+        const val ABANDONED_DELETION_MIN_AGE_MILLIS = 24 * 60 * 60 * 1_000L
     }
 }

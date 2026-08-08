@@ -84,6 +84,21 @@ struct LibraryBackupRestoreResult: Equatable, Sendable {
     let archive: LibraryBackupArchiveInfo
     let restored: LibraryBackupSummary
     let didRestoreSettings: Bool
+    /// The regimen the archive carried, already written to `UserDefaults`.
+    /// Nil for archives written before archives carried one.
+    let inheritedProfile: LibraryBackupProfile?
+
+    init(
+        archive: LibraryBackupArchiveInfo,
+        restored: LibraryBackupSummary,
+        didRestoreSettings: Bool,
+        inheritedProfile: LibraryBackupProfile? = nil
+    ) {
+        self.archive = archive
+        self.restored = restored
+        self.didRestoreSettings = didRestoreSettings
+        self.inheritedProfile = inheritedProfile
+    }
 }
 
 /// Exports and restores everything the user selected.
@@ -142,6 +157,7 @@ struct LibraryBackupService: @unchecked Sendable {
             "CFBundleShortVersionString"
         ] as? String ?? ""
         let appBuild = Bundle.main.infoDictionary?["CFBundleVersion"] as? String
+        let profile = LibraryBackupPolicyStore.currentProfile(defaults: defaults)
 
         // Snapshot SwiftData on the main actor, then do hashing and archive I/O
         // on a utility task so a large library cannot freeze the interface or
@@ -154,7 +170,8 @@ struct LibraryBackupService: @unchecked Sendable {
                 options: options,
                 defaults: exportedDefaults,
                 appVersion: appVersion,
-                appBuild: appBuild
+                appBuild: appBuild,
+                profile: profile
             )
         }.value
     }
@@ -166,7 +183,8 @@ struct LibraryBackupService: @unchecked Sendable {
         options: LibraryBackupOptions,
         defaults: [String: BackupDefaultValue]?,
         appVersion: String,
-        appBuild: String?
+        appBuild: String?,
+        profile: LibraryBackupProfile?
     ) async throws -> LibraryBackupArchiveInfo {
         var payload = originalPayload
         if options.includes(.library) {
@@ -227,7 +245,8 @@ struct LibraryBackupService: @unchecked Sendable {
                 appVersion: appVersion,
                 appBuild: appBuild,
                 summary: payload.summary,
-                scopes: options.scopes.sorted { $0.rawValue < $1.rawValue }
+                scopes: options.scopes.sorted { $0.rawValue < $1.rawValue },
+                profile: profile
             )
             try await add(data: encoder.encode(manifest), at: Self.manifestPath, to: archive)
             try await add(data: encoder.encode(payload.records), at: Self.recordsPath, to: archive)
@@ -470,6 +489,19 @@ struct LibraryBackupService: @unchecked Sendable {
                 Self.restoreDefaults(values, defaults: defaults)
             }
 
+            // After the settings scope, so that an archive which carries both
+            // cannot end up with two disagreeing copies of the schedule: the
+            // manifest's regimen is the one that travels unconditionally, so
+            // it is the one that wins.
+            let inheritedProfile = inspected.manifest.profile
+            if let inheritedProfile {
+                LibraryBackupPolicyStore.apply(
+                    inheritedProfile,
+                    lastAutomaticBackupAt: inspected.manifest.createdAt,
+                    defaults: defaults
+                )
+            }
+
             let info = LibraryBackupArchiveInfo(
                 url: sourceURL,
                 createdAt: inspected.manifest.createdAt,
@@ -482,7 +514,8 @@ struct LibraryBackupService: @unchecked Sendable {
             return LibraryBackupRestoreResult(
                 archive: info,
                 restored: restored,
-                didRestoreSettings: didRestoreSettings
+                didRestoreSettings: didRestoreSettings,
+                inheritedProfile: inheritedProfile
             )
         } catch let error as LibraryBackupError {
             context.rollback()

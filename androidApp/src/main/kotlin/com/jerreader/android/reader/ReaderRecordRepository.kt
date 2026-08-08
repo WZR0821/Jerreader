@@ -4,6 +4,8 @@ import com.jerreader.android.data.ReaderRecordDao
 import com.jerreader.android.data.ReadingAnnotationEntity
 import com.jerreader.android.data.ReadingBookmarkEntity
 import java.util.UUID
+import java.security.MessageDigest
+import java.text.Normalizer
 import kotlinx.coroutines.flow.Flow
 
 class ReaderRecordRepository(
@@ -53,10 +55,11 @@ class ReaderRecordRepository(
         noteText: String,
         color: String,
         chapterTitle: String,
-        progress: Double
+        progress: Double,
+        geometryJson: String? = null
     ): ReadingAnnotationEntity {
         val timestamp = now()
-        val key = "$bookId|${locatorJson.hashCode()}|${selectedText.hashCode()}"
+        val key = annotationKey(bookId, locatorJson, selectedText)
         val record = ReadingAnnotationEntity(
             id = UUID.randomUUID().toString(),
             annotationKey = key,
@@ -69,7 +72,8 @@ class ReaderRecordRepository(
             chapterTitle = chapterTitle,
             progress = progress.coerceIn(0.0, 1.0),
             createdAtEpochMillis = timestamp,
-            updatedAtEpochMillis = timestamp
+            updatedAtEpochMillis = timestamp,
+            geometryJson = geometryJson
         )
         dao.upsertAnnotation(record)
         return record
@@ -86,4 +90,19 @@ class ReaderRecordRepository(
     suspend fun updateAnnotation(id: String, noteText: String, color: String) {
         dao.updateAnnotation(id, noteText.trim(), color, now())
     }
+
+    private fun annotationKey(bookId: String, locatorJson: String, selectedText: String): String {
+        val canonical = listOf(
+            bookId.trim(),
+            normalize(locatorJson),
+            normalize(selectedText)
+        ).joinToString("\u001F")
+        return MessageDigest.getInstance("SHA-256")
+            .digest(canonical.encodeToByteArray())
+            .joinToString("") { byte -> "%02x".format(byte) }
+    }
+
+    private fun normalize(value: String): String = Normalizer
+        .normalize(value.trim(), Normalizer.Form.NFC)
+        .replace(Regex("[\\t\\r\\n ]+"), " ")
 }

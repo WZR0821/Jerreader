@@ -1,133 +1,504 @@
+import CoreFoundation
+import CoreText
 import SwiftData
 import SwiftUI
+import UIKit
+@preconcurrency import Translation
 
-/// Free-form translation between the three languages the app targets.
-///
-/// The reader translates what you tap inside a book; this is the counterpart
-/// for text you type or paste — a sentence from a paper dictionary, a message,
-/// a caption. Direction is explicit here (rather than inferred from the book)
-/// because the input has no surrounding document to infer it from.
+enum StandaloneTranslationMode: String, CaseIterable, Identifiable, Sendable {
+    case word
+    case sentence
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .word: return "词语"
+        case .sentence: return "句子"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .word: return "textformat.abc"
+        case .sentence: return "text.alignleft"
+        }
+    }
+
+    var placeholder: String {
+        switch self {
+        case .word: return "输入一个词或短语"
+        case .sentence: return "输入或粘贴要翻译的句子"
+        }
+    }
+
+    var maximumCharacterCount: Int {
+        switch self {
+        case .word: return 80
+        case .sentence: return 2_000
+        }
+    }
+
+    /// Word mode asks an AI provider for a dictionary-style equivalent rather
+    /// than letting it add explanations. Sentence mode respects the prompt the
+    /// user configured in Settings.
+    func translationPrompt(fallback: String) -> String {
+        switch self {
+        case .word:
+            return """
+            你是一部精确的中英日词典。把选中的 {source_language} 词语翻译成最贴合语境的 {target_language} 词或短语。只输出译词，不要解释、例句、标题、引号或备选列表。
+            """
+        case .sentence:
+            return fallback
+        }
+    }
+}
+
+struct StandaloneTranslationRequest: Equatable, Sendable {
+    let id: UUID
+    let text: String
+    let sourceLanguage: LanguageCode
+    let targetLanguage: LanguageCode
+    let mode: StandaloneTranslationMode
+}
+
+enum StandaloneTranslationValidationError: LocalizedError, Equatable {
+    case emptyText
+    case textTooLong(maximum: Int)
+    case languageNotDetected
+    case sameLanguage
+
+    var errorDescription: String? {
+        switch self {
+        case .emptyText:
+            return "请输入需要翻译的文字。"
+        case let .textTooLong(maximum):
+            return "当前模式一次最多翻译 \(maximum) 个字符。"
+        case .languageNotDetected:
+            return "无法自动识别原文语言，请手动选择中文、英语或日语。"
+        case .sameLanguage:
+            return "原文和译文不能选择相同的语言。"
+        }
+    }
+}
+
+enum StandaloneTranslationRequestPolicy {
+    static func makeRequest(
+        text: String,
+        sourceChoice: TranslationSourceLanguageChoice,
+        targetLanguage: LanguageCode,
+        mode: StandaloneTranslationMode,
+        id: UUID = UUID()
+    ) throws -> StandaloneTranslationRequest {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else {
+            throw StandaloneTranslationValidationError.emptyText
+        }
+        guard normalized.count <= mode.maximumCharacterCount else {
+            throw StandaloneTranslationValidationError.textTooLong(
+                maximum: mode.maximumCharacterCount
+            )
+        }
+        guard let sourceLanguage = sourceChoice.languageCode
+                ?? ReaderLanguageDetector.detect(
+                    text: normalized,
+                    bookLanguage: nil
+                )
+        else {
+            throw StandaloneTranslationValidationError.languageNotDetected
+        }
+        guard sourceLanguage != targetLanguage else {
+            throw StandaloneTranslationValidationError.sameLanguage
+        }
+        return StandaloneTranslationRequest(
+            id: id,
+            text: normalized,
+            sourceLanguage: sourceLanguage,
+            targetLanguage: targetLanguage,
+            mode: mode
+        )
+    }
+}
+
+enum StandaloneLexicalLookupPolicy {
+    static func supports(_ request: StandaloneTranslationRequest) -> Bool {
+        request.mode == .word
+            && (request.sourceLanguage == .japanese
+                || request.sourceLanguage == .english)
+    }
+}
+
+struct JapaneseRubySegment: Equatable, Sendable {
+    let text: String
+    let reading: String?
+}
+
+/// Builds Japanese ruby locally. No translated text is sent to another
+/// service just to obtain readings, and the base string is never rewritten.
+enum JapaneseFuriganaFormatter {
+    static func segments(for text: String) -> [JapaneseRubySegment] {
+        guard !text.isEmpty else { return [] }
+
+        let source = text as CFString
+        let fullRange = CFRange(location: 0, length: CFStringGetLength(source))
+        guard let tokenizer = CFStringTokenizerCreate(
+            kCFAllocatorDefault,
+            source,
+            fullRange,
+            kCFStringTokenizerUnitWordBoundary,
+            Locale(identifier: "ja_JP") as CFLocale
+        ) else {
+            return [JapaneseRubySegment(text: text, reading: nil)]
+        }
+
+        let sourceNSString = text as NSString
+        var result: [JapaneseRubySegment] = []
+        var cursor = 0
+        var tokenType = CFStringTokenizerGoToTokenAtIndex(tokenizer, 0)
+
+        while !tokenType.isEmpty {
+            let tokenRange = CFStringTokenizerGetCurrentTokenRange(tokenizer)
+            guard tokenRange.location != kCFNotFound,
+                  tokenRange.length > 0
+            else {
+                tokenType = CFStringTokenizerAdvanceToNextToken(tokenizer)
+                continue
+            }
+
+            if tokenRange.location > cursor {
+                appendPlain(
+                    sourceNSString.substring(
+                        with: NSRange(
+                            location: cursor,
+                            length: tokenRange.location - cursor
+                        )
+                    ),
+                    to: &result
+                )
+            }
+
+            let token = sourceNSString.substring(
+                with: NSRange(
+                    location: tokenRange.location,
+                    length: tokenRange.length
+                )
+            )
+            if containsKanji(token),
+               let latin = CFStringTokenizerCopyCurrentTokenAttribute(
+                    tokenizer,
+                    kCFStringTokenizerAttributeLatinTranscription
+               ) as? String,
+               let reading = hiraganaReading(from: latin),
+               !reading.isEmpty
+            {
+                result.append(contentsOf: rubySegments(for: token, reading: reading))
+            } else {
+                appendPlain(token, to: &result)
+            }
+
+            cursor = tokenRange.location + tokenRange.length
+            tokenType = CFStringTokenizerAdvanceToNextToken(tokenizer)
+        }
+
+        if cursor < sourceNSString.length {
+            appendPlain(
+                sourceNSString.substring(
+                    with: NSRange(
+                        location: cursor,
+                        length: sourceNSString.length - cursor
+                    )
+                ),
+                to: &result
+            )
+        }
+
+        return result.isEmpty
+            ? [JapaneseRubySegment(text: text, reading: nil)]
+            : result
+    }
+
+    private struct ScriptRun {
+        let text: String
+        let isKanji: Bool
+    }
+
+    private static func rubySegments(
+        for token: String,
+        reading: String
+    ) -> [JapaneseRubySegment] {
+        let runs = scriptRuns(in: token)
+        guard runs.contains(where: \.isKanji) else {
+            return [JapaneseRubySegment(text: token, reading: nil)]
+        }
+        if runs.allSatisfy(\.isKanji) {
+            return [JapaneseRubySegment(text: token, reading: reading)]
+        }
+
+        var output: [JapaneseRubySegment] = []
+        var remainingReading = reading
+        var pendingKanji: String?
+
+        for (index, run) in runs.enumerated() {
+            if run.isKanji {
+                if pendingKanji != nil {
+                    return [JapaneseRubySegment(text: token, reading: reading)]
+                }
+                pendingKanji = run.text
+                continue
+            }
+
+            let kana = normalizedKana(in: run.text)
+            if let kanji = pendingKanji {
+                let hasLaterKanji = runs
+                    .dropFirst(index + 1)
+                    .contains(where: \.isKanji)
+                guard !kana.isEmpty,
+                      let anchorRange = remainingReading.range(
+                        of: kana,
+                        options: hasLaterKanji ? [] : .backwards
+                      )
+                else {
+                    return [JapaneseRubySegment(text: token, reading: reading)]
+                }
+                let kanjiReading = String(remainingReading[..<anchorRange.lowerBound])
+                guard !kanjiReading.isEmpty else {
+                    return [JapaneseRubySegment(text: token, reading: reading)]
+                }
+                output.append(JapaneseRubySegment(text: kanji, reading: kanjiReading))
+                appendPlain(run.text, to: &output)
+                remainingReading = String(remainingReading[anchorRange.upperBound...])
+                pendingKanji = nil
+            } else {
+                appendPlain(run.text, to: &output)
+                if !kana.isEmpty, remainingReading.hasPrefix(kana) {
+                    remainingReading.removeFirst(kana.count)
+                } else if kana.isEmpty, !remainingReading.isEmpty {
+                    return [JapaneseRubySegment(text: token, reading: reading)]
+                }
+            }
+        }
+
+        if let pendingKanji {
+            guard !remainingReading.isEmpty else {
+                return [JapaneseRubySegment(text: token, reading: reading)]
+            }
+            output.append(
+                JapaneseRubySegment(text: pendingKanji, reading: remainingReading)
+            )
+        }
+        return output
+    }
+
+    private static func scriptRuns(in text: String) -> [ScriptRun] {
+        var result: [ScriptRun] = []
+        for character in text {
+            let isKanji = character.unicodeScalars.contains(where: isKanjiScalar)
+            if let last = result.last, last.isKanji == isKanji {
+                result[result.count - 1] = ScriptRun(
+                    text: last.text + String(character),
+                    isKanji: isKanji
+                )
+            } else {
+                result.append(ScriptRun(text: String(character), isKanji: isKanji))
+            }
+        }
+        return result
+    }
+
+    private static func containsKanji(_ text: String) -> Bool {
+        text.unicodeScalars.contains(where: isKanjiScalar)
+    }
+
+    private static func isKanjiScalar(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x3400 ... 0x4DBF,
+             0x4E00 ... 0x9FFF,
+             0xF900 ... 0xFAFF,
+             0x20000 ... 0x2FA1F:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func hiraganaReading(from latin: String) -> String? {
+        latin
+            .lowercased()
+            .applyingTransform(.latinToHiragana, reverse: false)?
+            .replacingOccurrences(of: " ", with: "")
+    }
+
+    private static func normalizedKana(in text: String) -> String {
+        let hiragana = text.applyingTransform(
+            .hiraganaToKatakana,
+            reverse: true
+        ) ?? text
+        return String(
+            hiragana.unicodeScalars.filter { scalar in
+                (0x3040 ... 0x309F).contains(scalar.value)
+            }
+        )
+    }
+
+    private static func appendPlain(
+        _ text: String,
+        to segments: inout [JapaneseRubySegment]
+    ) {
+        guard !text.isEmpty else { return }
+        if let last = segments.last, last.reading == nil {
+            segments[segments.count - 1] = JapaneseRubySegment(
+                text: last.text + text,
+                reading: nil
+            )
+        } else {
+            segments.append(JapaneseRubySegment(text: text, reading: nil))
+        }
+    }
+}
+
+/// A free-form Chinese, English and Japanese translator. It deliberately owns
+/// its direction, mode and provider choices so experimenting here does not
+/// silently change the reader's translation settings.
 struct TranslateToolView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Query private var lookupRecords: [WordLookupRecord]
     @ObservedObject var translationSettings: TranslationSettingsStore
 
-    @State private var sourceChoice: TranslationSourceLanguageChoice = .automatic
-    @State private var targetLanguage: LanguageCode = .simplifiedChinese
+    @State private var sourceChoice: TranslationSourceLanguageChoice
+    @State private var targetLanguage: LanguageCode
+    @State private var mode: StandaloneTranslationMode = .sentence
+    @State private var provider: TranslationProviderChoice
     @State private var inputText = ""
     @State private var result: TranslationResult?
     @State private var errorMessage: String?
     @State private var isTranslating = false
     @State private var translateTask: Task<Void, Never>?
+    @State private var appleConfiguration: TranslationSession.Configuration?
+    @State private var pendingAppleRequest: StandaloneTranslationRequest?
+    @State private var activeRequestID: UUID?
     @State private var didCopy = false
     @State private var didSaveFavorite = false
+    @State private var wordLookupResultID: UUID?
+    @State private var wordLookupRequestID: UUID?
+    @State private var wordLookupTask: Task<Void, Never>?
+    @State private var isLookingUpWord = false
+    @State private var wordLookupErrorMessage: String?
+    @State private var referenceDictionaryTerm: ReferenceDictionaryTerm?
+    @State private var learningAlert: LearningAlert?
     @FocusState private var isInputFocused: Bool
 
-    /// Matches the per-request ceiling every translation service enforces.
-    static let maximumCharacterCount = 2_000
+    private let lexicalLookupService: any LexicalLookupService
 
-    /// Favourites need a book identity; translations typed here belong to no
-    /// book, so they share one stable namespace instead of a random UUID that
-    /// would defeat de-duplication.
     private static let standaloneBookID = UUID(
         uuidString: "00000000-0000-0000-0000-00000000A17E"
     ) ?? UUID()
+
+    init(
+        translationSettings: TranslationSettingsStore,
+        lexicalLookupService: any LexicalLookupService =
+            WiktionaryLexicalLookupService()
+    ) {
+        self.translationSettings = translationSettings
+        self.lexicalLookupService = lexicalLookupService
+        _sourceChoice = State(
+            initialValue: translationSettings.sourceLanguageChoice
+        )
+        _targetLanguage = State(
+            initialValue: translationSettings.targetLanguage
+        )
+        _provider = State(initialValue: translationSettings.provider)
+    }
 
     private var trimmedInput: String {
         inputText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var canTranslate: Bool {
-        !trimmedInput.isEmpty && !isTranslating
-            && trimmedInput.count <= Self.maximumCharacterCount
+        !trimmedInput.isEmpty
+            && !isTranslating
+            && trimmedInput.count <= mode.maximumCharacterCount
+    }
+
+    private var wordLookupResult: WordLookupRecord? {
+        guard let wordLookupResultID else { return nil }
+        return lookupRecords.first { $0.id == wordLookupResultID }
     }
 
     var body: some View {
         ScrollView {
             VStack(spacing: 14) {
-                directionCard
-                inputCard
-                if let result {
-                    resultCard(result)
-                }
+                modeAndProviderBar
+                translatorCard
+                wordLookupContent
+                providerHelp
                 if let errorMessage {
                     errorCard(errorMessage)
                 }
             }
             .padding(.horizontal, JerreaderTheme.pagePadding)
             .padding(.vertical, 16)
-            .frame(maxWidth: 680)
+            .frame(maxWidth: 720)
             .frame(maxWidth: .infinity)
         }
         .scrollDismissesKeyboard(.interactively)
-        .onDisappear { translateTask?.cancel() }
+        .translationTask(appleConfiguration) { session in
+            await performAppleTranslation(
+                using: AppleTranslationService(session: session)
+            )
+        }
+        .sheet(item: $referenceDictionaryTerm) { item in
+            SystemDictionaryView(term: item.term)
+                .ignoresSafeArea()
+        }
+        .alert(item: $learningAlert) { item in
+            Alert(
+                title: Text(item.title),
+                message: Text(item.message),
+                dismissButton: .default(Text("好"))
+            )
+        }
+        .onChange(of: mode) { cancelTranslation(clearResult: true) }
+        .onChange(of: provider) { cancelTranslation(clearResult: false) }
+        .onChange(of: sourceChoice) { clearStaleOutput() }
+        .onChange(of: targetLanguage) { clearStaleOutput() }
+        .onDisappear {
+            cancelTranslation(clearResult: false)
+            cancelWordLookup(clearResult: false)
+        }
     }
 
-    // MARK: - Direction
-
-    private var directionCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                languageMenu(
-                    title: sourceChoice.title,
-                    caption: "原文"
-                ) {
-                    ForEach(TranslationSourceLanguageChoice.allCases) { choice in
-                        Button(choice.title) { sourceChoice = choice }
-                    }
-                }
-
-                Button {
-                    swapLanguages()
-                } label: {
-                    Image(systemName: "arrow.left.arrow.right")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(
-                            canSwapLanguages ? JerreaderTheme.accent : Color.secondary
-                        )
-                        .frame(width: 38, height: 38)
-                        .background(JerreaderTheme.accentFill, in: Circle())
-                }
-                .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.9))
-                .disabled(!canSwapLanguages)
-                .accessibilityLabel("互换原文与译文语言")
-
-                languageMenu(
-                    title: targetLanguage.displayName,
-                    caption: "译文"
-                ) {
-                    ForEach(LanguageCode.allCases, id: \.self) { language in
-                        Button(language.displayName) { targetLanguage = language }
-                    }
+    private var modeAndProviderBar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("翻译模式", selection: $mode) {
+                ForEach(StandaloneTranslationMode.allCases) { option in
+                    Label(option.title, systemImage: option.symbol)
+                        .tag(option)
                 }
             }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .accessibilityIdentifier("standalone-translation-mode")
 
-            Text(providerDescription)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(14)
-        .background(JerreaderTheme.paper, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(JerreaderTheme.line, lineWidth: 0.75)
-        }
-    }
-
-    private func languageMenu(
-        title: String,
-        caption: String,
-        @ViewBuilder content: () -> some View
-    ) -> some View {
-        Menu {
-            content()
-        } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(caption)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                HStack(spacing: 4) {
-                    Text(title)
+            Menu {
+                ForEach(TranslationProviderChoice.allCases) { choice in
+                    Button {
+                        provider = choice
+                    } label: {
+                        if provider == choice {
+                            Label(choice.title, systemImage: "checkmark")
+                        } else {
+                            Text(choice.title)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Label("服务", systemImage: providerSymbol)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    Text(provider.shortTitle)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
@@ -135,55 +506,193 @@ struct TranslateToolView: View {
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(.secondary)
                 }
+                .padding(.horizontal, 4)
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .contentShape(Rectangle())
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(JerreaderTheme.line)
+                        .frame(height: 0.5)
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("翻译服务：\(provider.title)")
+            .accessibilityIdentifier("standalone-translation-provider")
+        }
+    }
+
+    private var translatorCard: some View {
+        VStack(spacing: 0) {
+            languageBar
+
+            Divider()
+
+            sourceInput
+
+            Divider()
+                .padding(.horizontal, 14)
+
+            translationOutput
+        }
+        .background(
+            JerreaderTheme.paper,
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(JerreaderTheme.line, lineWidth: 0.8)
+        }
+    }
+
+    @ViewBuilder
+    private var wordLookupContent: some View {
+        if mode == .word, isLookingUpWord {
+            Label("正在补充词典形、读音和释义…", systemImage: "book")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(14)
+                .background(
+                    JerreaderTheme.paper,
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                )
+        } else if mode == .word, let wordLookupResult {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("词典详情", systemImage: "character.book.closed")
+                    .font(.headline)
+                    .foregroundStyle(JerreaderTheme.accent)
+
+                WordRecordCard(
+                    record: wordLookupResult,
+                    onSpeak: { speakWordRecord(wordLookupResult) },
+                    onCopy: { copyWordRecord(wordLookupResult) },
+                    onToggleFavorite: {
+                        toggleWordFavorite(wordLookupResult)
+                    }
+                )
+
+                Text("词典结果已自动记入历史；收藏后会保留在生词本。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 4)
+            }
+        } else if mode == .word, let wordLookupErrorMessage {
+            VStack(alignment: .leading, spacing: 10) {
+                Label(wordLookupErrorMessage, systemImage: "book.closed")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                if UIReferenceLibraryViewController.dictionaryHasDefinition(
+                    forTerm: trimmedInput
+                ) {
+                    Button {
+                        referenceDictionaryTerm = ReferenceDictionaryTerm(
+                            term: trimmedInput
+                        )
+                    } label: {
+                        Label("打开 iOS 系统词典", systemImage: "books.vertical")
+                    }
+                    .font(.subheadline.weight(.semibold))
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(14)
             .background(
-                JerreaderTheme.accentFill.opacity(0.55),
-                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                JerreaderTheme.paper,
+                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
             )
         }
-        .buttonStyle(.plain)
     }
 
-    private var canSwapLanguages: Bool {
-        sourceChoice.languageCode != nil
-    }
+    private var languageBar: some View {
+        HStack(spacing: 8) {
+            languageMenu(
+                title: sourceChoice.title,
+                accessibilityLabel: "原文语言"
+            ) {
+                ForEach(TranslationSourceLanguageChoice.allCases) { choice in
+                    Button {
+                        sourceChoice = choice
+                    } label: {
+                        if sourceChoice == choice {
+                            Label(choice.title, systemImage: "checkmark")
+                        } else {
+                            Text(choice.title)
+                        }
+                    }
+                }
+            }
 
-    private func swapLanguages() {
-        guard let source = sourceChoice.languageCode else { return }
-        withAnimation(reduceMotion ? nil : JerreaderMotion.stateChange) {
-            let newSource = TranslationSourceLanguageChoice.allCases.first {
-                $0.languageCode == targetLanguage
-            } ?? .automatic
-            sourceChoice = newSource
-            targetLanguage = source
-            if let result {
-                inputText = result.translatedText
-                self.result = nil
+            Button(action: swapLanguages) {
+                Image(systemName: "arrow.left.arrow.right")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(
+                        canSwapLanguages ? JerreaderTheme.accent : Color.secondary
+                    )
+                    .frame(width: 44, height: 44)
+                    .background(JerreaderTheme.accentFill.opacity(0.70), in: Circle())
+            }
+            .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.9))
+            .disabled(!canSwapLanguages)
+            .accessibilityLabel("互换原文与译文语言")
+
+            languageMenu(
+                title: targetLanguage.displayName,
+                accessibilityLabel: "译文语言"
+            ) {
+                ForEach(LanguageCode.allCases, id: \.self) { language in
+                    Button {
+                        targetLanguage = language
+                    } label: {
+                        if targetLanguage == language {
+                            Label(language.displayName, systemImage: "checkmark")
+                        } else {
+                            Text(language.displayName)
+                        }
+                    }
+                }
             }
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(JerreaderTheme.mutedSurface.opacity(0.72))
     }
 
-    // MARK: - Input
+    private func languageMenu<Content: View>(
+        title: String,
+        accessibilityLabel: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        Menu(content: content) {
+            HStack(spacing: 5) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.bold))
+            }
+            .foregroundStyle(.primary)
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(accessibilityLabel)：\(title)")
+    }
 
-    private var inputCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            TextField(
-                "输入或粘贴要翻译的文字",
-                text: $inputText,
-                axis: .vertical
-            )
-            .lineLimit(4 ... 10)
-            .focused($isInputFocused)
-            .font(.body)
+    private var sourceInput: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            TextField(mode.placeholder, text: $inputText, axis: .vertical)
+                .lineLimit(mode == .word ? 2 ... 4 : 4 ... 10)
+                .focused($isInputFocused)
+                .font(.body)
+                .accessibilityIdentifier("standalone-translation-input")
 
             HStack(spacing: 10) {
-                Text("\(trimmedInput.count) / \(Self.maximumCharacterCount)")
+                Text("\(trimmedInput.count) / \(mode.maximumCharacterCount)")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(
-                        trimmedInput.count > Self.maximumCharacterCount
+                        trimmedInput.count > mode.maximumCharacterCount
                             ? Color.red
                             : .secondary
                     )
@@ -193,100 +702,143 @@ struct TranslateToolView: View {
                 if !inputText.isEmpty {
                     Button("清空") {
                         inputText = ""
-                        result = nil
-                        errorMessage = nil
+                        cancelTranslation(clearResult: true)
                     }
                     .font(.subheadline)
+                    .frame(minHeight: 44)
                 }
 
                 Button(action: translate) {
                     HStack(spacing: 6) {
                         if isTranslating {
-                            ProgressView().controlSize(.small).tint(.white)
+                            ProgressView()
+                                .controlSize(.small)
+                            .tint(JerreaderTheme.onPrimaryAction)
                         }
                         Text(isTranslating ? "翻译中" : "翻译")
                             .font(.subheadline.weight(.semibold))
                     }
-                    .foregroundStyle(.white)
+                    .foregroundStyle(JerreaderTheme.onPrimaryAction)
                     .padding(.horizontal, 18)
-                    .frame(height: 38)
+                    .frame(minHeight: 44)
                     .background(
                         canTranslate
                             ? AnyShapeStyle(JerreaderTheme.primaryAction)
                             : AnyShapeStyle(Color.gray.opacity(0.55)),
-                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        in: RoundedRectangle(
+                            cornerRadius: 12,
+                            style: .continuous
+                        )
                     )
                 }
                 .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.96))
                 .disabled(!canTranslate)
+                .accessibilityIdentifier("standalone-translate-button")
             }
         }
-        .padding(14)
-        .background(JerreaderTheme.paper, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(JerreaderTheme.line, lineWidth: 0.75)
-        }
+        .padding(16)
+        .frame(minHeight: mode == .word ? 118 : 142, alignment: .top)
     }
 
-    // MARK: - Result
-
-    private func resultCard(_ result: TranslationResult) -> some View {
+    @ViewBuilder
+    private var translationOutput: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 Label(targetLanguage.displayName, systemImage: "text.bubble")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(JerreaderTheme.accent)
                 Spacer()
-                if result.isFromCache {
+                if result?.isFromCache == true {
                     Text("缓存")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
             }
 
-            Text(result.translatedText)
-                .font(.body)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            HStack(spacing: 12) {
-                Button {
-                    UIPasteboard.general.string = result.translatedText
-                    didCopy = true
-                    Task {
-                        try? await Task.sleep(for: .seconds(2))
-                        didCopy = false
-                    }
-                } label: {
-                    Label(didCopy ? "已复制" : "复制", systemImage: didCopy ? "checkmark" : "doc.on.doc")
-                        .font(.subheadline)
+            if let result {
+                if mode == .sentence, targetLanguage == .japanese {
+                    JapaneseFuriganaText(text: result.translatedText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("standalone-translation-result")
+                } else {
+                    Text(result.translatedText)
+                        .font(.body)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("standalone-translation-result")
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(JerreaderTheme.accent)
 
-                Button {
-                    saveToFavorites(result)
-                } label: {
-                    Label(
-                        didSaveFavorite ? "已收藏" : "收藏",
-                        systemImage: didSaveFavorite ? "star.fill" : "star"
+                resultActions(result)
+            } else if isTranslating {
+                HStack(spacing: 9) {
+                    ProgressView().controlSize(.small)
+                    Text(
+                        provider == .apple
+                            ? "正在准备 Apple 翻译…"
+                            : "正在请求 AI 翻译…"
                     )
-                        .font(.subheadline)
+                    .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(JerreaderTheme.accent)
-
-                Spacer()
+                .font(.subheadline)
+            } else {
+                Text("译文会显示在这里")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
             }
         }
-        .padding(14)
-        .background(JerreaderTheme.paper, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(JerreaderTheme.line, lineWidth: 0.75)
+        .padding(16)
+        .frame(
+            maxWidth: .infinity,
+            minHeight: mode == .word ? 104 : 126,
+            alignment: .topLeading
+        )
+        .animation(
+            reduceMotion ? nil : JerreaderMotion.stateChange,
+            value: result?.translatedText
+        )
+    }
+
+    private func resultActions(_ result: TranslationResult) -> some View {
+        HStack(spacing: 18) {
+            Button {
+                UIPasteboard.general.string = result.translatedText
+                didCopy = true
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(2))
+                    didCopy = false
+                }
+            } label: {
+                Label(
+                    didCopy ? "已复制" : "复制",
+                    systemImage: didCopy ? "checkmark" : "doc.on.doc"
+                )
+                .font(.subheadline)
+                .frame(minHeight: 44)
+            }
+
+            Button {
+                saveToFavorites(result)
+            } label: {
+                Label(
+                    didSaveFavorite ? "已收藏" : "收藏",
+                    systemImage: didSaveFavorite ? "star.fill" : "star"
+                )
+                .font(.subheadline)
+                .frame(minHeight: 44)
+            }
+
+            Spacer()
         }
-        .transition(.opacity)
+        .buttonStyle(.plain)
+        .foregroundStyle(JerreaderTheme.accent)
+    }
+
+    private var providerHelp: some View {
+        Label(providerDescription, systemImage: providerSymbol)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 2)
     }
 
     private func errorCard(_ message: String) -> some View {
@@ -301,68 +853,288 @@ struct TranslateToolView: View {
             )
     }
 
-    // MARK: - Behaviour
+    private var canSwapLanguages: Bool {
+        sourceChoice.languageCode != nil
+    }
 
-    private var providerDescription: String {
-        switch translationSettings.provider {
-        case .apple:
-            return "使用系统翻译，无需联网账号；首次使用某个语言方向可能需要下载语言包。"
-        case .directAPI:
-            return "使用 \(translationSettings.directAPIProvider.title)。可在「设置 → 翻译与 AI」中更换服务或模型。"
-        case .backendProxy:
-            return "使用已配置的 HTTPS 代理。可在「设置 → 翻译与 AI」中更改。"
+    private func swapLanguages() {
+        guard let source = sourceChoice.languageCode else { return }
+        withAnimation(reduceMotion ? nil : JerreaderMotion.stateChange) {
+            sourceChoice = TranslationSourceLanguageChoice.allCases.first {
+                $0.languageCode == targetLanguage
+            } ?? .automatic
+            targetLanguage = source
+            if let result {
+                inputText = result.translatedText
+            }
+            clearStaleOutput()
         }
     }
 
-    private var resolvedService: (any TranslationService)? {
-        if let configuration = translationSettings.directAPIConfiguration {
-            return DirectAITranslationService(configuration: configuration)
+    private var providerSymbol: String {
+        switch provider {
+        case .apple: return "apple.logo"
+        case .directAPI: return "sparkles"
+        case .backendProxy: return "network"
         }
-        if let configuration = translationSettings.backendConfiguration {
-            return BackendTranslationService(configuration: configuration)
+    }
+
+    private var providerDescription: String {
+        switch provider {
+        case .apple:
+            return "Apple 系统翻译；首次使用某个语言方向时会提示下载语言包，下载后可离线使用。"
+        case .directAPI:
+            return "AI API · \(translationSettings.directAPIProvider.title)；服务与模型可在「设置 → 翻译与 AI」中配置。"
+        case .backendProxy:
+            return "AI 代理；使用你在「设置 → 翻译与 AI」中配置的 HTTPS 服务。"
         }
-        return nil
     }
 
     private func translate() {
-        let text = trimmedInput
-        guard !text.isEmpty else { return }
         isInputFocused = false
         errorMessage = nil
         translateTask?.cancel()
+        cancelWordLookup(clearResult: true)
+        pendingAppleRequest = nil
+        appleConfiguration = nil
 
-        guard let service = resolvedService else {
-            // Apple's translation runs through the reader's session-based API,
-            // which is not available outside a book; say so instead of failing
-            // silently with a generic error.
-            errorMessage = translationSettings.provider == .apple
-                ? "系统翻译目前只能在阅读界面里使用。在「设置 → 翻译与 AI」中选择一个 AI 服务后，这里就可以翻译任意文字。"
-                : "还没有配置可用的翻译服务，请先到「设置 → 翻译与 AI」中配置。"
+        let request: StandaloneTranslationRequest
+        do {
+            request = try StandaloneTranslationRequestPolicy.makeRequest(
+                text: inputText,
+                sourceChoice: sourceChoice,
+                targetLanguage: targetLanguage,
+                mode: mode
+            )
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription
+                ?? "无法开始翻译，请检查输入和语言方向。"
             return
         }
 
+        result = nil
+        activeRequestID = request.id
         isTranslating = true
-        let source = sourceChoice.languageCode
-        let target = targetLanguage
-        translateTask = Task { @MainActor in
-            defer { isTranslating = false }
-            do {
-                let output = try await service.translate(
-                    text: text,
-                    sourceLanguage: source,
-                    targetLanguage: target
-                )
-                guard !Task.isCancelled else { return }
-                withAnimation(reduceMotion ? nil : JerreaderMotion.stateChange) {
-                    result = output
+
+        switch provider {
+        case .apple:
+            pendingAppleRequest = request
+            appleConfiguration = TranslationSession.Configuration(
+                source: request.sourceLanguage.localeLanguage,
+                target: request.targetLanguage.localeLanguage
+            )
+
+        case .directAPI, .backendProxy:
+            guard let service = resolvedAIService(for: provider, mode: mode) else {
+                isTranslating = false
+                activeRequestID = nil
+                errorMessage = provider == .directAPI
+                    ? "AI API 尚未配置完成，请先到「设置 → 翻译与 AI」填写 API Key 和模型。"
+                    : "AI 代理尚未配置完成，请先到「设置 → 翻译与 AI」填写 HTTPS 地址。"
+                return
+            }
+            translateTask = Task { @MainActor in
+                await performTranslation(request, using: service)
+            }
+        }
+    }
+
+    private func resolvedAIService(
+        for provider: TranslationProviderChoice,
+        mode: StandaloneTranslationMode
+    ) -> (any TranslationService)? {
+        switch provider {
+        case .apple:
+            return nil
+        case .directAPI:
+            guard let base = translationSettings.directAPIConfiguration else {
+                return nil
+            }
+            let configuration = DirectAITranslationConfiguration(
+                provider: base.provider,
+                endpoint: base.endpoint,
+                model: base.model,
+                apiKey: base.apiKey,
+                translationPromptTemplate: mode.translationPrompt(
+                    fallback: base.translationPromptTemplate
+                ),
+                grammarAnalysisPromptTemplate:
+                    base.grammarAnalysisPromptTemplate
+            )
+            return DirectAITranslationService(configuration: configuration)
+        case .backendProxy:
+            guard let base = translationSettings.backendConfiguration else {
+                return nil
+            }
+            let configuration = BackendTranslationConfiguration(
+                endpoint: base.endpoint,
+                model: base.model,
+                accessToken: base.accessToken,
+                translationPromptTemplate: mode.translationPrompt(
+                    fallback: base.translationPromptTemplate
+                ),
+                grammarAnalysisPromptTemplate:
+                    base.grammarAnalysisPromptTemplate
+            )
+            return BackendTranslationService(configuration: configuration)
+        }
+    }
+
+    private func performAppleTranslation(
+        using service: any TranslationService
+    ) async {
+        guard let request = pendingAppleRequest,
+              activeRequestID == request.id
+        else { return }
+        await performTranslation(request, using: service)
+        if pendingAppleRequest?.id == request.id {
+            pendingAppleRequest = nil
+            appleConfiguration = nil
+        }
+    }
+
+    private func performTranslation(
+        _ request: StandaloneTranslationRequest,
+        using service: any TranslationService
+    ) async {
+        do {
+            let output = try await service.translate(
+                text: request.text,
+                sourceLanguage: request.sourceLanguage,
+                targetLanguage: request.targetLanguage
+            )
+            guard !Task.isCancelled, activeRequestID == request.id else {
+                return
+            }
+            withAnimation(reduceMotion ? nil : JerreaderMotion.stateChange) {
+                result = output
+            }
+            errorMessage = nil
+            beginWordLookup(for: request)
+        } catch is CancellationError {
+            return
+        } catch {
+            guard !Task.isCancelled, activeRequestID == request.id else {
+                return
+            }
+            errorMessage = (error as? LocalizedError)?.errorDescription
+                ?? "翻译没有完成，请稍后重试。"
+        }
+
+        guard activeRequestID == request.id else { return }
+        isTranslating = false
+        activeRequestID = nil
+    }
+
+    private func clearStaleOutput() {
+        cancelTranslation(clearResult: true)
+        errorMessage = nil
+    }
+
+    private func cancelTranslation(clearResult: Bool) {
+        translateTask?.cancel()
+        translateTask = nil
+        pendingAppleRequest = nil
+        appleConfiguration = nil
+        activeRequestID = nil
+        isTranslating = false
+        errorMessage = nil
+        if clearResult {
+            result = nil
+            cancelWordLookup(clearResult: true)
+        }
+    }
+
+    private func beginWordLookup(for request: StandaloneTranslationRequest) {
+        cancelWordLookup(clearResult: true)
+        guard StandaloneLexicalLookupPolicy.supports(request) else { return }
+
+        let currentRequestID = UUID()
+        wordLookupRequestID = currentRequestID
+        isLookingUpWord = true
+        let service = lexicalLookupService
+
+        wordLookupTask = Task { @MainActor in
+            defer {
+                if wordLookupRequestID == currentRequestID {
+                    isLookingUpWord = false
+                    wordLookupTask = nil
                 }
+            }
+            do {
+                let explanation = try await service.lookup(
+                    word: request.text,
+                    sentenceContext: nil,
+                    language: request.sourceLanguage
+                )
+                try Task.checkCancellation()
+                guard wordLookupRequestID == currentRequestID else { return }
+                let record = try WordLookupStore.record(
+                    explanation,
+                    in: modelContext
+                )
+                wordLookupResultID = record.id
+                wordLookupErrorMessage = nil
             } catch is CancellationError {
                 return
             } catch {
-                guard !Task.isCancelled else { return }
-                errorMessage = (error as? LocalizedError)?.errorDescription
-                    ?? "翻译没有完成，请稍后重试。"
+                guard wordLookupRequestID == currentRequestID else { return }
+                wordLookupErrorMessage =
+                    (error as? LocalizedError)?.errorDescription
+                    ?? "暂时无法获取词典详情，译文仍可正常使用。"
             }
+        }
+    }
+
+    private func cancelWordLookup(clearResult: Bool) {
+        wordLookupTask?.cancel()
+        wordLookupTask = nil
+        wordLookupRequestID = nil
+        isLookingUpWord = false
+        if clearResult {
+            wordLookupResultID = nil
+            wordLookupErrorMessage = nil
+        }
+    }
+
+    private func copyWordRecord(_ record: WordLookupRecord) {
+        UIPasteboard.general.string = record.copyText
+        learningAlert = LearningAlert(
+            title: "已复制",
+            message: "词典详情已复制到剪贴板。"
+        )
+    }
+
+    private func speakWordRecord(_ record: WordLookupRecord) {
+        Task { @MainActor in
+            do {
+                try await SystemSpeechService.shared.speak(
+                    record.reading ?? record.surfaceForm,
+                    language: record.language
+                )
+            } catch {
+                learningAlert = LearningAlert(
+                    title: "无法播放发音",
+                    message: (error as? LocalizedError)?.errorDescription
+                        ?? "系统语音暂时不可用。"
+                )
+            }
+        }
+    }
+
+    private func toggleWordFavorite(_ record: WordLookupRecord) {
+        do {
+            try WordLookupStore.setFavorite(
+                !record.isFavorite,
+                for: record,
+                in: modelContext
+            )
+        } catch {
+            learningAlert = LearningAlert(
+                title: "无法更新收藏",
+                message: (error as? LocalizedError)?.errorDescription
+                    ?? "请稍后重试。"
+            )
         }
     }
 
@@ -376,9 +1148,87 @@ struct TranslateToolView: View {
             result: result
         )
         didSaveFavorite = true
-        Task {
+        Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))
             didSaveFavorite = false
         }
+    }
+}
+
+private struct JapaneseFuriganaText: UIViewRepresentable {
+    let text: String
+
+    func makeUIView(context: Context) -> UITextView {
+        let textView = UITextView()
+        textView.backgroundColor = .clear
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isScrollEnabled = false
+        textView.textContainerInset = .zero
+        textView.textContainer.lineFragmentPadding = 0
+        textView.adjustsFontForContentSizeCategory = true
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        textView.accessibilityLabel = text
+        return textView
+    }
+
+    func updateUIView(_ textView: UITextView, context: Context) {
+        textView.attributedText = attributedText
+        textView.accessibilityLabel = text
+    }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        uiView: UITextView,
+        context: Context
+    ) -> CGSize? {
+        guard let width = proposal.width else { return nil }
+        let fittingSize = uiView.sizeThatFits(
+            CGSize(width: width, height: .greatestFiniteMagnitude)
+        )
+        return CGSize(width: width, height: ceil(fittingSize.height))
+    }
+
+    private var attributedText: NSAttributedString {
+        let bodyFont = UIFont.preferredFont(forTextStyle: .body)
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = max(5, bodyFont.pointSize * 0.28)
+        paragraphStyle.paragraphSpacing = 3
+
+        let output = NSMutableAttributedString()
+        for segment in JapaneseFuriganaFormatter.segments(for: text) {
+            let attributedSegment = NSMutableAttributedString(
+                string: segment.text,
+                attributes: [
+                    .font: bodyFont,
+                    .foregroundColor: UIColor.label,
+                    .paragraphStyle: paragraphStyle,
+                ]
+            )
+            if let reading = segment.reading, !reading.isEmpty {
+                let rubyString = reading as CFString
+                var rubyText = [Unmanaged<CFString>?](
+                    repeating: nil,
+                    count: 4
+                )
+                rubyText[Int(CTRubyPosition.before.rawValue)] =
+                    Unmanaged.passUnretained(rubyString)
+                let annotation = CTRubyAnnotationCreate(
+                    .auto,
+                    .auto,
+                    0.48,
+                    &rubyText
+                )
+                attributedSegment.addAttribute(
+                    NSAttributedString.Key(
+                        kCTRubyAnnotationAttributeName as String
+                    ),
+                    value: annotation,
+                    range: NSRange(location: 0, length: attributedSegment.length)
+                )
+            }
+            output.append(attributedSegment)
+        }
+        return output
     }
 }

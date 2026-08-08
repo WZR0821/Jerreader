@@ -57,6 +57,11 @@ struct BackupManifest: Codable, Sendable {
     var summary: LibraryBackupSummary
     /// Missing in v1 archives, which always represented a full backup.
     var scopes: [LibraryBackupScope]?
+    /// The backup regimen this archive was produced under. Written into every
+    /// archive regardless of the selected scopes, because a reinstall needs it
+    /// even when the user chose not to carry reading preferences across.
+    /// Absent in archives written before this existed.
+    var profile: LibraryBackupProfile?
 
     var resolvedScopes: Set<LibraryBackupScope> {
         guard let scopes else {
@@ -143,6 +148,8 @@ struct BackupBook: Codable, Sendable {
     var readerCustomSelectionColorHex: String?
     var readerSpeechRate: Double
     var readerTextOrientation: String
+    /// Optional so archives created before PDF paper mode remain decodable.
+    var readerPDFPaperModeEnabled: Bool?
     var readerDetectedPublicationLayout: String
     /// Added in archive v2. The stored publication can differ from
     /// `fileFingerprint` for DOCX/TXT, because those formats are converted to
@@ -332,6 +339,9 @@ extension LibraryBackupService {
                 readerTextOrientation: options.includes(.reading)
                     ? $0.readerTextOrientation
                     : ReaderTextOrientationChoice.publication.rawValue,
+                readerPDFPaperModeEnabled: options.includes(.reading)
+                    ? $0.readerPDFPaperModeEnabled
+                    : false,
                 readerDetectedPublicationLayout: options.includes(.reading)
                     ? $0.readerDetectedPublicationLayout
                     : "",
@@ -693,6 +703,9 @@ extension LibraryBackupService {
             readerTextOrientation: includesReading
                 ? book.readerTextOrientation
                 : ReaderTextOrientationChoice.publication.rawValue,
+            readerPDFPaperModeEnabled: includesReading
+                ? (book.readerPDFPaperModeEnabled ?? false)
+                : false,
             readerDetectedPublicationLayout: includesReading
                 ? book.readerDetectedPublicationLayout
                 : ""
@@ -734,6 +747,8 @@ extension LibraryBackupService {
             ) ?? ""
         record.readerSpeechRate = min(max(book.readerSpeechRate, 0.5), 2)
         record.readerTextOrientation = book.readerTextOrientation
+        record.readerPDFPaperModeEnabled =
+            book.readerPDFPaperModeEnabled ?? false
         record.readerDetectedPublicationLayout =
             book.readerDetectedPublicationLayout
     }

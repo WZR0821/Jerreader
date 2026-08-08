@@ -6,15 +6,18 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.jerreader.android.library.LibraryBookService
 import com.jerreader.android.library.LibraryImportService
+import com.jerreader.android.data.RoomLibraryRepository
+import com.jerreader.shared.library.LibraryBook
 import com.jerreader.shared.library.LibraryImportOutcome
 import com.jerreader.shared.library.LibraryRepository
 import com.jerreader.shared.ui.LibraryUiState
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.receiveAsFlow
 
 sealed interface LibraryEvent {
     data class OpenBook(val bookId: String) : LibraryEvent
@@ -31,7 +34,8 @@ class LibraryViewModel(
     private val bookService: LibraryBookService
 ) : ViewModel() {
     private val operation = MutableStateFlow(LibraryOperationState())
-    val events = MutableSharedFlow<LibraryEvent>(extraBufferCapacity = 1)
+    private val eventChannel = Channel<LibraryEvent>(capacity = Channel.BUFFERED)
+    val events = eventChannel.receiveAsFlow()
 
     val uiState = combine(repository.observeBooks(), operation) { books, operationState ->
         LibraryUiState(
@@ -60,7 +64,7 @@ class LibraryViewModel(
                             is LibraryImportOutcome.AlreadyImported -> "该文件已在书架中。"
                         }
                     )
-                    events.emit(LibraryEvent.OpenBook(outcome.book.id))
+                    eventChannel.send(LibraryEvent.OpenBook(outcome.book.id))
                 }
                 .onFailure { error ->
                     operation.value = LibraryOperationState(
@@ -82,6 +86,15 @@ class LibraryViewModel(
                     )
                 }
         }
+    }
+
+    fun clearMessage() {
+        operation.value = operation.value.copy(message = null)
+    }
+
+    override fun onCleared() {
+        eventChannel.close()
+        super.onCleared()
     }
 
     fun updateBook(
@@ -109,6 +122,49 @@ class LibraryViewModel(
             }.onFailure { error ->
                 operation.value = LibraryOperationState(
                     message = error.message ?: "无法更新书籍信息。"
+                )
+            }
+        }
+    }
+
+    /** Applies one batch edit inside the Room transaction when available. */
+    fun updateBooks(
+        books: List<LibraryBook>,
+        category: String,
+        series: String,
+        language: String,
+        tags: List<String>
+    ) {
+        if (books.isEmpty()) return
+        viewModelScope.launch {
+            runCatching {
+                val roomRepository = repository as? RoomLibraryRepository
+                if (roomRepository != null) {
+                    roomRepository.updateOrganizationBatch(
+                        books = books,
+                        category = category,
+                        series = series,
+                        language = language,
+                        tagsToAdd = tags
+                    )
+                } else {
+                    books.forEach { book ->
+                        repository.updateOrganization(
+                            id = book.id,
+                            title = book.title,
+                            author = book.author,
+                            language = language.ifBlank { book.language },
+                            category = category.ifBlank { book.category },
+                            series = series.ifBlank { book.series },
+                            tags = (book.tags + tags).distinctBy(String::lowercase)
+                        )
+                    }
+                }
+            }.onSuccess {
+                operation.value = LibraryOperationState(message = "批量编辑已完成。")
+            }.onFailure { error ->
+                operation.value = LibraryOperationState(
+                    message = error.message ?: "批量编辑失败，未应用更改。"
                 )
             }
         }

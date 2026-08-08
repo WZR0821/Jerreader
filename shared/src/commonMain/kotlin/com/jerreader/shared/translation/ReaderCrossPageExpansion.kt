@@ -35,24 +35,56 @@ object ReaderSentenceSegmenter {
 
     private const val TERMINATORS = "。！？!?."
     private const val CLOSING_MARKS = "」』”\"')）】》>"
+
+    /**
+     * Pairs whose contents belong to the enclosing sentence. A terminator
+     * inside one of them ends the quoted utterance, not the sentence that
+     * carries it: 「何だよ、それ。手頃なあばらやって」 is a single tap target.
+     */
+    private val QUOTE_PAIRS = mapOf(
+        '「' to '」',
+        '『' to '』',
+        '“' to '”',
+        '‘' to '’',
+        '（' to '）',
+        '(' to ')',
+        '【' to '】',
+        '《' to '》',
+        '〈' to '〉',
+        '〔' to '〕'
+    )
+
+    /**
+     * Closers that end a spoken line. Unlike a bracket, reaching one of these
+     * finishes the sentence even without a terminator inside the quote.
+     */
+    private const val SPEECH_CLOSERS = "」』”’"
+
     /** Japanese quotation helpers that continue the sentence after a mark. */
-    private val JAPANESE_QUOTE_PARTICLES = listOf("と", "って", "という", "とは", "とも")
+    private val JAPANESE_QUOTE_PARTICLES = listOf("って", "などと", "なんて")
+
+    /** `と`-initial words that begin a new sentence rather than quote one. */
+    private val JAPANESE_INDEPENDENT_STARTERS = listOf(
+        "とても", "ところ", "とにかく", "とはいえ", "とは言え", "とりあえず", "とうとう"
+    )
 
     /** Range of the sentence containing [offset], or null when out of bounds. */
     fun sentenceRange(text: String, offset: Int, language: LanguageCode?): IntRange? {
         if (text.isEmpty()) return null
         val position = offset.coerceIn(0, text.length - 1)
+        val quotes = QuoteMap(text)
+        val japanese = language == LanguageCode.JAPANESE || containsJapanese(text)
 
         var start = position
         while (start > 0) {
             val candidate = start - 1
-            if (isBoundaryAfter(text, candidate, language)) break
+            if (isBoundaryAfter(text, candidate, japanese, quotes)) break
             start = candidate
         }
         while (start < text.length && text[start].isWhitespace()) start++
 
         var end = position
-        while (end < text.length && !isBoundaryAfter(text, end, language)) end++
+        while (end < text.length && !isBoundaryAfter(text, end, japanese, quotes)) end++
         if (end < text.length) end++
         while (end < text.length && text[end] in CLOSING_MARKS) end++
 
@@ -60,20 +92,56 @@ object ReaderSentenceSegmenter {
         return start until end
     }
 
-    private fun isBoundaryAfter(text: String, index: Int, language: LanguageCode?): Boolean {
+    /**
+     * Positions of the quotation marks that actually pair up. An unbalanced
+     * `「` is ignored so a half-quoted paragraph still splits into sentences
+     * instead of collapsing into one.
+     */
+    private class QuoteMap(text: String) {
+        /** True where a character sits strictly inside a matched pair. */
+        val enclosed = BooleanArray(text.length)
+
+        /** True at the closer that completes a spoken line. */
+        val speechClose = BooleanArray(text.length)
+
+        init {
+            val openIndices = ArrayDeque<Int>()
+            text.forEachIndexed { index, character ->
+                val expected = openIndices.lastOrNull()?.let { QUOTE_PAIRS[text[it]] }
+                if (expected != null && character == expected) {
+                    val opener = openIndices.removeLast()
+                    for (inner in (opener + 1) until index) enclosed[inner] = true
+                    if (character in SPEECH_CLOSERS) speechClose[index] = true
+                } else if (character in QUOTE_PAIRS) {
+                    openIndices.addLast(index)
+                }
+            }
+        }
+    }
+
+    private fun isBoundaryAfter(
+        text: String,
+        index: Int,
+        japanese: Boolean,
+        quotes: QuoteMap
+    ): Boolean {
         val character = text[index]
-        if (character !in TERMINATORS) return false
-        if (character == '.' && isAbbreviationDot(text, index)) return false
+        val closesSpeech = quotes.speechClose[index]
+        if (!closesSpeech) {
+            if (character !in TERMINATORS) return false
+            if (character == '.' && isAbbreviationDot(text, index)) return false
+            // Inside 「…」 the terminator punctuates the quoted line; the
+            // sentence keeps running until the quote itself closes.
+            if (quotes.enclosed[index]) return false
+        }
 
         var after = index + 1
         while (after < text.length && text[after] in CLOSING_MARKS) after++
-        val closedQuote = after > index + 1
-        if (language == LanguageCode.JAPANESE || containsJapanese(text)) {
+        val closedQuote = closesSpeech || after > index + 1
+        if (japanese) {
             // 「本当？」と彼は…… keeps running: a quotation particle right after a
             // closing mark means the sentence has not ended yet.
-            if (closedQuote && JAPANESE_QUOTE_PARTICLES.any { text.startsWith(it, after) }) {
-                return false
-            }
+            if (closedQuote && continuesAfterJapaneseQuote(text, after)) return false
         } else if (closedQuote) {
             // "Stop!" he said. — a lower-case word after the closing quote
             // continues the same sentence.
@@ -83,6 +151,12 @@ object ReaderSentenceSegmenter {
             if (next != null && next.isLowerCase()) return false
         }
         return true
+    }
+
+    private fun continuesAfterJapaneseQuote(text: String, after: Int): Boolean {
+        if (JAPANESE_QUOTE_PARTICLES.any { text.startsWith(it, after) }) return true
+        if (!text.startsWith("と", after)) return false
+        return JAPANESE_INDEPENDENT_STARTERS.none { text.startsWith(it, after) }
     }
 
     /** Keeps `J. K. Rowling`, `U.S.` and `3.14` inside one sentence. */

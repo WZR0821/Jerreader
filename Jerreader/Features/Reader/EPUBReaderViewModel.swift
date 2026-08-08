@@ -54,6 +54,7 @@ final class EPUBReaderViewModel: ObservableObject {
     @Published private(set) var isQuickTranslationIndicatorVisible: Bool
     @Published private(set) var quickTranslationUnit: ReaderQuickTranslationUnit
     @Published private(set) var disablesTapPageTurnsDuringQuickTranslation: Bool
+    @Published private(set) var isPDFPaperModeEnabled: Bool
 
     let book: BookRecord
     let translationSettings: TranslationSettingsStore
@@ -193,6 +194,7 @@ final class EPUBReaderViewModel: ObservableObject {
         quickTranslationUnit = self.translationSettings.quickTranslationUnit
         disablesTapPageTurnsDuringQuickTranslation = self.translationSettings
             .disablesTapPageTurnsDuringQuickTranslation
+        isPDFPaperModeEnabled = book.readerPDFPaperModeEnabled
         translationCache = TranslationCacheStore(modelContext: modelContext)
         translationFavorites = TranslationFavoriteStore(modelContext: modelContext)
         bookmarkStore = ReadingBookmarkStore(modelContext: modelContext)
@@ -262,6 +264,111 @@ final class EPUBReaderViewModel: ObservableObject {
         )
         try? await Task.sleep(for: .milliseconds(300))
         await controller.prepareSelectionUITestTarget()
+        prepareTranslationOverlayUITestIfNeeded(using: controller)
+    }
+
+    private func prepareTranslationOverlayUITestIfNeeded(
+        using controller: EPUBReaderViewController
+    ) {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let mode = arguments
+            .first(where: {
+                $0.hasPrefix("--jerreader-translation-overlay-ui-test=")
+            })?
+            .split(separator: "=", maxSplits: 1)
+            .last
+            .map(String.init),
+            let windowBounds = controller.view.window?.bounds
+        else { return }
+        let targetFrame = controller.selectionUITestTargetFrameInWindow()
+            ?? CGRect(
+                x: windowBounds.width * 0.68,
+                y: windowBounds.height * 0.34,
+                width: 24,
+                height: 260
+            )
+
+        let sourceFrame: CGRect
+        switch mode {
+        case "vertical":
+            let width = max(targetFrame.width, 24)
+            let height = min(max(windowBounds.height * 0.60, 420), 520)
+            sourceFrame = CGRect(
+                x: min(
+                    max(targetFrame.midX - width / 2, 18),
+                    windowBounds.width - width - 18
+                ),
+                y: max((windowBounds.height - height) / 2, 74),
+                width: width,
+                height: min(height, windowBounds.height - 148)
+            )
+            publicationLayout = .verticalRTL
+            textOrientation = .publication
+        case "paragraph":
+            sourceFrame = CGRect(
+                x: 28,
+                y: windowBounds.height * 0.56,
+                width: max(windowBounds.width - 56, 1),
+                height: min(170, windowBounds.height * 0.22)
+            )
+            textOrientation = .horizontal
+        default:
+            return
+        }
+
+        let sourceText = String(
+            repeating: "これは長い段落の翻译レイアウトを確認するための原文です。",
+            count: 6
+        )
+        let translatedText = String(
+            repeating: "这是用于验证长段落翻译浮窗的测试译文，内容超出固定视口后应在窗口内上下滚动，且浮窗不得遮挡原文。",
+            count: 7
+        )
+        let request = ReaderTranslationRequest(
+            id: UUID(),
+            bookID: book.id,
+            sourceText: sourceText,
+            contextText: nil,
+            sourceLanguage: .japanese,
+            targetLanguage: .simplifiedChinese,
+            provider: .apple,
+            providerIdentifier: "ui-test",
+            providerVersion: "1",
+            locatorJSON: nil,
+            annotationLocatorJSON: nil,
+            annotationAnchorJSON: nil,
+            selectionFrame: sourceFrame,
+            focusFrame: mode == "vertical" ? targetFrame : nil,
+            trigger: .quickSentence,
+            createdAt: Date()
+        )
+        let result = TranslationResult(
+            sourceText: sourceText,
+            translatedText: translatedText,
+            sourceLanguage: .japanese,
+            targetLanguage: .simplifiedChinese,
+            providerIdentifier: "ui-test",
+            providerVersion: "1",
+            isFromCache: false
+        )
+
+        quickTranslationUnit = .paragraph
+        controlsVisible = false
+        translationConfiguration = nil
+        translationAnchorFrame = sourceFrame
+        translationState = .success(
+            request: request,
+            result: result,
+            source: .mock
+        )
+        controller.installTranslationUITestSelection(frameInWindow: sourceFrame)
+    }
+
+    func installTranslationUITestCard(frameInWindow: CGRect) {
+        guard let controller = controller as? EPUBReaderViewController else {
+            return
+        }
+        controller.installTranslationUITestCard(frameInWindow: frameInWindow)
     }
 #endif
 
@@ -329,20 +436,17 @@ final class EPUBReaderViewModel: ObservableObject {
             }
 
             if book.format.usesReflowableReader {
-                if let cachedLayout = ReaderPublicationLayout(
-                    rawValue: book.readerDetectedPublicationLayout
-                ) {
-                    publicationLayout = cachedLayout
-                } else {
-                    let detectedLayout =
-                        await JapanesePublicationLayoutDetector.detect(
-                            in: publication,
-                            fallbackLanguage: book.language
-                        )
-                    publicationLayout = detectedLayout
-                    book.readerDetectedPublicationLayout =
-                        detectedLayout.rawValue
-                }
+                // Re-read the publication styles on open. Older releases can
+                // have cached `.horizontalLTR` before vertical CSS detection
+                // was complete; trusting that cache forever makes the new
+                // adjacent floating-window layout impossible to reach for existing books.
+                let detectedLayout =
+                    await JapanesePublicationLayoutDetector.detect(
+                        in: publication,
+                        fallbackLanguage: book.language
+                    )
+                publicationLayout = detectedLayout
+                book.readerDetectedPublicationLayout = detectedLayout.rawValue
             }
 
             let controller: any PublicationReaderController
@@ -354,7 +458,8 @@ final class EPUBReaderViewModel: ObservableObject {
                         theme: theme,
                         customBackgroundHex: customBackgroundHex,
                         customSelectionColorHex: customSelectionColorHex,
-                        bookLanguage: book.language
+                        bookLanguage: book.language,
+                        paperModeEnabled: isPDFPaperModeEnabled
                     )
                 } else {
                     controller = try EPUBReaderViewController(
@@ -972,6 +1077,18 @@ final class EPUBReaderViewModel: ObservableObject {
         controlsVisible = true
     }
 
+    func setPDFPaperModeEnabled(_ enabled: Bool) {
+        guard book.format == .pdf,
+              isPDFPaperModeEnabled != enabled
+        else { return }
+        dismissTranslation()
+        isPDFPaperModeEnabled = enabled
+        book.readerPDFPaperModeEnabled = enabled
+        controller?.setPDFPaperModeEnabled(enabled)
+        saveModelChanges()
+        controlsVisible = true
+    }
+
     /// The compact right-edge affordance is intentionally temporary. It is
     /// only a reminder of the active gesture mode; hiding it must not silently
     /// disable point-to-translate.
@@ -1083,6 +1200,7 @@ final class EPUBReaderViewModel: ObservableObject {
             annotationLocatorJSON: payload.annotationLocatorJSON,
             annotationAnchorJSON: payload.annotationAnchorJSON,
             selectionFrame: translationAnchorFrame ?? payload.frame,
+            focusFrame: payload.focusFrame,
             trigger: payload.trigger,
             createdAt: Date()
         )
@@ -1137,6 +1255,7 @@ final class EPUBReaderViewModel: ObservableObject {
             annotationLocatorJSON: current.annotationLocatorJSON,
             annotationAnchorJSON: current.annotationAnchorJSON,
             selectionFrame: translationAnchorFrame ?? current.selectionFrame,
+            focusFrame: current.focusFrame,
             trigger: current.trigger,
             createdAt: Date()
         )
@@ -1183,6 +1302,7 @@ final class EPUBReaderViewModel: ObservableObject {
             annotationLocatorJSON: current.annotationLocatorJSON,
             annotationAnchorJSON: current.annotationAnchorJSON,
             selectionFrame: translationAnchorFrame ?? current.selectionFrame,
+            focusFrame: current.focusFrame,
             trigger: current.trigger,
             createdAt: Date()
         )
@@ -2067,6 +2187,7 @@ final class EPUBReaderViewModel: ObservableObject {
             annotationAnchorJSON: nil,
             allowsAnnotation: false,
             frame: translationAnchorFrame ?? request.selectionFrame,
+            focusFrame: request.focusFrame,
             trigger: .crossPageExpansion
         )
     }
@@ -2313,6 +2434,7 @@ final class EPUBReaderViewModel: ObservableObject {
             annotationLocatorJSON: request.annotationLocatorJSON,
             annotationAnchorJSON: request.annotationAnchorJSON,
             selectionFrame: translationAnchorFrame ?? request.selectionFrame,
+            focusFrame: request.focusFrame,
             trigger: request.trigger,
             createdAt: Date(),
             didUseFallback: true

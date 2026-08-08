@@ -1,7 +1,19 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.ksp)
+}
+
+// Signing credentials live outside the build script so the keystore password
+// never lands in version control. Without this file the release build stays
+// unsigned, which Android refuses to install.
+val keystoreProperties = Properties().apply {
+    val file = rootProject.file("keystore.properties")
+    if (file.exists()) {
+        file.inputStream().use { load(it) }
+    }
 }
 
 android {
@@ -12,9 +24,28 @@ android {
         applicationId = "com.jerreader.android"
         minSdk = 23
         targetSdk = 36
-        versionCode = 43
-        versionName = "1.0.2"
+        versionCode = 47
+        versionName = "1.1.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        if (keystoreProperties.getProperty("storeFile") != null) {
+            create("release") {
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+                enableV1Signing = true
+                enableV2Signing = true
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            signingConfig = signingConfigs.findByName("release")
+        }
     }
 
     compileOptions {
@@ -50,6 +81,9 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.core)
+    // Backup writes into a folder the user grants through the Storage
+    // Access Framework, which is addressed by tree document rather than path.
+    implementation(libs.androidx.documentfile)
     implementation(libs.androidx.fragment)
     implementation(libs.androidx.lifecycle.runtime)
     implementation(libs.androidx.lifecycle.runtime.compose)
@@ -62,6 +96,9 @@ dependencies {
     implementation(libs.readium.streamer)
     implementation(libs.readium.navigator)
     implementation(libs.readium.pdfium)
+    // Readium's PDF navigator embeds this viewer as a runtime dependency;
+    // keep it explicit so tap translation can follow its zoom/scroll matrix.
+    implementation(libs.android.pdf.viewer)
     implementation(libs.mlkit.text.recognition)
     implementation(libs.mlkit.text.recognition.japanese)
     implementation(libs.mlkit.translate)
@@ -69,6 +106,10 @@ dependencies {
     ksp(libs.androidx.room.compiler)
 
     testImplementation(libs.junit)
+    // The android.jar stub returns defaults for org.json, which makes a JSON
+    // round trip untestable. A real implementation on the unit-test classpath
+    // is what lets the manifest parsing be covered without an emulator.
+    testImplementation("org.json:json:20240303")
 
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.runner)

@@ -3,7 +3,7 @@
 set -eu
 
 PROJECT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-OUTPUT_DIR="$PROJECT_ROOT/dist"
+OUTPUT_DIR="$PROJECT_ROOT/dist/Android"
 SOURCE_APK="$PROJECT_ROOT/androidApp/build/outputs/apk/debug/androidApp-debug.apk"
 TARGET_APK="$OUTPUT_DIR/Jerreader-Android-M4-TapLookup-installable.apk"
 CHECKSUM_FILE="$TARGET_APK.sha256"

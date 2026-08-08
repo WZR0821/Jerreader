@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 @MainActor
@@ -6,7 +7,60 @@ final class JerreaderSelectionUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    func testStandaloneTranslatorShowsDirectionModeAndProviderControls() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-ApplePersistenceIgnoreState",
+            "YES"
+        ]
+        app.launch()
+
+        let learningTab = app.tabBars.buttons["学习"]
+        XCTAssertTrue(learningTab.waitForExistence(timeout: 20))
+        learningTab.tap()
+        XCTAssertTrue(app.navigationBars["学习"].waitForExistence(timeout: 8))
+
+        let translateSection = app.buttons["翻译"].firstMatch
+        XCTAssertTrue(translateSection.waitForExistence(timeout: 5))
+        translateSection.tap()
+
+        let mode = app.descendants(matching: .any)
+            .matching(identifier: "standalone-translation-mode")
+            .firstMatch
+        let provider = app.descendants(matching: .any)
+            .matching(identifier: "standalone-translation-provider")
+            .firstMatch
+        let input = app.descendants(matching: .any)
+            .matching(identifier: "standalone-translation-input")
+            .firstMatch
+        let translateButton = app.descendants(matching: .any)
+            .matching(identifier: "standalone-translate-button")
+            .firstMatch
+
+        XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        XCTAssertTrue(provider.exists)
+        XCTAssertTrue(input.exists)
+        XCTAssertTrue(translateButton.exists)
+        XCTAssertTrue(app.staticTexts["自动识别"].exists)
+        XCTAssertTrue(app.staticTexts["简体中文"].exists)
+        XCTAssertTrue(app.staticTexts["译文会显示在这里"].exists)
+
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "standalone-translator-redesign"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        app.terminate()
+    }
+
     func testIPadShellUsesWholePortraitAndLandscapeWindow() throws {
+        // The window sizes below only describe an iPad. On an iPhone
+        // destination this used to fail rather than skip, which made a red
+        // suite the normal state and hid the failures that matter.
+        try XCTSkipUnless(
+            UIDevice.current.userInterfaceIdiom == .pad,
+            "iPad 专用：请在 iPad 模拟器上运行"
+        )
+
         let device = XCUIDevice.shared
         device.orientation = .portrait
         addTeardownBlock {
@@ -21,7 +75,7 @@ final class JerreaderSelectionUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(
-            app.navigationBars["书库"].waitForExistence(timeout: 15),
+            app.navigationBars["书架"].waitForExistence(timeout: 15),
             "The library shell did not finish launching"
         )
         XCTAssertTrue(
@@ -63,7 +117,7 @@ final class JerreaderSelectionUITests: XCTestCase {
         XCTAssertEqual(landscapeFrame.minY, 0, accuracy: 1)
         XCTAssertGreaterThan(landscapeFrame.width, landscapeFrame.height)
         XCTAssertGreaterThanOrEqual(landscapeFrame.width, 1_000)
-        XCTAssertTrue(app.navigationBars["书库"].exists)
+        XCTAssertTrue(app.navigationBars["书架"].exists)
         XCTAssertTrue(app.buttons["导入电子书"].exists)
 
         // The automation coordinate space switches before CoreAnimation has
@@ -95,7 +149,7 @@ final class JerreaderSelectionUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(
-            app.navigationBars["书库"].waitForExistence(timeout: 15)
+            app.navigationBars["书架"].waitForExistence(timeout: 15)
         )
 
         let window = app.windows.firstMatch
@@ -149,7 +203,7 @@ final class JerreaderSelectionUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(
-            app.navigationBars["书库"].waitForExistence(timeout: 15)
+            app.navigationBars["书架"].waitForExistence(timeout: 15)
         )
         let settingsTab = app.tabBars.buttons["设置"]
         XCTAssertTrue(settingsTab.waitForExistence(timeout: 5))
@@ -200,6 +254,43 @@ final class JerreaderSelectionUITests: XCTestCase {
         attachment.name = "iphone-backup-center"
         attachment.lifetime = .keepAlways
         add(attachment)
+
+        app.terminate()
+    }
+
+    /// A reinstall lands on an empty shelf, which is exactly when the user has
+    /// a backup to bring back and no reason to go looking in 设置 for it.
+    func testEmptyShelfOffersRestoringFromABackup() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-ApplePersistenceIgnoreState",
+            "YES"
+        ]
+        app.launch()
+
+        XCTAssertTrue(
+            app.navigationBars["书架"].waitForExistence(timeout: 15)
+        )
+        let restore = app.buttons["library-restore-backup"]
+        guard restore.waitForExistence(timeout: 5) else {
+            throw XCTSkip("书架里已经有书，空书架入口不会出现")
+        }
+        XCTAssertTrue(
+            app.staticTexts["装过 Jerreader 的话，选中以前的备份文件即可恢复书架、进度和备份计划。"]
+                .exists
+        )
+
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = "iphone-empty-library-restore-entry"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        restore.tap()
+        // The backup centre opens the file picker by itself, and that picker is
+        // another process; asserting the centre is up is what this owns.
+        XCTAssertTrue(
+            app.navigationBars["备份中心"].waitForExistence(timeout: 8)
+        )
 
         app.terminate()
     }
@@ -335,7 +426,7 @@ final class JerreaderSelectionUITests: XCTestCase {
         let closeReader = app.buttons["关闭阅读器"]
         XCTAssertTrue(closeReader.waitForExistence(timeout: 5))
         tapVisibleControlByCoordinate(closeReader, in: app)
-        XCTAssertTrue(app.navigationBars["书库"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.navigationBars["书架"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.buttons["批量整理书籍"].exists)
 
         let managementMenus = app.buttons.matching(
@@ -390,6 +481,78 @@ final class JerreaderSelectionUITests: XCTestCase {
 
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = "reader-speech-controls-temporarily-removed"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        app.terminate()
+    }
+
+    func testLongParagraphTranslationUsesBoundedScrollableFloatingWindow()
+        throws
+    {
+        try verifyTranslationFloatingWindow(mode: "paragraph")
+    }
+
+    func testVerticalTranslationFloatsToTheLeftOrRightOfOriginalText() throws {
+        try verifyTranslationFloatingWindow(mode: "vertical")
+    }
+
+    private func verifyTranslationFloatingWindow(mode: String) throws {
+        guard ProcessInfo.processInfo.environment["JERREADER_RUN_REAL_RUBY_UI_TESTS"] == "1"
+        else {
+            throw XCTSkip("Inject UITestRubyBook.epub and enable the real-ruby UI test")
+        }
+
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--jerreader-selection-ui-test",
+            "--jerreader-selection-test-href=part0005",
+            "--jerreader-selection-orientation=\(mode == "vertical" ? "publication" : "horizontal")",
+            "--jerreader-translation-overlay-ui-test=\(mode)",
+            "-ApplePersistenceIgnoreState",
+            "YES"
+        ]
+        app.launch()
+
+        let original = app.descendants(matching: .any)
+            .matching(identifier: "translation-source-diagnostic")
+            .firstMatch
+        let floatingWindow = app.descendants(matching: .any)
+            .matching(identifier: "translation-card-diagnostic")
+            .firstMatch
+        XCTAssertTrue(original.waitForExistence(timeout: 60))
+        XCTAssertTrue(floatingWindow.waitForExistence(timeout: 30))
+
+        let originalFrame = original.frame
+        let windowFrame = floatingWindow.frame
+        XCTAssertFalse(originalFrame.isEmpty)
+        XCTAssertFalse(windowFrame.isEmpty)
+        XCTAssertGreaterThanOrEqual(windowFrame.height, 285)
+        XCTAssertLessThanOrEqual(windowFrame.height, 306)
+        XCTAssertFalse(
+            windowFrame.intersects(originalFrame),
+            "The translation window covers the original text: window=\(windowFrame) original=\(originalFrame)"
+        )
+
+        if mode == "vertical" {
+            let isLeft = windowFrame.maxX <= originalFrame.minX + 1
+            let isRight = windowFrame.minX >= originalFrame.maxX - 1
+            XCTAssertTrue(
+                isLeft || isRight,
+                "The vertical translation window is not beside the original column"
+            )
+            XCTAssertGreaterThanOrEqual(windowFrame.width, 143)
+        }
+
+        let start = app.coordinate(withNormalizedOffset: .zero).withOffset(
+            CGVector(dx: windowFrame.midX, dy: windowFrame.midY + 70)
+        )
+        let end = app.coordinate(withNormalizedOffset: .zero).withOffset(
+            CGVector(dx: windowFrame.midX, dy: windowFrame.midY - 70)
+        )
+        start.press(forDuration: 0.05, thenDragTo: end)
+        XCTAssertTrue(floatingWindow.exists)
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "translation-floating-window-\(mode)"
         attachment.lifetime = .keepAlways
         add(attachment)
         app.terminate()

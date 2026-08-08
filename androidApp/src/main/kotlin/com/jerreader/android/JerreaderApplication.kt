@@ -1,6 +1,9 @@
 package com.jerreader.android
 
 import android.app.Application
+import com.jerreader.android.backup.BackupDirectoryStore
+import com.jerreader.android.backup.BackupPolicyStore
+import com.jerreader.android.backup.LibraryBackupService
 import com.jerreader.android.data.JerreaderDatabase
 import com.jerreader.android.data.RoomLibraryRepository
 import com.jerreader.android.library.ImmutablePublicationStore
@@ -28,7 +31,7 @@ class JerreaderApplication : Application() {
 
 class AppGraph(application: Application) {
     val database = JerreaderDatabase.build(application)
-    val repository = RoomLibraryRepository(database.bookDao())
+    val repository = RoomLibraryRepository(database.bookDao(), database)
     val publicationStore = ImmutablePublicationStore(application)
     val readium = ReadiumEnvironment(application)
     val importService = LibraryImportService(publicationStore, readium, repository)
@@ -39,15 +42,28 @@ class AppGraph(application: Application) {
     val appSettings = AndroidAppSettingsStore(application)
     private val configuredTranslationService = ConfiguredTranslationService(translationSettings)
     val translationCache = TranslationCacheRepository(database.translationCacheDao())
-    var translationService: TranslationService = CachedTranslationService(
+    /** Typed so the translate page can pass its own provider for one request. */
+    val cachedTranslationService = CachedTranslationService(
         configuredTranslationService,
         translationCache,
         translationSettings
     )
+    var translationService: TranslationService = cachedTranslationService
     val lexicalLookupService = ResilientLexicalLookupService(
         DefaultLexicalLookupService(),
         translationService as com.jerreader.shared.translation.ContextExplanationService
     )
     val speechService = AndroidSpeechService(application)
+    val backupDirectory = BackupDirectoryStore(application)
+    val backupPolicy = BackupPolicyStore(application)
+    val backupService = LibraryBackupService(
+        context = application,
+        database = database,
+        publicationStore = publicationStore,
+        appSettings = appSettings,
+        translationSettings = translationSettings,
+        directoryStore = backupDirectory,
+        policyStore = backupPolicy
+    )
     val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 }

@@ -276,22 +276,41 @@ enum ReaderCustomBackground {
         )
     }
 
+    /// A `#RRGGBB` string for any colour the pickers can produce.
+    ///
+    /// `ColorPicker` hands back Display-P3 colours, and `getRed` reports those
+    /// in *extended* sRGB — components legitimately outside 0...1. Feeding an
+    /// out-of-range component to `%02X` printed three or more hex digits, so the
+    /// result failed `normalizedHex` and the caller either ignored the change or
+    /// stored an empty string. That is why picking a vivid colour appeared to do
+    /// nothing while a muted one worked: the wide-gamut ones were the ones that
+    /// overflowed. Clamping projects them onto the nearest sRGB colour instead.
+    ///
+    /// Grayscale colours do not answer `getRed` at all on some paths, so they
+    /// fall back to `getWhite`.
     static func hex(from color: UIColor) -> String? {
         var red: CGFloat = 0
         var green: CGFloat = 0
         var blue: CGFloat = 0
         var alpha: CGFloat = 0
-        guard color.getRed(
-            &red,
-            green: &green,
-            blue: &blue,
-            alpha: &alpha
-        ) else { return nil }
+        if !color.getRed(&red, green: &green, blue: &blue, alpha: &alpha) {
+            var white: CGFloat = 0
+            guard color.getWhite(&white, alpha: &alpha) else { return nil }
+            red = white
+            green = white
+            blue = white
+        }
+
+        func channel(_ value: CGFloat) -> Int {
+            guard value.isFinite else { return 0 }
+            return Int((min(max(value, 0), 1) * 255).rounded())
+        }
+
         return String(
             format: "#%02X%02X%02X",
-            Int((red * 255).rounded()),
-            Int((green * 255).rounded()),
-            Int((blue * 255).rounded())
+            channel(red),
+            channel(green),
+            channel(blue)
         )
     }
 
@@ -756,6 +775,11 @@ struct ReaderSelectionPayload: Equatable, Sendable {
     /// Optional PDF page geometry. EPUB annotations use the locator only.
     let annotationAnchorJSON: String?
     let frame: CGRect?
+    /// The glyph or column which initiated a quick translation. A paragraph
+    /// selection can span several vertical columns, so this narrower anchor
+    /// lets the overlay choose the opposite side without losing the complete
+    /// selection rectangle used for highlighting and annotation.
+    let focusFrame: CGRect?
     let trigger: ReaderTranslationTrigger
 
     init(
@@ -766,6 +790,7 @@ struct ReaderSelectionPayload: Equatable, Sendable {
         annotationAnchorJSON: String? = nil,
         allowsAnnotation: Bool = true,
         frame: CGRect?,
+        focusFrame: CGRect? = nil,
         trigger: ReaderTranslationTrigger = .smartSelection
     ) {
         self.text = text
@@ -776,6 +801,7 @@ struct ReaderSelectionPayload: Equatable, Sendable {
             : nil
         self.annotationAnchorJSON = annotationAnchorJSON
         self.frame = frame
+        self.focusFrame = focusFrame
         self.trigger = trigger
     }
 }
@@ -1921,6 +1947,164 @@ enum PDFTextLayerSentenceSelector {
     }
 }
 
+/// One physical text-layer line in PDF page coordinates. Paper mode uses
+/// geometry only to choose a column; the character ranges still come from
+/// PDFKit and are never inferred from rendered pixels.
+struct PDFPaperTextLine: Equatable, Sendable {
+    let text: String
+    let pageUTF16Range: NSRange
+    let bounds: CGRect
+}
+
+struct PDFPaperTextSelection: Equatable, Sendable {
+    let text: String
+    let contextText: String?
+    let pageUTF16Ranges: [NSRange]
+}
+
+/// Builds a sentence or paragraph from the physical lines in the tapped
+/// column. This is opt-in because ordinary PDFs can contain centered text,
+/// forms or other layouts where a forced two-column interpretation is wrong.
+enum PDFPaperTextSelector {
+    private struct MappedLine {
+        let source: PDFPaperTextLine
+        let localRange: Range<Int>
+    }
+
+    static func selection(
+        unit: ReaderQuickTranslationUnit,
+        pageBounds: CGRect,
+        pagePoint: CGPoint,
+        utf16Offset: Int,
+        lines: [PDFPaperTextLine],
+        language: LanguageCode?
+    ) -> PDFPaperTextSelection? {
+        let page = pageBounds.standardized
+        guard page.width > 0, page.height > 0 else { return nil }
+
+        let validLines = lines.filter {
+            let range = $0.pageUTF16Range
+            let box = $0.bounds.standardized
+            return range.location != NSNotFound
+                && range.location >= 0
+                && range.length > 0
+                && range.length == $0.text.utf16.count
+                && !box.isEmpty
+                && box.minX.isFinite
+                && box.minY.isFinite
+                && box.width.isFinite
+                && box.height.isFinite
+        }
+        guard !validLines.isEmpty else { return nil }
+
+        let target = validLines.first(where: {
+            NSLocationInRange(utf16Offset, $0.pageUTF16Range)
+        }) ?? validLines.min(by: {
+            squaredDistance(from: pagePoint, to: $0.bounds)
+                < squaredDistance(from: pagePoint, to: $1.bounds)
+        })
+        guard let target else { return nil }
+
+        // Full-width titles, abstracts and captions are intentionally handled
+        // by the normal PDF selector. Paper mode only takes over when the tap
+        // is clearly inside a body column and another body column exists.
+        let maximumColumnWidth = page.width * 0.72
+        guard target.bounds.width < maximumColumnWidth else { return nil }
+        let dividerX = page.midX
+        let targetIsLeft = target.bounds.midX < dividerX
+        let bodyLines = validLines.filter { $0.bounds.width < maximumColumnWidth }
+        guard bodyLines.contains(where: {
+            ($0.bounds.midX < dividerX) != targetIsLeft
+        }) else { return nil }
+
+        let columnLines = bodyLines.filter {
+            ($0.bounds.midX < dividerX) == targetIsLeft
+        }.sorted { lhs, rhs in
+            let verticalThreshold = max(lhs.bounds.height, rhs.bounds.height) * 0.45
+            if abs(lhs.bounds.midY - rhs.bounds.midY) > verticalThreshold {
+                // PDF page coordinates use a lower-left origin.
+                return lhs.bounds.midY > rhs.bounds.midY
+            }
+            return lhs.pageUTF16Range.location < rhs.pageUTF16Range.location
+        }
+        guard columnLines.contains(where: {
+            $0.pageUTF16Range == target.pageUTF16Range
+        }) else { return nil }
+
+        var columnText = ""
+        var mapped: [MappedLine] = []
+        mapped.reserveCapacity(columnLines.count)
+        for line in columnLines {
+            if !columnText.isEmpty { columnText.append("\n") }
+            let start = columnText.utf16.count
+            columnText.append(line.text)
+            mapped.append(
+                MappedLine(
+                    source: line,
+                    localRange: start ..< columnText.utf16.count
+                )
+            )
+        }
+        guard let targetMap = mapped.first(where: {
+            $0.source.pageUTF16Range == target.pageUTF16Range
+        }) else { return nil }
+        let offsetWithinTarget = min(
+            max(utf16Offset - target.pageUTF16Range.location, 0),
+            max(targetMap.localRange.count - 1, 0)
+        )
+        let localOffset = targetMap.localRange.lowerBound + offsetWithinTarget
+
+        let segment: ReaderSentenceSegment?
+        switch unit {
+        case .sentence:
+            segment = PDFTextLayerSentenceSelector.sentence(
+                in: columnText,
+                utf16Offset: localOffset,
+                language: language
+            )
+        case .paragraph:
+            segment = PDFTextLayerSentenceSelector.paragraph(
+                in: columnText,
+                utf16Offset: localOffset
+            )
+        }
+        guard let segment else { return nil }
+
+        let pageRanges = mapped.compactMap { item -> NSRange? in
+            let lower = max(
+                item.localRange.lowerBound,
+                segment.utf16Range.lowerBound
+            )
+            let upper = min(
+                item.localRange.upperBound,
+                segment.utf16Range.upperBound
+            )
+            guard lower < upper else { return nil }
+            return NSRange(
+                location: item.source.pageUTF16Range.location
+                    + lower - item.localRange.lowerBound,
+                length: upper - lower
+            )
+        }
+        guard !pageRanges.isEmpty else { return nil }
+        return PDFPaperTextSelection(
+            text: segment.text,
+            contextText: segment.contextText,
+            pageUTF16Ranges: pageRanges
+        )
+    }
+
+    private static func squaredDistance(
+        from point: CGPoint,
+        to rectangle: CGRect
+    ) -> CGFloat {
+        let box = rectangle.standardized
+        let dx = max(max(box.minX - point.x, 0), point.x - box.maxX)
+        let dy = max(max(box.minY - point.y, 0), point.y - box.maxY)
+        return dx * dx + dy * dy
+    }
+}
+
 enum PDFTranslationMenuPolicy {
     static func normalizedText(_ text: String?) -> String? {
         guard let text else { return nil }
@@ -1995,7 +2179,8 @@ enum PDFOCRTextSelector {
     static func sentence(
         at point: CGPoint,
         observations: [PDFOCRTextObservation],
-        preferredLanguage: LanguageCode?
+        preferredLanguage: LanguageCode?,
+        paperMode: Bool = false
     ) -> PDFOCRSentenceSelection? {
         let unitPage = CGRect(x: 0, y: 0, width: 1, height: 1)
         let recognizedLines = observations.enumerated().compactMap { index, observation -> IndexedLine? in
@@ -2026,7 +2211,10 @@ enum PDFOCRTextSelector {
         // a kanji-only OCR line can be classified as Chinese. Geometry is the
         // reliable source of truth for vertical reading order.
         let isVerticalText = isVerticalFlow(target, among: lines)
-        let sameFlowLines = lines.filter {
+        let flowCandidates = paperMode && !isVerticalText
+            ? paperColumnLines(containing: target, among: lines)
+            : lines
+        let sameFlowLines = flowCandidates.filter {
             belongsToSameFlow(
                 $0.box,
                 as: target.box,
@@ -2106,7 +2294,8 @@ enum PDFOCRTextSelector {
     static func paragraph(
         at point: CGPoint,
         observations: [PDFOCRTextObservation],
-        preferredLanguage: LanguageCode?
+        preferredLanguage: LanguageCode?,
+        paperMode: Bool = false
     ) -> PDFOCRSentenceSelection? {
         let unitPage = CGRect(x: 0, y: 0, width: 1, height: 1)
         let recognizedLines = observations.enumerated().compactMap {
@@ -2132,7 +2321,10 @@ enum PDFOCRTextSelector {
         let language = preferredLanguage
             ?? ReaderLanguageDetector.detect(text: target.text, bookLanguage: nil)
         let vertical = isVerticalFlow(target, among: lines)
-        let ordered = lines.filter {
+        let flowCandidates = paperMode && !vertical
+            ? paperColumnLines(containing: target, among: lines)
+            : lines
+        let ordered = flowCandidates.filter {
             belongsToSameFlow($0.box, as: target.box, vertical: vertical)
         }.sorted {
             readingOrder($0.box, before: $1.box, vertical: vertical)
@@ -2260,6 +2452,25 @@ enum PDFOCRTextSelector {
                     $0.box.minY ... $0.box.maxY,
                     target.box.minY ... target.box.maxY
                 ) > 0
+        }
+    }
+
+    /// Vision normally returns one observation per printed line, but its
+    /// reading order can still alternate between two academic-paper columns.
+    /// In paper mode, full-width headings/captions fall back to the existing
+    /// flow logic while body text is restricted to the tapped half-page.
+    private static func paperColumnLines(
+        containing target: IndexedLine,
+        among lines: [IndexedLine]
+    ) -> [IndexedLine] {
+        guard target.box.width < 0.72 else { return lines }
+        let targetIsLeft = target.box.midX < 0.5
+        let bodyLines = lines.filter { $0.box.width < 0.72 }
+        guard bodyLines.contains(where: {
+            ($0.box.midX < 0.5) != targetIsLeft
+        }) else { return lines }
+        return bodyLines.filter {
+            ($0.box.midX < 0.5) == targetIsLeft
         }
     }
 
@@ -2753,6 +2964,7 @@ struct ReaderTranslationRequest: Identifiable, Equatable, Sendable {
     let annotationLocatorJSON: String?
     let annotationAnchorJSON: String?
     let selectionFrame: CGRect?
+    let focusFrame: CGRect?
     let trigger: ReaderTranslationTrigger
     let createdAt: Date
     var didUseFallback: Bool = false
@@ -3164,10 +3376,72 @@ enum ReaderTranslationAccentMetric {
 }
 
 enum ReaderTranslationContentMetric {
-    static func height(measured: CGFloat, maximum: CGFloat) -> CGFloat {
+    static func height(
+        measured: CGFloat,
+        maximum: CGFloat
+    ) -> CGFloat {
         let safeMaximum = maximum.isFinite ? max(maximum, 54) : 54
         guard measured.isFinite, measured > 0 else { return 54 }
         return min(max(measured, 54), safeMaximum)
+    }
+}
+
+enum ReaderTranslationViewportPolicy {
+    /// Longer requests are allowed a larger maximum viewport. The actual card
+    /// still hugs the measured result and only reaches this cap when its text
+    /// genuinely needs to scroll.
+    static func prefersExpandedMaximumHeight(
+        sourceCharacterCount: Int,
+        translatedCharacterCount: Int,
+        isParagraph: Bool
+    ) -> Bool {
+        if isParagraph {
+            return translatedCharacterCount >= 40
+                || sourceCharacterCount >= 72
+        }
+        return translatedCharacterCount >= 64
+            || sourceCharacterCount >= 96
+    }
+}
+
+enum ReaderTranslationLayoutPolicy {
+    static func usesVerticalSideAvoidance(
+        isReflowable: Bool,
+        preservesPublicationOrientation: Bool,
+        publicationIsVertical: Bool,
+        isJapaneseBook: Bool,
+        selectionFrame: CGRect?
+    ) -> Bool {
+        guard isReflowable, preservesPublicationOrientation else {
+            return false
+        }
+        if publicationIsVertical {
+            return true
+        }
+
+        // EPUB language metadata is optional and frequently absent. A tall,
+        // narrow live target is stronger evidence of a vertical column than
+        // the language tag, while ordinary horizontal paragraphs are not
+        // narrow enough to pass this fallback.
+        _ = isJapaneseBook
+        guard let frame = selectionFrame?.standardized,
+              frame.width.isFinite,
+              frame.height.isFinite,
+              !frame.isEmpty
+        else { return false }
+        return frame.height >= 120 && frame.height >= frame.width * 1.6
+    }
+
+    static func selectionGap(
+        isParagraph: Bool,
+        usesVerticalSideAvoidance: Bool
+    ) -> CGFloat {
+        if usesVerticalSideAvoidance {
+            // On a phone every point taken from the horizontal axis directly
+            // reduces the usable adjacent floating-window width.
+            return 12
+        }
+        return isParagraph ? 26 : 18
     }
 }
 
@@ -3183,6 +3457,7 @@ enum ReaderTranslationOverlayPlacement {
     struct Layout: Equatable, Sendable {
         let edge: Edge
         let position: CGPoint
+        let cardWidth: CGFloat
         let maximumCardHeight: CGFloat
         let availableHeight: CGFloat
     }
@@ -3242,6 +3517,7 @@ enum ReaderTranslationOverlayPlacement {
     /// overlay repeatedly jump between the two sides.
     static func layout(
         selectionFrame: CGRect?,
+        horizontalAvoidanceFrame: CGRect? = nil,
         viewportSize: CGSize,
         cardSize: CGSize,
         topInset: CGFloat = 58,
@@ -3251,7 +3527,8 @@ enum ReaderTranslationOverlayPlacement {
         minimumCardHeight: CGFloat = 64,
         preferredMaximumCardHeight: CGFloat = 196,
         prefersTop: Bool = false,
-        prefersHorizontalAvoidance: Bool = false
+        prefersHorizontalAvoidance: Bool = false,
+        minimumHorizontalCardWidth: CGFloat = 144
     ) -> Layout {
         let viewportWidth = max(viewportSize.width, 1)
         let viewportHeight = max(viewportSize.height, 1)
@@ -3278,6 +3555,7 @@ enum ReaderTranslationOverlayPlacement {
         let fallback = Layout(
             edge: .top,
             position: fallbackPosition,
+            cardWidth: cardSize.width,
             maximumCardHeight: preferredHeight,
             availableHeight: safeHeight
         )
@@ -3331,30 +3609,55 @@ enum ReaderTranslationOverlayPlacement {
             )
             let safeLeft = safeHorizontalInset
             let safeRight = viewportWidth - safeHorizontalInset
-            let measuredWidth = min(
+            let preferredWidth = min(
                 max(cardSize.width, 1),
                 max(safeRight - safeLeft, 1)
             )
-            let roomLeft = max(visibleFrame.minX - gap - safeLeft, 0)
-            let roomRight = max(safeRight - gap - visibleFrame.maxX, 0)
-            let leftFits = roomLeft >= measuredWidth
-            let rightFits = roomRight >= measuredWidth
+            let requiredWidth = min(
+                preferredWidth,
+                max(minimumHorizontalCardWidth, 1)
+            )
+            let fallbackHorizontalFrame = horizontalAvoidanceFrame?
+                .standardized
+                .intersection(viewportBounds)
+            let avoidanceFrames = [visibleFrame, fallbackHorizontalFrame]
+                .compactMap { frame -> CGRect? in
+                    guard let frame, !frame.isNull, !frame.isEmpty else {
+                        return nil
+                    }
+                    return frame
+                }
 
-            if leftFits || rightFits {
+            for avoidanceFrame in avoidanceFrames {
+                let roomLeft = max(
+                    avoidanceFrame.minX - gap - safeLeft,
+                    0
+                )
+                let roomRight = max(
+                    safeRight - gap - avoidanceFrame.maxX,
+                    0
+                )
+                let measuredWidth = min(
+                    preferredWidth,
+                    max(roomLeft, roomRight).rounded(.down)
+                )
+                let leftFits = roomLeft >= requiredWidth
+                let rightFits = roomRight >= requiredWidth
+
+                guard leftFits || rightFits else { continue }
                 let edge: Edge = leftFits && (!rightFits || roomLeft >= roomRight)
                     ? .left
                     : .right
-
                 let maximumCardHeight = preferredHeight
                 let measuredHeight = min(
                     max(cardSize.height, 1),
                     maximumCardHeight
                 )
                 let proposedX = edge == .left
-                    ? visibleFrame.minX - gap - measuredWidth / 2
-                    : visibleFrame.maxX + gap + measuredWidth / 2
+                    ? avoidanceFrame.minX - gap - measuredWidth / 2
+                    : avoidanceFrame.maxX + gap + measuredWidth / 2
                 let position = clampedPosition(
-                    CGPoint(x: proposedX, y: visibleFrame.midY),
+                    CGPoint(x: proposedX, y: avoidanceFrame.midY),
                     viewportSize: viewportSize,
                     cardSize: CGSize(
                         width: measuredWidth,
@@ -3367,6 +3670,7 @@ enum ReaderTranslationOverlayPlacement {
                 return Layout(
                     edge: edge,
                     position: position,
+                    cardWidth: measuredWidth,
                     maximumCardHeight: maximumCardHeight,
                     availableHeight: safeHeight
                 )
@@ -3422,6 +3726,7 @@ enum ReaderTranslationOverlayPlacement {
         return Layout(
             edge: edge,
             position: position,
+            cardWidth: cardSize.width,
             maximumCardHeight: maximumCardHeight,
             availableHeight: availableHeight
         )

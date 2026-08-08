@@ -52,6 +52,42 @@ class ReaderCrossPageExpansionTest {
     }
 
     @Test
+    fun keepsAWholeSpokenLineTogetherWhenItContainsATerminator() {
+        val text = "「何だよ、それ。手頃なあばらやって」敦也は翔太を見下ろした。"
+        val range = ReaderSentenceSegmenter.sentenceRange(text, 3, LanguageCode.JAPANESE)
+        assertEquals("「何だよ、それ。手頃なあばらやって」", range?.let { text.substring(it) })
+    }
+
+    @Test
+    fun startsANewSentenceAfterTheSpokenLineEnds() {
+        val text = "「何だよ、それ。手頃なあばらやって」敦也は翔太を見下ろした。"
+        val range = ReaderSentenceSegmenter.sentenceRange(text, 20, LanguageCode.JAPANESE)
+        assertEquals("敦也は翔太を見下ろした。", range?.let { text.substring(it) })
+    }
+
+    @Test
+    fun keepsAQuotedTerminatorInsideTheSentenceThatReportsIt() {
+        val text = "彼は「そうか。」と頷いた。次の話。"
+        val range = ReaderSentenceSegmenter.sentenceRange(text, 0, LanguageCode.JAPANESE)
+        assertEquals("彼は「そうか。」と頷いた。", range?.let { text.substring(it) })
+    }
+
+    @Test
+    fun stillSplitsWhenTheQuoteNeverCloses() {
+        // A half-quoted paragraph must not collapse into a single sentence.
+        val text = "「何だよ、それ。手頃なあばらやって"
+        val range = ReaderSentenceSegmenter.sentenceRange(text, 3, LanguageCode.JAPANESE)
+        assertEquals("「何だよ、それ。", range?.let { text.substring(it) })
+    }
+
+    @Test
+    fun doesNotEndTheSentenceAtAClosingParenthesis() {
+        val text = "これは（たぶん）本当だ。次の話。"
+        val range = ReaderSentenceSegmenter.sentenceRange(text, 0, LanguageCode.JAPANESE)
+        assertEquals("これは（たぶん）本当だ。", range?.let { text.substring(it) })
+    }
+
+    @Test
     fun doesNotSplitEnglishAbbreviationsOrDecimals() {
         val text = "J. K. Rowling wrote it in 3.14 days. Next sentence."
         val range = ReaderSentenceSegmenter.sentenceRange(text, 0, LanguageCode.ENGLISH)

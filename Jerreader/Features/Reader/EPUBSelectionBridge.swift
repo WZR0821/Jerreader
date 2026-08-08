@@ -53,17 +53,32 @@ enum ReaderSelectionVisualStyle {
                     : UIColor(red: 0.19, green: 0.49, blue: 0.76, alpha: 1))
 
         let darkBackground = background.readerRelativeLuminance < 0.38
-        let fillAlpha: CGFloat = darkBackground ? 0.42 : 0.30
+        var fillAlpha: CGFloat = darkBackground ? 0.42 : 0.30
+        let maximumAlpha: CGFloat = darkBackground ? 0.62 : 0.55
         let readablePole: UIColor = darkBackground ? .white : .black
 
-        // Judge the color the user actually sees after the translucent fill
-        // is composited over the page. Checking the opaque accent alone can
-        // accept a custom color that becomes nearly invisible at 30% alpha.
-        for _ in 0 ..< 8 {
+        // Judge the color the user actually sees after the translucent fill is
+        // composited over the page, not the opaque accent.
+        //
+        // The floor used to be 1.28, which every theme's own accent cleared on
+        // its own background without any adjustment at all. That sounds fine
+        // until you look at it: teal at 30% over the cool-grey page, or amber
+        // over sepia, differs from the paper so little that the selection color
+        // reads as not working.
+        //
+        // Reach for opacity before hue. Mixing towards black or white is what
+        // makes a deliberately chosen custom color arrive as something else — a
+        // vivid red showing up as muddy brick. More alpha makes the same color
+        // more present without changing what it is.
+        for _ in 0 ..< 12 {
             let visibleFill = accent.withAlphaComponent(fillAlpha)
                 .readerComposited(over: background)
-            if contrastRatio(visibleFill, background) >= 1.28 { break }
-            accent = accent.readerMixed(with: readablePole, amount: 0.18)
+            if contrastRatio(visibleFill, background) >= 1.55 { break }
+            if fillAlpha < maximumAlpha {
+                fillAlpha = min(fillAlpha + 0.05, maximumAlpha)
+            } else {
+                accent = accent.readerMixed(with: readablePole, amount: 0.18)
+            }
         }
 
         let stroke = accent.readerMixed(
@@ -73,7 +88,7 @@ enum ReaderSelectionVisualStyle {
         return ReaderSelectionVisualPalette(
             fill: accent.withAlphaComponent(fillAlpha),
             stroke: stroke,
-            spokenFill: accent.withAlphaComponent(darkBackground ? 0.70 : 0.58)
+            spokenFill: accent.withAlphaComponent(min(fillAlpha + 0.28, 0.85))
         )
     }
 
@@ -170,9 +185,17 @@ private extension UIColor {
 }
 
 enum ReaderSpeechHighlightGeometry {
+    /// Slices the painted tiles down to the span currently being spoken.
+    ///
+    /// `vertical` is supplied by the reader rather than guessed from each
+    /// tile's aspect ratio. The old `height > width * 1.55` test is right for a
+    /// full column but wrong for a one- or two-character run in a vertical
+    /// book, which is wider than it is tall and was therefore cut across the
+    /// glyphs instead of down them.
     static func rectangles(
         in sourceRectangles: [CGRect],
-        highlight: ReaderSpeechHighlight?
+        highlight: ReaderSpeechHighlight?,
+        vertical: Bool = false
     ) -> [CGRect] {
         guard let highlight, !sourceRectangles.isEmpty else { return [] }
         let lower = min(max(highlight.lowerBound, 0), 1)
@@ -198,7 +221,7 @@ enum ReaderSpeechHighlightGeometry {
             let localUpper = min(max((upper - segmentStart) / segmentLength, localLower), 1)
             guard localUpper > localLower else { return nil }
 
-            if rectangle.height > rectangle.width * 1.55 {
+            if vertical || rectangle.height > rectangle.width * 1.55 {
                 return CGRect(
                     x: rectangle.minX,
                     y: rectangle.minY + rectangle.height * localLower,
@@ -370,6 +393,15 @@ final class EPUBSelectionBridge {
         )
     }
 
+    /// The writing mode the *reader* resolved, which decides the axis the
+    /// merger groups lines along. It comes from the host rather than from the
+    /// page because a publication can declare vertical writing while the reader
+    /// forces horizontal, and because some WebKit builds report
+    /// `-epub-writing-mode: vertical-rl` as `horizontal-tb`.
+    func updateWritingMode(vertical: Bool) {
+        highlightView.updateWritingMode(vertical: vertical)
+    }
+
     /// Displays base-text rectangles and returns their union in window space.
     @discardableResult
     func display(
@@ -458,8 +490,14 @@ final class EPUBSelectionBridge {
 @MainActor
 final class EPUBSelectionHighlightView: UIView {
     private(set) var displayedRects: [CGRect] = []
+    /// The unmerged input behind `displayedRects`, kept so a writing-mode change
+    /// can re-merge the tiles that are already on screen. Merging groups
+    /// fragments along the line axis, so tiles merged as horizontal text stay
+    /// wrong for the rest of their life on screen otherwise.
+    private var sourceRects: [CGRect] = []
     private var speechHighlight: ReaderSpeechHighlight?
     private var palette = ReaderSelectionVisualPalette.light
+    private var verticalText = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -485,7 +523,8 @@ final class EPUBSelectionHighlightView: UIView {
     }
 
     func display(_ rects: [CGRect], selectedText: String) {
-        displayedRects = Self.merged(rects)
+        sourceRects = rects
+        displayedRects = Self.merged(rects, vertical: verticalText)
         isHidden = displayedRects.isEmpty
 #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--jerreader-selection-ui-test") {
@@ -506,6 +545,7 @@ final class EPUBSelectionHighlightView: UIView {
     func clear() {
         guard !displayedRects.isEmpty || !isHidden else { return }
         displayedRects.removeAll(keepingCapacity: true)
+        sourceRects.removeAll(keepingCapacity: true)
         speechHighlight = nil
         isHidden = true
         accessibilityValue = nil
@@ -533,6 +573,22 @@ final class EPUBSelectionHighlightView: UIView {
         setNeedsDisplay()
     }
 
+    func updateWritingMode(vertical: Bool) {
+        guard verticalText != vertical else { return }
+        verticalText = vertical
+        // Switching 排版方向 does not clear the selection: Readium reloads the
+        // spine item and only then is the selection dropped. Until that lands
+        // the tiles stay on screen, and they were grouped along the *previous*
+        // line axis — one tile per column becomes one tile per row. Re-merging
+        // the rectangles they were built from keeps the painted tiles and the
+        // speech slicing, which already reads the new mode, on the same axis.
+        if !sourceRects.isEmpty {
+            displayedRects = Self.merged(sourceRects, vertical: verticalText)
+            isHidden = displayedRects.isEmpty
+        }
+        setNeedsDisplay()
+    }
+
     override func draw(_ rect: CGRect) {
         guard let context = UIGraphicsGetCurrentContext() else { return }
         context.saveGState()
@@ -552,7 +608,8 @@ final class EPUBSelectionHighlightView: UIView {
         palette.spokenFill.setFill()
         for speechRect in ReaderSpeechHighlightGeometry.rectangles(
             in: displayedRects,
-            highlight: speechHighlight
+            highlight: speechHighlight,
+            vertical: verticalText
         ) {
             UIBezierPath(
                 roundedRect: speechRect.insetBy(dx: -0.5, dy: -0.5),
@@ -562,46 +619,148 @@ final class EPUBSelectionHighlightView: UIView {
         context.restoreGState()
     }
 
-    private static func merged(_ rects: [CGRect]) -> [CGRect] {
+    private static func merged(_ rects: [CGRect], vertical: Bool) -> [CGRect] {
         // Selection geometry can contain a ruby annotation box that fully
         // covers its kanji's own text band. Drop contained rectangles first so
         // the translucent fill and stroke are never painted twice in place.
         let standardized = rects
             .map(\.standardized)
             .filter { !$0.isEmpty }
+        // "Swallowed" has to be decided by a strict total order. The rule used
+        // to keep a box unless some other box contained it and was wider *or*
+        // taller *or* earlier in the list. Two boxes differing by less than the
+        // half-point slack each contain the other, and that disjunction then
+        // fires both ways — the larger loses on area, the smaller loses on
+        // index, and both are dropped. Sub-pixel-different overlapping
+        // fragments are exactly what ruby geometry produces, so a whole
+        // highlighted line could vanish.
+        //
+        // Ordering by area with the earlier index winning ties is
+        // antisymmetric, so the largest box can never be dropped and at least
+        // one survivor is guaranteed.
         let deduplicated = standardized.enumerated()
             .filter { candidate in
-                !standardized.enumerated().contains { other in
-                    other.offset != candidate.offset
-                        && other.element.insetBy(dx: -0.5, dy: -0.5)
-                            .contains(candidate.element)
-                        && (other.element.width > candidate.element.width
-                            || other.element.height > candidate.element.height
-                            || other.offset < candidate.offset)
+                let candidateArea = candidate.element.width * candidate.element.height
+                return !standardized.enumerated().contains { other in
+                    guard other.offset != candidate.offset,
+                          other.element.insetBy(dx: -0.5, dy: -0.5)
+                              .contains(candidate.element)
+                    else { return false }
+                    let otherArea = other.element.width * other.element.height
+                    return otherArea > candidateArea
+                        || (otherArea == candidateArea && other.offset < candidate.offset)
                 }
             }
             .map(\.element)
 
-        let sorted = deduplicated
-            .sorted {
-                if abs($0.midY - $1.midY) < min($0.height, $1.height) * 0.45 {
-                    return $0.minX < $1.minX
-                }
-                return $0.minY < $1.minY
-            }
+        return groupIntoLines(deduplicated, vertical: vertical)
+    }
 
-        return sorted.reduce(into: []) { result, candidate in
-            guard let last = result.last else {
-                result.append(candidate)
-                return
-            }
-            let sameLine = abs(last.midY - candidate.midY)
-                <= min(last.height, candidate.height) * 0.45
-            let smallGap = candidate.minX - last.maxX <= 2
-            if sameLine && smallGap {
-                result[result.count - 1] = last.union(candidate)
+    /// One tile per contiguous run per line.
+    ///
+    /// This used to group by `midY`, which silently assumes lines stack
+    /// downwards. In a `vertical-rl` book lines stack sideways and runs advance
+    /// down the column, so two contiguous halves of the same column had wildly
+    /// different `midY` values, were treated as different lines, and were left
+    /// as two tiles with a seam between them.
+    ///
+    /// The line axis flips with the writing mode instead: horizontal text
+    /// stacks lines down y and runs along x, vertical text stacks lines along x
+    /// and runs down y. Same algorithm the shared Kotlin module uses, so the
+    /// two platforms paint identical tiles.
+    private static func groupIntoLines(
+        _ rects: [CGRect],
+        vertical: Bool
+    ) -> [CGRect] {
+        guard rects.count > 1 else { return rects }
+
+        let crossStart: (CGRect) -> CGFloat = vertical ? { $0.minX } : { $0.minY }
+        let crossEnd: (CGRect) -> CGFloat = vertical ? { $0.maxX } : { $0.maxY }
+        let runStart: (CGRect) -> CGFloat = vertical ? { $0.minY } : { $0.minX }
+        let runEnd: (CGRect) -> CGFloat = vertical ? { $0.maxY } : { $0.maxX }
+
+        // Two fragments belong to one line once they share this much of the
+        // shorter cross extent.
+        func sharesLine(_ first: CGRect, _ second: CGRect) -> Bool {
+            let overlap = min(crossEnd(first), crossEnd(second))
+                - max(crossStart(first), crossStart(second))
+            guard overlap > 0 else { return false }
+            let shorter = min(
+                crossEnd(first) - crossStart(first),
+                crossEnd(second) - crossStart(second)
+            )
+            guard shorter > 0 else { return false }
+            return overlap / shorter >= 0.55
+        }
+
+        var buckets: [[CGRect]] = []
+        for rect in rects.sorted(by: { crossStart($0) < crossStart($1) }) {
+            if let index = buckets.firstIndex(where: { bucket in
+                bucket.contains { sharesLine($0, rect) }
+            }) {
+                buckets[index].append(rect)
             } else {
-                result.append(candidate)
+                buckets.append([rect])
+            }
+        }
+
+        struct Line {
+            var crossStart: CGFloat
+            var crossEnd: CGFloat
+            var runs: [(start: CGFloat, end: CGFloat)]
+        }
+
+        var lines: [Line] = buckets.map { bucket in
+            var runs: [(start: CGFloat, end: CGFloat)] = []
+            for run in bucket
+                .map({ (start: runStart($0), end: runEnd($0)) })
+                .sorted(by: { $0.start < $1.start })
+            {
+                // Runs closer than this along the line are one visual run.
+                if let last = runs.last, run.start <= last.end + 1.5 {
+                    runs[runs.count - 1].end = max(last.end, run.end)
+                } else {
+                    runs.append(run)
+                }
+            }
+            return Line(
+                crossStart: bucket.map(crossStart).min() ?? 0,
+                crossEnd: bucket.map(crossEnd).max() ?? 0,
+                runs: runs
+            )
+        }
+        .sorted { $0.crossStart < $1.crossStart }
+
+        // A ruby base reserves room for its annotation, so its line reaches into
+        // the neighbouring one. Let them meet at the midpoint of the overlap:
+        // both bands stay centred on their own text and no pixel is painted
+        // twice.
+        for index in 1 ..< max(lines.count, 1) where lines.count > 1 {
+            let previous = lines[index - 1]
+            let current = lines[index]
+            guard current.crossStart < previous.crossEnd else { continue }
+            let boundary = (current.crossStart + previous.crossEnd) / 2
+            guard boundary > previous.crossStart, boundary < current.crossEnd
+            else { continue }
+            lines[index - 1].crossEnd = boundary
+            lines[index].crossStart = boundary
+        }
+
+        return lines.flatMap { line in
+            line.runs.map { run in
+                vertical
+                    ? CGRect(
+                        x: line.crossStart,
+                        y: run.start,
+                        width: line.crossEnd - line.crossStart,
+                        height: run.end - run.start
+                    )
+                    : CGRect(
+                        x: run.start,
+                        y: line.crossStart,
+                        width: run.end - run.start,
+                        height: line.crossEnd - line.crossStart
+                    )
             }
         }
     }

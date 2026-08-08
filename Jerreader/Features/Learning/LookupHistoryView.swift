@@ -163,7 +163,7 @@ struct LookupHistoryView: View {
         JerreaderEmptyState(
             title: searchText.isEmpty ? "还没有查词记录" : "没有匹配记录",
             message: searchText.isEmpty
-                ? "在“查词”中完成一次查询后，结果会自动保存在这里。"
+                ? "在“翻译”的词语模式完成一次词典查询后，结果会自动保存在这里。"
                 : "请尝试其他词语、读音、释义或上下文。",
             systemImage: searchText.isEmpty ? "clock" : "magnifyingglass"
         )

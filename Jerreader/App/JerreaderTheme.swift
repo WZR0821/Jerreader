@@ -57,8 +57,8 @@ enum JerreaderTheme {
         dark: Bool
     ) -> RGB {
         switch (choice, dark) {
-        case (.ocean, false): return RGB(red: 0.20, green: 0.39, blue: 0.56)
-        case (.ocean, true): return RGB(red: 0.47, green: 0.70, blue: 0.88)
+        case (.ocean, false): return RGB(red: 0.18, green: 0.41, blue: 0.60)
+        case (.ocean, true): return RGB(red: 0.46, green: 0.72, blue: 0.88)
         case (.forest, false): return RGB(red: 0.16, green: 0.43, blue: 0.34)
         case (.forest, true): return RGB(red: 0.42, green: 0.76, blue: 0.62)
         case (.wisteria, false): return RGB(red: 0.39, green: 0.31, blue: 0.61)
@@ -100,21 +100,11 @@ enum JerreaderTheme {
     static func canvas(for choice: JerreaderThemeColorChoice) -> Color {
         color(
             choice: choice,
-            light: { accent in
-                UIColor(
-                    red: 0.955 + accent.red * 0.015,
-                    green: 0.955 + accent.green * 0.015,
-                    blue: 0.955 + accent.blue * 0.015,
-                    alpha: 1
-                )
+            light: { _ in
+                UIColor(red: 0.941, green: 0.961, blue: 0.975, alpha: 1)
             },
-            dark: { accent in
-                UIColor(
-                    red: 0.028 + accent.red * 0.025,
-                    green: 0.038 + accent.green * 0.025,
-                    blue: 0.048 + accent.blue * 0.025,
-                    alpha: 1
-                )
+            dark: { _ in
+                UIColor(red: 0.040, green: 0.065, blue: 0.090, alpha: 1)
             }
         )
     }
@@ -127,23 +117,25 @@ enum JerreaderTheme {
         let choice = JerreaderThemePreferences.current()
         return color(
             choice: choice,
-            light: { accent in
-                let base: CGFloat = level > 0 ? 1 : (level < 0 ? 0.925 : 0.985)
-                return UIColor(
-                    red: min(base + accent.red * 0.008, 1),
-                    green: min(base + accent.green * 0.008, 1),
-                    blue: min(base + accent.blue * 0.008, 1),
-                    alpha: 1
-                )
+            light: { _ in
+                switch level {
+                case let value where value > 0:
+                    return UIColor(red: 0.985, green: 0.993, blue: 0.998, alpha: 1)
+                case let value where value < 0:
+                    return UIColor(red: 0.885, green: 0.925, blue: 0.953, alpha: 1)
+                default:
+                    return UIColor(red: 0.965, green: 0.978, blue: 0.989, alpha: 1)
+                }
             },
-            dark: { accent in
-                let base: CGFloat = level > 0 ? 0.09 : (level < 0 ? 0.075 : 0.06)
-                return UIColor(
-                    red: base + accent.red * 0.045,
-                    green: base + accent.green * 0.045,
-                    blue: base + accent.blue * 0.045,
-                    alpha: 1
-                )
+            dark: { _ in
+                switch level {
+                case let value where value > 0:
+                    return UIColor(red: 0.095, green: 0.145, blue: 0.185, alpha: 1)
+                case let value where value < 0:
+                    return UIColor(red: 0.028, green: 0.055, blue: 0.080, alpha: 1)
+                default:
+                    return UIColor(red: 0.060, green: 0.100, blue: 0.135, alpha: 1)
+                }
             }
         )
     }
@@ -151,8 +143,8 @@ enum JerreaderTheme {
     static var line: Color {
         color(
             choice: JerreaderThemePreferences.current(),
-            light: { $0.color(alpha: 0.15) },
-            dark: { $0.color(alpha: 0.24) }
+            light: { accent in accent.color(alpha: 0.18) },
+            dark: { accent in accent.color(alpha: 0.28) }
         )
     }
 
@@ -165,10 +157,10 @@ enum JerreaderTheme {
         })
     }
 
-    static let shadow = Color.black.opacity(0.12)
-    static let deepShadow = Color.black.opacity(0.18)
+    static let shadow = Color.black.opacity(0.07)
+    static let deepShadow = Color.black.opacity(0.10)
     static let pagePadding: CGFloat = 20
-    static let cardRadius: CGFloat = 22
+    static let cardRadius: CGFloat = 16
 }
 
 enum JerreaderMotion {
@@ -189,31 +181,7 @@ struct JerreaderCanvasBackground: View {
     }
 
     var body: some View {
-        ZStack {
-            JerreaderTheme.canvas(for: themeColor)
-
-            LinearGradient(
-                colors: [
-                    JerreaderTheme.accentFill(for: themeColor).opacity(0.62),
-                    Color.clear,
-                    JerreaderTheme.accent(for: themeColor).opacity(0.035)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-
-            Circle()
-                .fill(JerreaderTheme.accent(for: themeColor).opacity(0.055))
-                .frame(width: 330, height: 330)
-                .blur(radius: 80)
-                .offset(x: 180, y: -260)
-
-            Circle()
-                .fill(Color.cyan.opacity(0.035))
-                .frame(width: 270, height: 270)
-                .blur(radius: 72)
-                .offset(x: -190, y: 310)
-        }
+        JerreaderTheme.canvas(for: themeColor)
         .ignoresSafeArea()
         .accessibilityHidden(true)
     }
@@ -234,8 +202,8 @@ private struct JerreaderPaperCardModifier: ViewModifier {
             }
             .shadow(
                 color: hasShadow ? JerreaderTheme.shadow : .clear,
-                radius: hasShadow ? 14 : 0,
-                y: hasShadow ? 5 : 0
+                radius: hasShadow ? 10 : 0,
+                y: hasShadow ? 3 : 0
             )
     }
 }
@@ -309,15 +277,14 @@ struct JerreaderSectionTitle: View {
                 Image(systemName: systemImage)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(JerreaderTheme.accent)
-                    .frame(width: 28, height: 28)
-                    .background(JerreaderTheme.accentFill, in: RoundedRectangle(cornerRadius: 9))
+                    .frame(width: 22, height: 22)
                     .alignmentGuide(.firstTextBaseline) { dimensions in
                         dimensions[VerticalAlignment.center]
                     }
             }
 
             Text(title)
-                .font(.title2.weight(.bold))
+                .font(.title3.weight(.semibold))
 
             Spacer(minLength: 8)
 

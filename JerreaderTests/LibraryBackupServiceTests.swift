@@ -3,11 +3,28 @@ import Foundation
 @preconcurrency import ReadiumShared
 import ReadiumZIPFoundation
 import SwiftData
+import UniformTypeIdentifiers
 import XCTest
 @testable import Jerreader
 
 @MainActor
 final class LibraryBackupServiceTests: XCTestCase {
+    func testBackupImportPickerAllowsICloudProviderDataFallback() throws {
+        let types = LibraryBackupImportPolicy.allowedContentTypes
+
+        XCTAssertEqual(types.first, .jerreaderBackup)
+        XCTAssertTrue(types.contains(.archive))
+        XCTAssertTrue(types.contains(.data))
+        XCTAssertTrue(
+            types.contains(.item),
+            "A File Provider dynamic UTI must not leave an existing backup greyed out."
+        )
+        XCTAssertTrue(
+            UTType.jerreaderBackup.conforms(to: .archive),
+            "The precise backup type must remain an archive while the picker also accepts provider fallbacks."
+        )
+    }
+
     func testFullBackupRoundTripRestoresPublicationReadingAndAllowedSettings() async throws {
         let workspace = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: workspace) }
@@ -42,7 +59,8 @@ final class LibraryBackupServiceTests: XCTestCase {
             totalReadingSeconds: 321,
             category: "小说",
             tags: ["日语"],
-            readerTheme: "sepia"
+            readerTheme: "sepia",
+            readerPDFPaperModeEnabled: true
         )
         sourceContext.insert(book)
         sourceContext.insert(
@@ -109,6 +127,7 @@ final class LibraryBackupServiceTests: XCTestCase {
         XCTAssertEqual(restoredBook.lastReadProgress, 0.42, accuracy: 0.0001)
         XCTAssertEqual(restoredBook.totalReadingSeconds, 321)
         XCTAssertEqual(restoredBook.category, "小说")
+        XCTAssertTrue(restoredBook.readerPDFPaperModeEnabled)
         let restoredDirectories = try LibraryPaths.prepareDirectories(
             rootDirectoryURL: targetRoot
         )
@@ -677,6 +696,196 @@ final class LibraryBackupServiceTests: XCTestCase {
             defaults.stringArray(forKey: "backup.automatic.scopes"),
             [LibraryBackupScope.settings.rawValue]
         )
+    }
+
+    // MARK: - Inheriting the backup regimen
+
+    /// The point of the manifest carrying the regimen: a user who backs up
+    /// only their reading progress still gets their schedule, retention and
+    /// folder back on the new installation.
+    func testArchiveCarriesTheBackupRegimenEvenWithoutTheSettingsScope() async throws {
+        let workspace = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let backupFolder = workspace.appendingPathComponent(
+            "书房备份",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: backupFolder,
+            withIntermediateDirectories: true
+        )
+        let archiveURL = workspace.appendingPathComponent(
+            "regimen.\(LibraryBackupService.fileExtension)"
+        )
+        let sourceDefaults = isolatedDefaults()
+        let targetDefaults = isolatedDefaults()
+        defer {
+            clear(sourceDefaults)
+            clear(targetDefaults)
+        }
+
+        let sourcePolicy = LibraryBackupPolicyStore(defaults: sourceDefaults)
+        sourcePolicy.automaticEnabled = true
+        sourcePolicy.intervalDays = 3
+        sourcePolicy.retentionDays = 90
+        sourcePolicy.maximumBackupCount = 10
+        sourcePolicy.maximumTotalBytes = 500 * 1_024 * 1_024
+        sourcePolicy.automaticScopes = [.reading, .learning]
+        try LibraryBackupDirectoryStore(defaults: sourceDefaults)
+            .selectDirectory(backupFolder)
+
+        let container = try makeContainer()
+        let exported = try await LibraryBackupService(
+            rootDirectoryURL: workspace.appendingPathComponent("source"),
+            defaults: sourceDefaults
+        ).exportArchive(
+            context: container.mainContext,
+            to: archiveURL,
+            // Deliberately not `.settings`: the regimen must not ride on it.
+            options: LibraryBackupOptions(scopes: [.reading])
+        )
+
+        let targetContainer = try makeContainer()
+        let result = try await LibraryBackupService(
+            rootDirectoryURL: workspace.appendingPathComponent("target"),
+            defaults: targetDefaults
+        ).importArchive(
+            from: archiveURL,
+            context: targetContainer.mainContext
+        )
+
+        XCTAssertFalse(result.didRestoreSettings)
+        let profile = try XCTUnwrap(result.inheritedProfile)
+        XCTAssertEqual(profile.folderDisplayName, "书房备份")
+        XCTAssertEqual(
+            profile.folderURL?.standardizedFileURL,
+            backupFolder.standardizedFileURL
+        )
+
+        let targetPolicy = LibraryBackupPolicyStore(defaults: targetDefaults)
+        XCTAssertTrue(targetPolicy.automaticEnabled)
+        XCTAssertEqual(targetPolicy.intervalDays, 3)
+        XCTAssertEqual(targetPolicy.retentionDays, 90)
+        XCTAssertEqual(targetPolicy.maximumBackupCount, 10)
+        XCTAssertEqual(targetPolicy.maximumTotalBytes, 500 * 1_024 * 1_024)
+        XCTAssertEqual(targetPolicy.automaticScopes, [.reading, .learning])
+        // The chain continues from the archive rather than firing at once.
+        XCTAssertEqual(
+            targetPolicy.lastAutomaticBackupAt?.timeIntervalSince1970 ?? 0,
+            exported.createdAt.timeIntervalSince1970,
+            accuracy: 1
+        )
+    }
+
+    /// An archive from a build that offered other choices must not leave the
+    /// pickers showing a row nothing can select.
+    func testInheritedRegimenFallsBackForChoicesThisBuildNoLongerOffers() {
+        let defaults = isolatedDefaults()
+        defer { clear(defaults) }
+
+        LibraryBackupPolicyStore.apply(
+            LibraryBackupProfile(
+                automaticEnabled: true,
+                intervalDays: 2,
+                retentionDays: 12,
+                maximumBackupCount: 4,
+                maximumTotalBytes: 42,
+                automaticScopes: [],
+                folderDisplayName: nil,
+                folderPath: nil
+            ),
+            lastAutomaticBackupAt: nil,
+            defaults: defaults
+        )
+
+        let store = LibraryBackupPolicyStore(defaults: defaults)
+        XCTAssertTrue(store.automaticEnabled)
+        XCTAssertEqual(store.intervalDays, 7)
+        XCTAssertEqual(store.retentionDays, 30)
+        XCTAssertEqual(store.maximumBackupCount, 5)
+        XCTAssertEqual(store.maximumTotalBytes, 2 * 1_024 * 1_024 * 1_024)
+        XCTAssertEqual(store.automaticScopes, LibraryBackupOptions.full.scopes)
+        XCTAssertNil(store.lastAutomaticBackupAt)
+    }
+
+    func testAdoptingAReachableFolderTakesItOverAsTheBackupFolder() throws {
+        let workspace = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let first = workspace.appendingPathComponent("first", isDirectory: true)
+        let second = workspace.appendingPathComponent("second", isDirectory: true)
+        for folder in [first, second] {
+            try FileManager.default.createDirectory(
+                at: folder,
+                withIntermediateDirectories: true
+            )
+        }
+        let defaults = isolatedDefaults()
+        defer { clear(defaults) }
+        let store = LibraryBackupDirectoryStore(defaults: defaults)
+        try store.selectDirectory(first)
+
+        XCTAssertTrue(store.adoptDirectory(second))
+        XCTAssertEqual(store.displayName, "second")
+        XCTAssertTrue(store.isSelectedDirectory(second))
+        // Adopting what is already selected is a no-op success.
+        XCTAssertTrue(store.adoptDirectory(second))
+    }
+
+    /// A folder named by an archive from another device is usually not
+    /// reachable here. Failing to adopt it must not cost the user the folder
+    /// they already had.
+    func testAdoptingAnUnreachableFolderLeavesThePreviousSelectionIntact() throws {
+        let workspace = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let kept = workspace.appendingPathComponent("kept", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: kept,
+            withIntermediateDirectories: true
+        )
+        let defaults = isolatedDefaults()
+        defer { clear(defaults) }
+        let store = LibraryBackupDirectoryStore(defaults: defaults)
+        try store.selectDirectory(kept)
+
+        let missing = workspace.appendingPathComponent(
+            "never-existed",
+            isDirectory: true
+        )
+        XCTAssertFalse(store.adoptDirectory(missing))
+        XCTAssertTrue(store.hasCustomDirectory)
+        XCTAssertEqual(store.displayName, "kept")
+        XCTAssertTrue(store.isSelectedDirectory(kept))
+        XCTAssertNotNil(try store.selectedDirectoryAccess())
+    }
+
+    /// Failing to adopt a folder when none was selected must leave the app on
+    /// its local folder rather than on a half-written selection.
+    func testFailedAdoptionFromDefaultFolderStaysOnTheDefaultFolder() throws {
+        let workspace = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let defaults = isolatedDefaults()
+        defer { clear(defaults) }
+        let store = LibraryBackupDirectoryStore(defaults: defaults)
+
+        XCTAssertFalse(
+            store.adoptDirectory(
+                workspace.appendingPathComponent("nowhere", isDirectory: true)
+            )
+        )
+        XCTAssertFalse(store.hasCustomDirectory)
+        XCTAssertEqual(store.displayName, "App 本地/Jerreader Backups")
+        XCTAssertNil(store.customDirectoryPath)
+    }
+
+    /// The app's own folder carries no folder hint: its path dies with the
+    /// installation, so promising it to the next one would be a lie.
+    func testDefaultFolderProducesNoFolderHint() {
+        let defaults = isolatedDefaults()
+        defer { clear(defaults) }
+        let profile = LibraryBackupPolicyStore.currentProfile(defaults: defaults)
+        XCTAssertNil(profile.folderDisplayName)
+        XCTAssertNil(profile.folderPath)
+        XCTAssertNil(profile.folderURL)
     }
 
     private func makeContainer() throws -> ModelContainer {

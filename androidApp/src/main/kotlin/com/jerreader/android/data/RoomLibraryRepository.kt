@@ -4,8 +4,12 @@ import com.jerreader.shared.library.LibraryBook
 import com.jerreader.shared.library.LibraryRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import androidx.room.withTransaction
 
-class RoomLibraryRepository(private val dao: BookDao) : LibraryRepository {
+class RoomLibraryRepository(
+    private val dao: BookDao,
+    private val database: JerreaderDatabase? = null
+) : LibraryRepository {
     override fun observeBooks(): Flow<List<LibraryBook>> =
         dao.observeAll().map { books -> books.map(BookEntity::toDomain) }
 
@@ -21,7 +25,46 @@ class RoomLibraryRepository(private val dao: BookDao) : LibraryRepository {
         dao.insert(book.toEntity())
     }
 
-    override suspend fun delete(id: String): Boolean = dao.deleteById(id) > 0
+    override suspend fun delete(id: String): Boolean {
+        val database = database
+        if (database == null) return dao.deleteById(id) > 0
+        return database.withTransaction {
+            val deleted = dao.deleteById(id) > 0
+            if (!deleted) return@withTransaction false
+            database.readerRecordDao().deleteBookmarksByBookId(id)
+            database.readerRecordDao().deleteAnnotationsByBookId(id)
+            database.learningDao().deleteWordsByBookId(id)
+            database.learningDao().deleteTranslationFavoritesByBookId(id)
+            true
+        }
+    }
+
+    suspend fun updateOrganizationBatch(
+        books: List<LibraryBook>,
+        category: String,
+        series: String,
+        language: String?,
+        tagsToAdd: List<String>
+    ) {
+        val update = suspend {
+            books.forEach { book ->
+                dao.updateOrganization(
+                    id = book.id,
+                    title = book.title.trim().ifEmpty { "未命名书籍" },
+                    author = book.author?.trim()?.takeIf(String::isNotBlank),
+                    language = language?.trim()?.takeIf(String::isNotBlank) ?: book.language,
+                    category = category.trim().ifEmpty { book.category },
+                    series = series.trim().ifEmpty { book.series },
+                    tagsText = (book.tags + tagsToAdd)
+                        .map(String::trim)
+                        .filter(String::isNotBlank)
+                        .distinctBy(String::lowercase)
+                        .joinToString("\u001F")
+                )
+            }
+        }
+        if (database == null) update() else database.withTransaction { update() }
+    }
 
     override suspend fun updateReadingProgress(
         id: String,

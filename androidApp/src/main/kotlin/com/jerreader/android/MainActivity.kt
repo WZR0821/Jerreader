@@ -18,6 +18,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -45,8 +46,12 @@ import com.jerreader.shared.library.LibraryBook
 import com.jerreader.shared.translation.TranslationRequest
 import com.jerreader.shared.ui.JerreaderLibraryApp
 import com.jerreader.shared.ui.JerreaderTheme
+import android.net.Uri
+import androidx.core.content.IntentCompat
 import java.io.File
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private val graph: AppGraph
@@ -71,6 +76,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Automatic backup runs off the app's own scope so rotating the screen
+        // or leaving the library cannot cancel an archive halfway through, and
+        // it stays silent: a due backup must never interrupt reading.
+        graph.applicationScope.launch {
+            runCatching { graph.backupService.backupIfDue() }
+        }
 
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -128,11 +140,25 @@ class MainActivity : ComponentActivity() {
                         },
                         onOpenBook = ::openBook,
                         onDeleteBook = viewModel::deleteBook,
+                        onRestoreBackup = {
+                            settingsRoute = SettingsRoute.BACKUP_IMPORT
+                            selectedTab = AndroidAppTab.SETTINGS
+                        },
+                        onDismissMessage = viewModel::clearMessage,
                         onChangeCover = { bookId ->
                             pendingCoverBookId = bookId
                             chooseCover.launch(arrayOf("image/*"))
                         },
                         onUpdateBook = viewModel::updateBook,
+                        onBatchUpdateBooks = { ids, category, series, language, tags ->
+                            viewModel.updateBooks(
+                                books = state.books.filter { it.id in ids },
+                                category = category,
+                                series = series,
+                                language = language,
+                                tags = tags
+                            )
+                        },
                         coverContent = { book -> AndroidBookCover(book) },
                         bottomBar = bottomBar
                     )
@@ -143,6 +169,7 @@ class MainActivity : ComponentActivity() {
                     )
 
                     AndroidAppTab.SETTINGS -> SettingsScreen(
+                        graph = graph,
                         appPreferences = appPreferences,
                         route = settingsRoute,
                         onRouteChanged = { settingsRoute = it },
@@ -242,8 +269,17 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIncomingPublication(intent: Intent?) {
-        if (intent?.action != Intent.ACTION_VIEW) return
-        intent.data?.let(viewModel::importPublication)
+        val source = when (intent?.action) {
+            Intent.ACTION_VIEW -> intent.data
+            // "分享到读鼠" from a browser, mail client or cloud drive.
+            Intent.ACTION_SEND -> IntentCompat.getParcelableExtra(
+                intent,
+                Intent.EXTRA_STREAM,
+                Uri::class.java
+            )
+            else -> null
+        }
+        source?.let(viewModel::importPublication)
     }
 
     private fun openBook(bookId: String) {
@@ -259,16 +295,27 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun AndroidBookCover(book: LibraryBook) {
-        val cover = remember(book.coverFileName) {
-            book.coverFileName
-                ?.let(graph.publicationStore::resolveCover)
-                ?.takeIf(File::isFile)
-                ?.let { file -> BitmapFactory.decodeFile(file.absolutePath) }
+        val cover by produceState<android.graphics.Bitmap?>(null, book.coverFileName) {
+            value = withContext(Dispatchers.IO) {
+                book.coverFileName
+                    ?.let(graph.publicationStore::resolveCover)
+                    ?.takeIf(File::isFile)
+                    ?.let { file ->
+                        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                        BitmapFactory.decodeFile(file.absolutePath, bounds)
+                        val sample = if (bounds.outWidth > 960 || bounds.outHeight > 960) 2 else 1
+                        BitmapFactory.decodeFile(
+                            file.absolutePath,
+                            BitmapFactory.Options().apply { inSampleSize = sample }
+                        )
+                    }
+            }
         }
 
-        if (cover != null) {
+        val bitmap = cover
+        if (bitmap != null) {
             Image(
-                bitmap = cover.asImageBitmap(),
+                bitmap = bitmap.asImageBitmap(),
                 contentDescription = "${book.title}封面",
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop

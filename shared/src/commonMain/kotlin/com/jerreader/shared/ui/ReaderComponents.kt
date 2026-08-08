@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
@@ -371,12 +372,17 @@ fun ReaderAnnotationEditor(
     ) {
         Text("划线与批注", style = MaterialTheme.typography.headlineSmall)
         Text(selectedText, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 5)
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        // Five labels do not fit one row on a phone; without scrolling the last
+        // chip wrapped its text vertically.
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
             ReaderAnnotationColor.entries.forEach { option ->
                 FilterChip(
                     selected = color == option.id,
                     onClick = { color = option.id },
-                    label = { Text(option.title) }
+                    label = { Text(option.title, maxLines = 1, softWrap = false) }
                 )
             }
         }
@@ -468,7 +474,14 @@ fun ReaderAppearancePanel(
                 .padding(bottom = if (embedded) 0.dp else 18.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            JerreaderSection("版式") {
+            if (isPdf) {
+                Text(
+                    "PDF 保留原文件版式，字号、行距和字体由 PDF 页面决定。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
+            } else JerreaderSection("版式") {
                 JerreaderRow("字号") {
                     JerreaderStepper(
                         value = "${(appearance.fontScale * 100).toInt()}%",
@@ -514,25 +527,31 @@ fun ReaderAppearancePanel(
 
             JerreaderSection(
                 title = "翻页与方向",
-                footnote = "「原书」保留出版物声明的横竖排与翻页方向；「横排」强制章节间与章节内都从左向右。"
-            ) {
-                JerreaderRow("阅读方式") {
-                    JerreaderSegmented(
-                        options = listOf(false to "分页", true to "滚动"),
-                        selected = appearance.scroll,
-                        onSelect = { onChange(appearance.copy(scroll = it)) }
-                    )
+                footnote = if (isPdf) {
+                    "PDF 的翻页方向由原文件决定。"
+                } else {
+                    "「原书」保留出版物声明的横竖排与翻页方向；「横排」强制章节间与章节内都从左向右。"
                 }
-                JerreaderRow("文字方向") {
-                    JerreaderSegmented(
-                        options = listOf(
-                            ReaderTextOrientation.PUBLICATION to "原书",
-                            ReaderTextOrientation.HORIZONTAL to "横排",
-                            ReaderTextOrientation.VERTICAL to "竖排"
-                        ),
-                        selected = appearance.orientation,
-                        onSelect = { onChange(appearance.copy(orientation = it)) }
-                    )
+            ) {
+                if (!isPdf) {
+                    JerreaderRow("阅读方式") {
+                        JerreaderSegmented(
+                            options = listOf(false to "分页", true to "滚动"),
+                            selected = appearance.scroll,
+                            onSelect = { onChange(appearance.copy(scroll = it)) }
+                        )
+                    }
+                    JerreaderRow("文字方向") {
+                        JerreaderSegmented(
+                            options = listOf(
+                                ReaderTextOrientation.PUBLICATION to "原书",
+                                ReaderTextOrientation.HORIZONTAL to "横排",
+                                ReaderTextOrientation.VERTICAL to "竖排"
+                            ),
+                            selected = appearance.orientation,
+                            onSelect = { onChange(appearance.copy(orientation = it)) }
+                        )
+                    }
                 }
                 if (isPdf) {
                     JerreaderRow(

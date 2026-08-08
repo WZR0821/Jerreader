@@ -18,10 +18,14 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 
 /**
- * Compose port of the iOS `JerreaderTheme` tokens. The accent values, canvas
- * and surface formulas are copied from `Jerreader/App/JerreaderTheme.swift` so
- * both platforms render the same cool, paper-like hierarchy instead of the
- * stock Material palette.
+ * Compose port of the iOS `JerreaderTheme` tokens, kept in step with
+ * `Jerreader/App/JerreaderTheme.swift` so both platforms render the same cool,
+ * paper-like hierarchy instead of the stock Material palette.
+ *
+ * From 1.1.0 the canvas and paper tones are fixed cool blue-greys rather than
+ * being tinted by the chosen accent. Deriving them from the accent made the
+ * amber and berry themes read warm and washed out; the accent now only shows in
+ * controls, outlines and marks, and every theme sits on the same cool page.
  */
 enum class JerreaderAccent(val title: String, val detail: String) {
     OCEAN("海蓝", "沉静的蓝灰色系"),
@@ -31,7 +35,7 @@ enum class JerreaderAccent(val title: String, val detail: String) {
     BERRY("莓红", "清晰的玫红色系");
 
     internal fun rgb(dark: Boolean): Triple<Float, Float, Float> = when (this) {
-        OCEAN -> if (dark) Triple(0.47f, 0.70f, 0.88f) else Triple(0.20f, 0.39f, 0.56f)
+        OCEAN -> if (dark) Triple(0.46f, 0.72f, 0.88f) else Triple(0.18f, 0.41f, 0.60f)
         FOREST -> if (dark) Triple(0.42f, 0.76f, 0.62f) else Triple(0.16f, 0.43f, 0.34f)
         WISTERIA -> if (dark) Triple(0.68f, 0.61f, 0.91f) else Triple(0.39f, 0.31f, 0.61f)
         AMBER -> if (dark) Triple(0.91f, 0.68f, 0.34f) else Triple(0.55f, 0.35f, 0.10f)
@@ -60,39 +64,35 @@ fun jerreaderColors(accent: JerreaderAccent, dark: Boolean): JerreaderColors {
     val (red, green, blue) = accent.rgb(dark)
     val accentColor = Color(red, green, blue)
     val canvas = if (dark) {
-        Color(0.028f + red * 0.025f, 0.038f + green * 0.025f, 0.048f + blue * 0.025f)
+        Color(0.040f, 0.065f, 0.090f)
     } else {
-        Color(0.955f + red * 0.015f, 0.955f + green * 0.015f, 0.955f + blue * 0.015f)
+        Color(0.941f, 0.961f, 0.975f)
     }
     return JerreaderColors(
         accent = accentColor,
         accentFill = accentColor.copy(alpha = if (dark) 0.22f else 0.12f).compositeOver(canvas),
         canvas = canvas,
-        paper = surface(red, green, blue, dark, level = 0),
-        raisedPaper = surface(red, green, blue, dark, level = 1),
-        mutedSurface = surface(red, green, blue, dark, level = -1),
-        line = accentColor.copy(alpha = if (dark) 0.24f else 0.15f).compositeOver(canvas),
+        paper = surface(dark, level = 0),
+        raisedPaper = surface(dark, level = 1),
+        mutedSurface = surface(dark, level = -1),
+        line = accentColor.copy(alpha = if (dark) 0.28f else 0.18f).compositeOver(canvas),
         onAccent = if (dark) Color(0.025f, 0.04f, 0.05f) else Color.White,
         secondaryText = if (dark) Color(0.72f, 0.75f, 0.79f) else Color(0.36f, 0.40f, 0.45f)
     )
 }
 
-private fun surface(
-    red: Float,
-    green: Float,
-    blue: Float,
-    dark: Boolean,
-    level: Int
-): Color = if (dark) {
-    val base = if (level > 0) 0.09f else if (level < 0) 0.075f else 0.06f
-    Color(base + red * 0.045f, base + green * 0.045f, base + blue * 0.045f)
+private fun surface(dark: Boolean, level: Int): Color = if (dark) {
+    when {
+        level > 0 -> Color(0.095f, 0.145f, 0.185f)
+        level < 0 -> Color(0.028f, 0.055f, 0.080f)
+        else -> Color(0.060f, 0.100f, 0.135f)
+    }
 } else {
-    val base = if (level > 0) 1f else if (level < 0) 0.925f else 0.985f
-    Color(
-        minOf(base + red * 0.008f, 1f),
-        minOf(base + green * 0.008f, 1f),
-        minOf(base + blue * 0.008f, 1f)
-    )
+    when {
+        level > 0 -> Color(0.985f, 0.993f, 0.998f)
+        level < 0 -> Color(0.885f, 0.925f, 0.953f)
+        else -> Color(0.965f, 0.978f, 0.989f)
+    }
 }
 
 private fun Color.compositeOver(background: Color): Color = Color(
@@ -159,13 +159,13 @@ private val jerreaderTypography = Typography(
     labelSmall = TextStyle(fontSize = 11.sp, lineHeight = 15.sp)
 )
 
-/** Matches the iOS 22pt continuous card radius. */
+/** Matches the iOS 16pt card radius used from 1.1.0. */
 private val jerreaderShapes = Shapes(
     extraSmall = RoundedCornerShape(8.dp),
     small = RoundedCornerShape(12.dp),
-    medium = RoundedCornerShape(18.dp),
-    large = RoundedCornerShape(22.dp),
-    extraLarge = RoundedCornerShape(28.dp)
+    medium = RoundedCornerShape(14.dp),
+    large = RoundedCornerShape(16.dp),
+    extraLarge = RoundedCornerShape(22.dp)
 )
 
 @Composable

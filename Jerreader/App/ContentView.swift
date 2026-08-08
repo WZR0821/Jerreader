@@ -5,7 +5,7 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
 
-    @State private var selectedTab: AppTab = .library
+    @State private var selectedTab: AppTab
     @State private var incomingBookURL: URL?
     @StateObject private var translationSettings = TranslationSettingsStore()
     @AppStorage(JerreaderThemePreferences.storageKey)
@@ -13,6 +13,17 @@ struct ContentView: View {
 
     private var themeColor: JerreaderThemeColorChoice {
         JerreaderThemeColorChoice(rawValue: themeColorRawValue) ?? .ocean
+    }
+
+    init() {
+#if DEBUG
+        let initialTab: AppTab = ProcessInfo.processInfo.arguments.contains(
+            "--jerreader-standalone-translator-ui-test"
+        ) ? .learning : .library
+#else
+        let initialTab: AppTab = .library
+#endif
+        _selectedTab = State(initialValue: initialTab)
     }
 
     var body: some View {

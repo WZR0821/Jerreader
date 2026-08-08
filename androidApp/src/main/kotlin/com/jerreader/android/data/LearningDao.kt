@@ -35,6 +35,9 @@ interface LearningDao {
     @Query("DELETE FROM word_lookup_records WHERE isFavorite = 0")
     suspend fun deleteUnfavoritedWords()
 
+    @Query("DELETE FROM word_lookup_records WHERE sourceBookId = :bookId")
+    suspend fun deleteWordsByBookId(bookId: String)
+
     @Query("SELECT * FROM translation_favorites ORDER BY updatedAtEpochMillis DESC")
     fun observeTranslationFavorites(): Flow<List<TranslationFavoriteEntity>>
 
@@ -43,4 +46,21 @@ interface LearningDao {
 
     @Query("DELETE FROM translation_favorites WHERE favoriteKey = :key")
     suspend fun deleteTranslationFavorite(key: String)
+
+    @Query("DELETE FROM translation_favorites WHERE bookId = :bookId")
+    suspend fun deleteTranslationFavoritesByBookId(bookId: String)
+
+    @Query("SELECT * FROM word_lookup_records")
+    suspend fun allWords(): List<WordLookupEntity>
+
+    @Query("SELECT * FROM translation_favorites")
+    suspend fun allTranslationFavorites(): List<TranslationFavoriteEntity>
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertWordsIgnoringExisting(records: List<WordLookupEntity>): List<Long>
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertTranslationFavoritesIgnoringExisting(
+        records: List<TranslationFavoriteEntity>
+    ): List<Long>
 }

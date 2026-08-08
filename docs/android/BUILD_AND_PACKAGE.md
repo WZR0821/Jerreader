@@ -20,8 +20,8 @@ scripts/package_android_parity.sh
 
 脚本会先清理 iCloud 在 build 目录里留下的重复文件，再运行共享层测试、Android 单元测试、lint 和 APK 构建，然后生成：
 
-- `dist/Jerreader-Android-1.0.2-parity.apk`
-- `dist/Jerreader-Android-1.0.2-parity.apk.sha256`
+- `dist/Android/Jerreader-Android-1.0.2-parity.apk`
+- `dist/Android/Jerreader-Android-1.0.2-parity.apk.sha256`
 
 该包使用 Android SDK 自动生成的 debug 证书签名，可直接侧载，但不是商店发布包。
 
@@ -35,8 +35,8 @@ scripts/package_android_m4_tap.sh
 
 脚本会运行共享层 Android Host 测试、Android 单元测试、lint 和 APK 构建，然后生成：
 
-- `dist/Jerreader-Android-M4-TapLookup-installable.apk`
-- `dist/Jerreader-Android-M4-TapLookup-installable.apk.sha256`
+- `dist/Android/Jerreader-Android-M4-TapLookup-installable.apk`
+- `dist/Android/Jerreader-Android-M4-TapLookup-installable.apk.sha256`
 
 设备/模拟器级的 Readium 点按回归需按下文单独运行，因为打包脚本不能假设构建机已连接 Android 设备。
 
@@ -50,8 +50,8 @@ scripts/package_android_m2.sh
 
 脚本会先运行共享层测试、Android 单元测试和 APK 构建，然后生成：
 
-- `dist/Jerreader-Android-M2-installable.apk`
-- `dist/Jerreader-Android-M2-installable.apk.sha256`
+- `dist/Android/Jerreader-Android-M2-installable.apk`
+- `dist/Android/Jerreader-Android-M2-installable.apk.sha256`
 
 M2 包使用 Android SDK 自动生成的 debug 证书签名，可直接侧载安装，但不是商店发布包。后续 release APK/AAB 需要 Jerreader 专用签名库，签名库、密码和证书指纹不进 Git。历史 M0 脚本仅用于重现工程骨架产物。
 

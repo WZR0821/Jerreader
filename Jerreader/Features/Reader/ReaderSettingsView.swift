@@ -48,6 +48,12 @@ struct ReaderSettingsView: View {
                 Text("PDF 按单页显示：点按左右边缘翻页，点正文句子翻译；没有文字层的扫描页会在本机按页 OCR。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                Toggle("论文双栏模式", isOn: pdfPaperModeBinding)
+
+                Text("开启后，轻点识别句子、段落或 OCR 文字时只使用所点的左栏或右栏，避免选区横跨中缝。系统长按手柄仍保持 PDFKit 原生规则。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             if model.isReflowableBook {
@@ -427,6 +433,13 @@ struct ReaderSettingsView: View {
         Binding(
             get: { model.disablesTapPageTurnsDuringQuickTranslation },
             set: { model.setDisablesTapPageTurnsDuringQuickTranslation($0) }
+        )
+    }
+
+    private var pdfPaperModeBinding: Binding<Bool> {
+        Binding(
+            get: { model.isPDFPaperModeEnabled },
+            set: { model.setPDFPaperModeEnabled($0) }
         )
     }
 }

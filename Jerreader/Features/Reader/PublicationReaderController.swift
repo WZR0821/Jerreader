@@ -46,6 +46,7 @@ protocol PublicationReaderController: AnyObject {
     func setQuickSentenceTranslationEnabled(_ enabled: Bool)
     func setQuickTranslationUnit(_ unit: ReaderQuickTranslationUnit)
     func setQuickSentenceTapPageTurnsDisabled(_ disabled: Bool)
+    func setPDFPaperModeEnabled(_ enabled: Bool)
     func applyPreferences(
         fontSize: Double,
         theme: ReaderThemeChoice,
@@ -58,6 +59,11 @@ protocol PublicationReaderController: AnyObject {
         customBackgroundHex: String,
         customSelectionColorHex: String
     )
+}
+
+extension PublicationReaderController {
+    /// EPUB and converted reflowable publications do not use PDF paper mode.
+    func setPDFPaperModeEnabled(_ enabled: Bool) {}
 }
 
 extension PublicationReaderController where Self: UIViewController {

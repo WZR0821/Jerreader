@@ -98,9 +98,9 @@ xcodebuild test -project Jerreader.xcodeproj -scheme Jerreader \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
 ```
 
-打未签名 IPA：按 `docs/DEVELOPMENT_MAINTENANCE_GUIDE.md` §10（Release + `CODE_SIGNING_ALLOWED=NO` → `Payload/Jerreader.app` → `ditto -c -k --norsrc`），产物放 `dist/`，命名 `Jerreader-<版本>-build<NN>-unsigned.ipa`，发布前记得同步升 `CURRENT_PROJECT_VERSION`。
+打未签名 IPA：按 `docs/DEVELOPMENT_MAINTENANCE_GUIDE.md` §10（Release + `CODE_SIGNING_ALLOWED=NO` → `Payload/Jerreader.app` → `ditto -c -k --norsrc`），产物放 `dist/iOS/`，命名 `Jerreader-<版本>-build<NN>-unsigned.ipa`，发布前记得同步升 `CURRENT_PROJECT_VERSION`。
 
-当前交付基线：`dist/Jerreader-2.1-build24-unsigned.ipa`
+当前交付基线：`dist/iOS/Jerreader-2.1-build24-unsigned.ipa`
 SHA-256：`68c643fd33d8c0c2ec32b355297900651dde90fa90daf5127d2bf2a7cd29d214`
 
 ## 8. 遗留观察项（非缺陷，供后续验证）

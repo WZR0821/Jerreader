@@ -80,4 +80,12 @@ interface BookDao {
 
     @Query("UPDATE books SET coverFileName = :coverFileName WHERE id = :id")
     suspend fun updateCover(id: String, coverFileName: String?)
+
+    // Backup reads and writes the whole table at once. Restoring ignores rows
+    // that already exist so re-running a restore cannot duplicate a book.
+    @Query("SELECT * FROM books")
+    suspend fun allBooks(): List<BookEntity>
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIgnoringExisting(books: List<BookEntity>): List<Long>
 }

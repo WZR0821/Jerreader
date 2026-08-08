@@ -20,34 +20,125 @@ data class ReaderSelectionPalette(
 private data class Rgb(val red: Double, val green: Double, val blue: Double)
 
 object ReaderSelectionVisualStyle {
+
+    /**
+     * How much lighter or darker than the page the composited fill has to be
+     * before it reads as a highlight at all.
+     *
+     * The old floor of 1.28 was cleared by every theme's own accent on its own
+     * background with no adjustment at all — which sounds fine until you look
+     * at the result: teal at 30% over the cool-grey page, or amber over sepia,
+     * differs from the paper by so little that the selection colour reads as
+     * simply not working.
+     */
+    private const val MINIMUM_VISIBLE_CONTRAST = 1.55
+    private const val DARK_BACKGROUND_LUMINANCE = 0.38
+    private const val ALPHA_ATTEMPTS = 12
+    private const val ALPHA_STEP = 0.05
+
+    /**
+     * Bisection steps for the hue mix. 12 halvings resolve the mix ratio to
+     * better than 1/4000, well under one 8-bit channel step, so the result is
+     * the same colour a closed-form solution would give.
+     */
+    private const val MIX_BISECTIONS = 12
+
+    /**
+     * Head-room the hue mix aims for above the floor.
+     *
+     * Bisection converges on the exact threshold, and the colour is then
+     * rounded to 8 bits per channel — which can put the delivered colour a
+     * thousandth back under it. The margin only applies to the mix, so it
+     * cannot disturb an accent that already clears on its own.
+     */
+    private const val MIX_CONTRAST_MARGIN = 0.02
+
+    private val WHITE = Rgb(1.0, 1.0, 1.0)
+    private val BLACK = Rgb(0.0, 0.0, 0.0)
+
     fun palette(appearance: ReaderAppearance): ReaderSelectionPalette {
         val customBackground = parseHex(appearance.customBackgroundHex)
         val background = customBackground ?: defaultBackground(appearance.theme)
-        val darkBackground = background.relativeLuminance() < 0.38
+        val darkBackground = background.relativeLuminance() < DARK_BACKGROUND_LUMINANCE
 
         val chosen = parseHex(appearance.customSelectionColorHex)
-        var accent = chosen ?: if (customBackground == null) {
-            defaultAccent(appearance.theme)
-        } else if (darkBackground) {
-            Rgb(0.34, 0.74, 1.0)
-        } else {
-            Rgb(0.19, 0.49, 0.76)
+        var accent = chosen ?: when {
+            customBackground == null -> defaultAccent(appearance.theme)
+            darkBackground -> Rgb(0.34, 0.74, 1.0)
+            else -> Rgb(0.19, 0.49, 0.76)
         }
 
-        val fillAlpha = if (darkBackground) 0.42 else 0.30
-        val readablePole = if (darkBackground) Rgb(1.0, 1.0, 1.0) else Rgb(0.0, 0.0, 0.0)
+        var fillAlpha = if (darkBackground) 0.42 else 0.30
+        val maximumAlpha = if (darkBackground) 0.62 else 0.55
 
-        // Judge the colour the reader actually sees once the translucent fill is
-        // composited over the page: an opaque accent can pass on its own and
-        // still vanish at 30% alpha.
-        repeat(8) {
-            val visible = accent.composited(over = background, alpha = fillAlpha)
-            if (contrastRatio(visible, background) >= 1.28) return@repeat
-            accent = accent.mixed(readablePole, 0.18)
+        fun contrastOf(candidate: Rgb, alpha: Double): Double =
+            contrastRatio(candidate.composited(over = background, alpha = alpha), background)
+
+        fun clears(candidate: Rgb, alpha: Double): Boolean =
+            contrastOf(candidate, alpha) >= MINIMUM_VISIBLE_CONTRAST
+
+        // Reach for opacity before reaching for hue. Mixing towards black or
+        // white is what makes a deliberately chosen custom colour arrive as
+        // something else — a vivid red showing up as muddy brick. More alpha
+        // makes the same colour more present without changing what it is, so
+        // the hue is only touched once opacity has run out.
+        var attempts = 0
+        while (attempts < ALPHA_ATTEMPTS && fillAlpha < maximumAlpha && !clears(accent, fillAlpha)) {
+            fillAlpha = (fillAlpha + ALPHA_STEP).coerceAtMost(maximumAlpha)
+            attempts += 1
         }
 
-        val stroke = accent
-            .mixed(readablePole, if (darkBackground) 0.26 else 0.24)
+        if (!clears(accent, fillAlpha)) {
+            // Which pole actually helps is a property of *this* background, not
+            // of whether it counts as dark. `DARK_BACKGROUND_LUMINANCE` is a cut
+            // at 0.38, and a saturated mid-tone page — coral, azure — falls just
+            // under it while still being far too bright for white to read
+            // against. Picking the pole by that cut then mixed the accent
+            // towards white until nothing of the user's colour was left, and on
+            // 4267 of the 531441 background/accent pairs it *still* never
+            // reached the floor: the selection came out invisible. That is the
+            // "custom selection colour stops working when a custom background is
+            // set" report. Measure both poles and take the one that gains more.
+            val towardsWhite = contrastRatio(
+                WHITE.composited(over = background, alpha = fillAlpha),
+                background
+            )
+            val towardsBlack = contrastRatio(
+                BLACK.composited(over = background, alpha = fillAlpha),
+                background
+            )
+            val pole = when {
+                towardsWhite > towardsBlack -> WHITE
+                towardsBlack > towardsWhite -> BLACK
+                else -> if (darkBackground) WHITE else BLACK
+            }
+
+            accent = if (maxOf(towardsWhite, towardsBlack) < MINIMUM_VISIBLE_CONTRAST) {
+                // Nothing on this page clears the floor. Go as far as the page
+                // allows rather than stopping part-way for no benefit.
+                pole
+            } else {
+                // Then take the *smallest* step towards it that clears. The old
+                // fixed 18% nudges overshot by design — eight of them travel 80%
+                // of the way to the pole — so a colour that needed a touch of
+                // darkening lost its hue entirely.
+                val target = MINIMUM_VISIBLE_CONTRAST + MIX_CONTRAST_MARGIN
+                var low = 0.0
+                var high = 1.0
+                repeat(MIX_BISECTIONS) {
+                    val mid = (low + high) / 2
+                    if (contrastOf(accent.mixed(pole, mid), fillAlpha) >= target) {
+                        high = mid
+                    } else {
+                        low = mid
+                    }
+                }
+                accent.mixed(pole, high)
+            }
+        }
+
+        val strokePole = if (darkBackground) WHITE else BLACK
+        val stroke = accent.mixed(strokePole, if (darkBackground) 0.26 else 0.24)
         return ReaderSelectionPalette(
             fillArgb = accent.toArgb(fillAlpha),
             strokeArgb = stroke.toArgb(if (darkBackground) 0.82 else 0.64)

@@ -5,6 +5,8 @@ import com.jerreader.android.data.TranslationCacheEntity
 import com.jerreader.shared.domain.LanguageCode
 import com.jerreader.shared.translation.TranslationRequest
 import com.jerreader.shared.translation.TranslationResult
+import com.jerreader.shared.translation.ContextExplanationRequest
+import com.jerreader.shared.translation.ContextExplanationResult
 import com.jerreader.shared.translation.TranslationInputPolicy
 import java.security.MessageDigest
 import java.text.Normalizer
@@ -50,6 +52,55 @@ class TranslationCacheRepository(
             )
         )
     }
+
+    suspend fun findExplanation(
+        request: ContextExplanationRequest,
+        serviceNamespace: String
+    ): ContextExplanationResult? {
+        val synthetic = explanationRequest(request)
+        val record = dao.cache(key(synthetic, serviceNamespace)) ?: return null
+        if (!TranslationInputPolicy.isVisiblyNonEmpty(record.translatedText)) {
+            dao.delete(record.cacheKey)
+            return null
+        }
+        dao.touch(record.cacheKey, now())
+        return ContextExplanationResult(record.translatedText, record.providerIdentifier)
+    }
+
+    suspend fun saveExplanation(
+        request: ContextExplanationRequest,
+        serviceNamespace: String,
+        result: ContextExplanationResult
+    ) {
+        val synthetic = explanationRequest(request)
+        val timestamp = now()
+        dao.upsert(
+            TranslationCacheEntity(
+                cacheKey = key(synthetic, serviceNamespace),
+                normalizedSourceText = normalized(synthetic.text),
+                sourceLanguage = synthetic.sourceLanguage?.name ?: "AUTOMATIC",
+                targetLanguage = synthetic.targetLanguage.name,
+                serviceNamespace = serviceNamespace,
+                translatedText = result.explanation,
+                providerIdentifier = result.providerIdentifier,
+                createdAtEpochMillis = timestamp,
+                lastAccessedAtEpochMillis = timestamp
+            )
+        )
+    }
+
+    private fun explanationRequest(request: ContextExplanationRequest): TranslationRequest =
+        TranslationRequest(
+            text = buildString {
+                append(request.focusedText.trim())
+                request.contextText?.trim()?.takeIf(String::isNotBlank)?.let {
+                    append("\u001E")
+                    append(it.take(2_000))
+                }
+            },
+            sourceLanguage = request.sourceLanguage,
+            targetLanguage = LanguageCode.CHINESE_SIMPLIFIED
+        )
 
     private fun key(request: TranslationRequest, namespace: String): String = sha256(
         listOf(

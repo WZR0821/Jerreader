@@ -14,6 +14,8 @@ import com.jerreader.shared.lexical.WordSelectionSource
 import com.jerreader.shared.ui.WordLookupCardState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import org.readium.r2.navigator.Selection
@@ -28,13 +30,16 @@ class ReaderWordInteractionController(
     private val scope: CoroutineScope,
     private val lookupService: LexicalLookupService,
     private val languageHint: () -> LanguageCode?,
-    private val onStateChanged: (WordLookupCardState) -> Unit
+    private val onStateChanged: (WordLookupCardState) -> Unit,
+    private val shortTapEnabled: () -> Boolean = { true },
+    private val onSelectionInvalidated: (() -> Unit)? = null
 ) {
     private val analyzer = WordMorphologyAnalyzer(AndroidWordBoundaryTokenizer())
     private var navigator: EpubNavigatorFragment? = null
     private var lookupJob: Job? = null
     private var lastAnalysis: WordAnalysis? = null
     private var inputListenerRegistered = false
+    private var requestToken = 0L
 
     val selectionActionModeCallback: ActionMode.Callback = object : BaseActionModeCallback() {
         override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
@@ -46,6 +51,7 @@ class ReaderWordInteractionController(
         override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
             if (item.itemId != LOOKUP_MENU_ITEM_ID) return false
             mode.finish()
+            invalidateForNewLookup()
             lookupJob?.cancel()
             lookupJob = scope.launch { lookupCurrentSelection() }
             return true
@@ -54,6 +60,8 @@ class ReaderWordInteractionController(
 
     private val inputListener = object : InputListener {
         override fun onTap(event: TapEvent): Boolean {
+            if (!shortTapEnabled()) return false
+            invalidateForNewLookup()
             lookupJob?.cancel()
             lookupJob = scope.launch { lookupAt(toCssPoint(event.point)) }
             // Readium filters links and other interactive elements before this
@@ -75,10 +83,26 @@ class ReaderWordInteractionController(
         navigator = null
         lookupJob?.cancel()
         lookupJob = null
+        requestToken++
+        lastAnalysis = null
     }
 
     fun clearSelection() {
+        lookupJob?.cancel()
+        lookupJob = null
         navigator?.clearSelection()
+        requestToken++
+        lastAnalysis = null
+    }
+
+    /** Invalidates only the transient card before a new lookup attempt. */
+    private fun invalidateForNewLookup() {
+        val hadAnalysis = lastAnalysis != null
+        lookupJob?.cancel()
+        lookupJob = null
+        requestToken++
+        lastAnalysis = null
+        if (hadAnalysis) onSelectionInvalidated?.invoke()
     }
 
     fun retry() {
@@ -97,6 +121,7 @@ class ReaderWordInteractionController(
     }
 
     fun lookupSelectionFromMenu() {
+        invalidateForNewLookup()
         lookupJob?.cancel()
         lookupJob = scope.launch { lookupCurrentSelection() }
     }
@@ -104,9 +129,13 @@ class ReaderWordInteractionController(
     internal suspend fun lookupAt(point: PointF): WordLookupCardState? {
         val navigator = navigator ?: return null
         val selected = navigator.evaluateJavascript(shortTapSelectionScript(point))
-        if (selected != "true") return null
+        if (selected != "true") {
+            navigator.clearSelection()
+            return null
+        }
         val selection = navigator.currentSelection() ?: return null
-        val analysis = analyzeSelection(selection, WordSelectionSource.SHORT_TAP) ?: return null
+        val analysis = analyzeSelection(selection, WordSelectionSource.SHORT_TAP)
+            ?: return null
         return lookupNow(analysis)
     }
 
@@ -153,32 +182,41 @@ class ReaderWordInteractionController(
     }
 
     private suspend fun lookupNow(analysis: WordAnalysis): WordLookupCardState {
+        val token = ++requestToken
         lastAnalysis = analysis
         val loading = WordLookupCardState.Loading(analysis)
-        onStateChanged(loading)
+        if (token == requestToken) onStateChanged(loading)
         return try {
-            val result = lookupService.lookup(
-                word = analysis.surfaceForm,
-                sentenceContext = analysis.sentenceContext,
-                language = analysis.language,
-                candidates = buildList {
-                    analysis.lemma?.let(::add)
-                    addAll(analysis.lemmaCandidates)
-                }.distinct()
-            )
-            WordLookupCardState.Success(analysis, result).also(onStateChanged)
+            val result = withContext(Dispatchers.IO) {
+                lookupService.lookup(
+                    word = analysis.surfaceForm,
+                    sentenceContext = analysis.sentenceContext,
+                    language = analysis.language,
+                    candidates = buildList {
+                        analysis.lemma?.let(::add)
+                        addAll(analysis.lemmaCandidates)
+                    }.distinct()
+                )
+            }
+            WordLookupCardState.Success(analysis, result).also {
+                if (token == requestToken) onStateChanged(it)
+            }
         } catch (error: CancellationException) {
             throw error
         } catch (error: LexicalLookupFailure) {
             WordLookupCardState.Failure(
                 analysis = analysis,
                 message = error.message ?: "查词失败。"
-            ).also(onStateChanged)
+            ).also {
+                if (token == requestToken) onStateChanged(it)
+            }
         } catch (_: Exception) {
             WordLookupCardState.Failure(
                 analysis = analysis,
                 message = "词典服务暂时不可用，请稍后重试。"
-            ).also(onStateChanged)
+            ).also {
+                if (token == requestToken) onStateChanged(it)
+            }
         }
     }
 

@@ -370,6 +370,178 @@ final class ReaderServicesTests: XCTestCase {
             ReaderTranslationContentMetric.height(measured: 320, maximum: 180),
             180
         )
+        // A paragraph may opt into a larger maximum, but a four-line result
+        // must still hug its actual content instead of producing blank space.
+        XCTAssertEqual(
+            ReaderTranslationContentMetric.height(measured: 92, maximum: 260),
+            92
+        )
+    }
+
+    func testLongParagraphTranslationPrefersExpandedMaximumViewport() {
+        XCTAssertTrue(
+            ReaderTranslationViewportPolicy.prefersExpandedMaximumHeight(
+                sourceCharacterCount: 210,
+                translatedCharacterCount: 120,
+                isParagraph: true
+            )
+        )
+        XCTAssertTrue(
+            ReaderTranslationViewportPolicy.prefersExpandedMaximumHeight(
+                sourceCharacterCount: 90,
+                translatedCharacterCount: 42,
+                isParagraph: true
+            )
+        )
+        XCTAssertFalse(
+            ReaderTranslationViewportPolicy.prefersExpandedMaximumHeight(
+                sourceCharacterCount: 42,
+                translatedCharacterCount: 24,
+                isParagraph: false
+            )
+        )
+    }
+
+    func testStandaloneTranslatorResolvesAutomaticChineseEnglishAndJapanese() throws {
+        let english = try StandaloneTranslationRequestPolicy.makeRequest(
+            text: "The night was quiet.",
+            sourceChoice: .automatic,
+            targetLanguage: .simplifiedChinese,
+            mode: .sentence
+        )
+        let japanese = try StandaloneTranslationRequestPolicy.makeRequest(
+            text: "夜は静かだった。",
+            sourceChoice: .automatic,
+            targetLanguage: .english,
+            mode: .sentence
+        )
+        let chinese = try StandaloneTranslationRequestPolicy.makeRequest(
+            text: "夜晚很安静。",
+            sourceChoice: .automatic,
+            targetLanguage: .japanese,
+            mode: .sentence
+        )
+
+        XCTAssertEqual(english.sourceLanguage, .english)
+        XCTAssertEqual(japanese.sourceLanguage, .japanese)
+        XCTAssertEqual(chinese.sourceLanguage, .simplifiedChinese)
+    }
+
+    func testStandaloneTranslatorRejectsSameDirectionAndAppliesModeLimits() {
+        XCTAssertThrowsError(
+            try StandaloneTranslationRequestPolicy.makeRequest(
+                text: "hello",
+                sourceChoice: .english,
+                targetLanguage: .english,
+                mode: .word
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? StandaloneTranslationValidationError,
+                .sameLanguage
+            )
+        }
+
+        XCTAssertThrowsError(
+            try StandaloneTranslationRequestPolicy.makeRequest(
+                text: String(repeating: "a", count: 81),
+                sourceChoice: .english,
+                targetLanguage: .japanese,
+                mode: .word
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? StandaloneTranslationValidationError,
+                .textTooLong(maximum: 80)
+            )
+        }
+
+        XCTAssertNoThrow(
+            try StandaloneTranslationRequestPolicy.makeRequest(
+                text: String(repeating: "a", count: 81),
+                sourceChoice: .english,
+                targetLanguage: .japanese,
+                mode: .sentence
+            )
+        )
+    }
+
+    func testStandaloneWordModeUsesConciseAIPrompt() {
+        let prompt = StandaloneTranslationMode.word.translationPrompt(
+            fallback: "sentence fallback"
+        )
+
+        XCTAssertTrue(prompt.contains("只输出译词"))
+        XCTAssertFalse(prompt.contains("sentence fallback"))
+        XCTAssertEqual(
+            StandaloneTranslationMode.sentence.translationPrompt(
+                fallback: "custom sentence prompt"
+            ),
+            "custom sentence prompt"
+        )
+    }
+
+    func testStandaloneWordModeOnlyAddsDictionaryDetailsForJapaneseAndEnglish() {
+        let japaneseWord = StandaloneTranslationRequest(
+            id: UUID(),
+            text: "食べました",
+            sourceLanguage: .japanese,
+            targetLanguage: .simplifiedChinese,
+            mode: .word
+        )
+        let englishWord = StandaloneTranslationRequest(
+            id: UUID(),
+            text: "went",
+            sourceLanguage: .english,
+            targetLanguage: .simplifiedChinese,
+            mode: .word
+        )
+        let chineseWord = StandaloneTranslationRequest(
+            id: UUID(),
+            text: "阅读",
+            sourceLanguage: .simplifiedChinese,
+            targetLanguage: .japanese,
+            mode: .word
+        )
+        let japaneseSentence = StandaloneTranslationRequest(
+            id: UUID(),
+            text: "私は学生です。",
+            sourceLanguage: .japanese,
+            targetLanguage: .simplifiedChinese,
+            mode: .sentence
+        )
+
+        XCTAssertTrue(StandaloneLexicalLookupPolicy.supports(japaneseWord))
+        XCTAssertTrue(StandaloneLexicalLookupPolicy.supports(englishWord))
+        XCTAssertFalse(StandaloneLexicalLookupPolicy.supports(chineseWord))
+        XCTAssertFalse(StandaloneLexicalLookupPolicy.supports(japaneseSentence))
+    }
+
+    func testJapaneseFuriganaPreservesTextAndAnnotatesKanjiRuns() {
+        let source = "私は学生です。食べました。"
+        let segments = JapaneseFuriganaFormatter.segments(for: source)
+
+        XCTAssertEqual(segments.map(\.text).joined(), source)
+        XCTAssertTrue(
+            segments.contains {
+                $0.text == "私" && $0.reading?.isEmpty == false
+            }
+        )
+        XCTAssertTrue(
+            segments.contains {
+                $0.text == "学生" && $0.reading?.isEmpty == false
+            }
+        )
+        XCTAssertTrue(
+            segments.contains {
+                $0.text == "食" && $0.reading?.isEmpty == false
+            }
+        )
+        XCTAssertFalse(
+            segments.contains {
+                $0.text.contains("です") && $0.reading != nil
+            }
+        )
     }
 
     func testProductionTimingAllowsLanguageDownloadAndLongerGrammarAnalysis() {
@@ -557,6 +729,102 @@ final class ReaderServicesTests: XCTestCase {
         XCTAssertLessThanOrEqual(cardFrame.maxY, viewport.height - 40)
     }
 
+    func testVerticalTranslationOverlayShrinksIntoRealIPhoneSideSpace() {
+        let viewport = CGSize(width: 390, height: 844)
+        let preferredCard = CGSize(width: 248, height: 280)
+        let verticalSelection = CGRect(x: 252, y: 150, width: 26, height: 540)
+        let layout = ReaderTranslationOverlayPlacement.layout(
+            selectionFrame: verticalSelection,
+            viewportSize: viewport,
+            cardSize: preferredCard,
+            topInset: 58,
+            bottomInset: 42,
+            horizontalInset: 12,
+            gap: 16,
+            minimumCardHeight: 108,
+            preferredMaximumCardHeight: 280,
+            prefersHorizontalAvoidance: true,
+            minimumHorizontalCardWidth: 188
+        )
+        let cardFrame = CGRect(
+            x: layout.position.x - layout.cardWidth / 2,
+            y: layout.position.y - preferredCard.height / 2,
+            width: layout.cardWidth,
+            height: preferredCard.height
+        )
+
+        XCTAssertEqual(layout.edge, .left)
+        XCTAssertEqual(layout.cardWidth, 224)
+        XCTAssertEqual(layout.maximumCardHeight, 280)
+        XCTAssertLessThanOrEqual(cardFrame.maxX, verticalSelection.minX - 16)
+        XCTAssertGreaterThanOrEqual(cardFrame.minY, 58)
+        XCTAssertLessThanOrEqual(cardFrame.maxY, viewport.height - 42)
+        XCTAssertFalse(cardFrame.intersects(verticalSelection))
+    }
+
+    func testVerticalSideAvoidanceDoesNotDependOnlyOnCachedMetadata() {
+        let tallJapaneseSelection = CGRect(x: 260, y: 140, width: 28, height: 410)
+
+        XCTAssertTrue(
+            ReaderTranslationLayoutPolicy.usesVerticalSideAvoidance(
+                isReflowable: true,
+                preservesPublicationOrientation: true,
+                publicationIsVertical: false,
+                isJapaneseBook: false,
+                selectionFrame: tallJapaneseSelection
+            )
+        )
+        XCTAssertFalse(
+            ReaderTranslationLayoutPolicy.usesVerticalSideAvoidance(
+                isReflowable: true,
+                preservesPublicationOrientation: true,
+                publicationIsVertical: false,
+                isJapaneseBook: true,
+                selectionFrame: CGRect(x: 30, y: 160, width: 330, height: 180)
+            )
+        )
+        XCTAssertEqual(
+            ReaderTranslationLayoutPolicy.selectionGap(
+                isParagraph: true,
+                usesVerticalSideAvoidance: true
+            ),
+            12
+        )
+    }
+
+    func testVerticalParagraphFloatingWindowUsesTappedColumnWhenWholeSelectionIsWide() {
+        let viewport = CGSize(width: 390, height: 844)
+        let wholeParagraph = CGRect(x: 42, y: 120, width: 306, height: 610)
+        let tappedColumn = CGRect(x: 252, y: 260, width: 24, height: 280)
+        let layout = ReaderTranslationOverlayPlacement.layout(
+            selectionFrame: wholeParagraph,
+            horizontalAvoidanceFrame: tappedColumn,
+            viewportSize: viewport,
+            cardSize: CGSize(width: 220, height: 300),
+            topInset: 58,
+            bottomInset: 42,
+            horizontalInset: 12,
+            gap: 12,
+            minimumCardHeight: 108,
+            preferredMaximumCardHeight: 300,
+            prefersHorizontalAvoidance: true,
+            minimumHorizontalCardWidth: 144
+        )
+        let floatingWindow = CGRect(
+            x: layout.position.x - layout.cardWidth / 2,
+            y: layout.position.y - layout.maximumCardHeight / 2,
+            width: layout.cardWidth,
+            height: layout.maximumCardHeight
+        )
+
+        XCTAssertEqual(layout.edge, .left)
+        XCTAssertEqual(layout.cardWidth, 220)
+        XCTAssertLessThanOrEqual(floatingWindow.maxX, tappedColumn.minX - 12)
+        XCTAssertFalse(floatingWindow.intersects(tappedColumn))
+        XCTAssertGreaterThanOrEqual(floatingWindow.minY, 58)
+        XCTAssertLessThanOrEqual(floatingWindow.maxY, viewport.height - 42)
+    }
+
     func testParagraphTranslationKeepsExpandedGapFromOriginalText() {
         let paragraph = CGRect(x: 36, y: 170, width: 318, height: 280)
         let card = CGSize(width: 334, height: 126)
@@ -566,7 +834,7 @@ final class ReaderServicesTests: XCTestCase {
             cardSize: card,
             topInset: 58,
             bottomInset: 42,
-            gap: 30,
+            gap: 26,
             minimumCardHeight: 108,
             preferredMaximumCardHeight: 246
         )
@@ -577,8 +845,40 @@ final class ReaderServicesTests: XCTestCase {
             height: card.height
         )
 
-        XCTAssertGreaterThanOrEqual(cardFrame.minY, paragraph.maxY + 30)
-        XCTAssertFalse(cardFrame.intersects(paragraph.insetBy(dx: -30, dy: -30)))
+        XCTAssertGreaterThanOrEqual(cardFrame.minY, paragraph.maxY + 26)
+        XCTAssertFalse(cardFrame.intersects(paragraph.insetBy(dx: -26, dy: -26)))
+    }
+
+    func testLongParagraphCardKeepsComfortableHeightWithoutCoveringOriginal() {
+        let viewport = CGSize(width: 390, height: 844)
+        let card = CGSize(width: 358, height: 280)
+        let paragraph = CGRect(x: 32, y: 430, width: 326, height: 220)
+        let layout = ReaderTranslationOverlayPlacement.layout(
+            selectionFrame: paragraph,
+            viewportSize: viewport,
+            cardSize: card,
+            topInset: 58,
+            bottomInset: 42,
+            horizontalInset: 16,
+            gap: 26,
+            minimumCardHeight: 108,
+            preferredMaximumCardHeight: 280,
+            prefersHorizontalAvoidance: true,
+            minimumHorizontalCardWidth: 220
+        )
+        let resolvedHeight = min(card.height, layout.maximumCardHeight)
+        let cardFrame = CGRect(
+            x: layout.position.x - layout.cardWidth / 2,
+            y: layout.position.y - resolvedHeight / 2,
+            width: layout.cardWidth,
+            height: resolvedHeight
+        )
+
+        XCTAssertEqual(layout.edge, .above)
+        XCTAssertEqual(layout.maximumCardHeight, 280)
+        XCTAssertEqual(resolvedHeight, 280)
+        XCTAssertLessThanOrEqual(cardFrame.maxY, paragraph.minY - 26)
+        XCTAssertFalse(cardFrame.intersects(paragraph))
     }
 
     func testTopTranslationModeNeverCoversATopSelection() {
@@ -2826,6 +3126,84 @@ final class ReaderServicesTests: XCTestCase {
         XCTAssertFalse(selection.text.contains("Another sentence"))
     }
 
+    func testPDFPaperModeKeepsTextLayerSentenceInsideTappedColumn() throws {
+        var cursor = 0
+        func line(_ text: String, bounds: CGRect) -> PDFPaperTextLine {
+            defer { cursor += text.utf16.count + 1 }
+            return PDFPaperTextLine(
+                text: text,
+                pageUTF16Range: NSRange(
+                    location: cursor,
+                    length: text.utf16.count
+                ),
+                bounds: bounds
+            )
+        }
+
+        let leftFirst = line(
+            "Left sentence begins",
+            bounds: CGRect(x: 42, y: 700, width: 225, height: 18)
+        )
+        let rightFirst = line(
+            "Right column must stay separate.",
+            bounds: CGRect(x: 330, y: 700, width: 225, height: 18)
+        )
+        let leftSecond = line(
+            "and ends here. A second sentence follows.",
+            bounds: CGRect(x: 42, y: 676, width: 225, height: 18)
+        )
+        let rightSecond = line(
+            "It has an unrelated continuation.",
+            bounds: CGRect(x: 330, y: 676, width: 225, height: 18)
+        )
+        let selection = try XCTUnwrap(
+            PDFPaperTextSelector.selection(
+                unit: .sentence,
+                pageBounds: CGRect(x: 0, y: 0, width: 600, height: 800),
+                pagePoint: CGPoint(x: 110, y: 708),
+                utf16Offset: leftFirst.pageUTF16Range.location + 6,
+                lines: [leftFirst, rightFirst, leftSecond, rightSecond],
+                language: .english
+            )
+        )
+
+        XCTAssertEqual(selection.text, "Left sentence begins and ends here.")
+        XCTAssertEqual(selection.pageUTF16Ranges.count, 2)
+        for range in selection.pageUTF16Ranges {
+            XCTAssertFalse(NSIntersectionRange(range, rightFirst.pageUTF16Range).length > 0)
+            XCTAssertFalse(NSIntersectionRange(range, rightSecond.pageUTF16Range).length > 0)
+        }
+    }
+
+    func testPDFPaperModeFallsBackForFullWidthTextLayerHeading() {
+        let heading = PDFPaperTextLine(
+            text: "A Full Width Paper Heading",
+            pageUTF16Range: NSRange(location: 0, length: 26),
+            bounds: CGRect(x: 45, y: 740, width: 510, height: 24)
+        )
+        let left = PDFPaperTextLine(
+            text: "Left body.",
+            pageUTF16Range: NSRange(location: 27, length: 10),
+            bounds: CGRect(x: 45, y: 700, width: 220, height: 18)
+        )
+        let right = PDFPaperTextLine(
+            text: "Right body.",
+            pageUTF16Range: NSRange(location: 38, length: 11),
+            bounds: CGRect(x: 335, y: 700, width: 220, height: 18)
+        )
+
+        XCTAssertNil(
+            PDFPaperTextSelector.selection(
+                unit: .sentence,
+                pageBounds: CGRect(x: 0, y: 0, width: 600, height: 800),
+                pagePoint: CGPoint(x: 300, y: 750),
+                utf16Offset: 5,
+                lines: [heading, left, right],
+                language: .english
+            )
+        )
+    }
+
     func testPDFTextLayerParagraphJoinsWrapsAndStopsAtBlankLine() throws {
         let pageText = """
         Heading
@@ -3225,6 +3603,43 @@ final class ReaderServicesTests: XCTestCase {
         )
 
         XCTAssertEqual(selection.text, "Left column begins here and ends here.")
+        XCTAssertFalse(selection.text.contains("Right column"))
+        XCTAssertEqual(selection.boundingBoxes.count, 2)
+    }
+
+    func testPDFOCRPaperModeKeepsParagraphInsideTappedColumn() throws {
+        let observations = [
+            PDFOCRTextObservation(
+                text: "Left paragraph first line",
+                boundingBox: CGRect(x: 0.08, y: 0.82, width: 0.36, height: 0.04)
+            ),
+            PDFOCRTextObservation(
+                text: "left paragraph continuation.",
+                boundingBox: CGRect(x: 0.08, y: 0.76, width: 0.34, height: 0.04)
+            ),
+            PDFOCRTextObservation(
+                text: "Right column first line",
+                boundingBox: CGRect(x: 0.56, y: 0.82, width: 0.36, height: 0.04)
+            ),
+            PDFOCRTextObservation(
+                text: "right column continuation.",
+                boundingBox: CGRect(x: 0.56, y: 0.76, width: 0.34, height: 0.04)
+            ),
+        ]
+
+        let selection = try XCTUnwrap(
+            PDFOCRTextSelector.paragraph(
+                at: CGPoint(x: 0.18, y: 0.84),
+                observations: observations,
+                preferredLanguage: .english,
+                paperMode: true
+            )
+        )
+
+        XCTAssertEqual(
+            selection.text,
+            "Left paragraph first line left paragraph continuation."
+        )
         XCTAssertFalse(selection.text.contains("Right column"))
         XCTAssertEqual(selection.boundingBoxes.count, 2)
     }

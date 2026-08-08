@@ -55,13 +55,13 @@ enum class DirectAIProvider(
     OPENAI(
         displayName = "GPT",
         defaultEndpoint = "https://api.openai.com/v1/responses",
-        defaultModel = "gpt-5.6-luna",
+        defaultModel = "gpt-5.2",
         protocol = DirectAIProtocol.OPENAI_RESPONSES
     ),
     ANTHROPIC(
         displayName = "Claude",
         defaultEndpoint = "https://api.anthropic.com/v1/messages",
-        defaultModel = "claude-sonnet-5",
+        defaultModel = "claude-sonnet-4-20250514",
         protocol = DirectAIProtocol.ANTHROPIC_MESSAGES
     ),
     KIMI(
@@ -79,7 +79,7 @@ enum class DirectAIProvider(
     GEMINI(
         displayName = "Gemini",
         defaultEndpoint = "https://generativelanguage.googleapis.com/v1beta",
-        defaultModel = "gemini-3.5-flash",
+        defaultModel = "gemini-3.6-flash",
         protocol = DirectAIProtocol.GEMINI_GENERATE_CONTENT
     ),
     OPENAI_COMPATIBLE(

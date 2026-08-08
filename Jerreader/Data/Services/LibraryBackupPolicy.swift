@@ -33,12 +33,40 @@ struct LibraryBackupPolicy: Equatable, Sendable {
     }
 }
 
+/// The backup regimen an archive carries with it.
+///
+/// A backup is only half useful if the next installation has to be told all
+/// over again how often to back up, what to include and where to put it. This
+/// travels inside every archive — independently of whether the user asked for
+/// the settings scope — so importing one continues the same backup chain
+/// instead of starting from the defaults.
+///
+/// The folder is a *hint*: a label and a path, never an authorization. The
+/// security scoped bookmark stays on the device that granted it.
+struct LibraryBackupProfile: Codable, Equatable, Sendable {
+    var automaticEnabled: Bool
+    var intervalDays: Int
+    var retentionDays: Int
+    var maximumBackupCount: Int
+    var maximumTotalBytes: Int64
+    var automaticScopes: [LibraryBackupScope]
+    var folderDisplayName: String?
+    var folderPath: String?
+
+    var folderURL: URL? {
+        guard let folderPath, !folderPath.isEmpty else { return nil }
+        return URL(fileURLWithPath: folderPath, isDirectory: true)
+    }
+}
+
 @MainActor
 final class LibraryBackupPolicyStore: ObservableObject {
-    static let intervalChoices = [1, 3, 7, 14, 30]
-    static let retentionChoices = [7, 14, 30, 90, 365, 0]
-    static let countChoices = [2, 3, 5, 10, 20]
-    static let sizeChoices: [Int64] = [
+    // Nonisolated so an export or an import running off the main actor can
+    // validate an inherited regimen without hopping back.
+    nonisolated static let intervalChoices = [1, 3, 7, 14, 30]
+    nonisolated static let retentionChoices = [7, 14, 30, 90, 365, 0]
+    nonisolated static let countChoices = [2, 3, 5, 10, 20]
+    nonisolated static let sizeChoices: [Int64] = [
         250 * 1_024 * 1_024,
         500 * 1_024 * 1_024,
         1 * 1_024 * 1_024 * 1_024,
@@ -266,7 +294,96 @@ final class LibraryBackupPolicyStore: ObservableObject {
         ]
     }
 
-    private static func validChoice<T: Equatable>(
+    /// Reads the regimen straight out of `UserDefaults` so an export running
+    /// off the main actor does not have to hop back for it.
+    nonisolated static func currentProfile(
+        defaults: UserDefaults = .standard
+    ) -> LibraryBackupProfile {
+        let directory = LibraryBackupDirectoryStore(defaults: defaults)
+        let savedScopes = (defaults.stringArray(forKey: Keys.scopes) ?? [])
+            .compactMap(LibraryBackupScope.init(rawValue:))
+        return LibraryBackupProfile(
+            automaticEnabled: defaults.bool(forKey: Keys.enabled),
+            intervalDays: validChoice(
+                defaults.integer(forKey: Keys.intervalDays),
+                choices: intervalChoices,
+                fallback: 7
+            ),
+            retentionDays: validChoice(
+                defaults.object(forKey: Keys.retentionDays) == nil
+                    ? 30
+                    : defaults.integer(forKey: Keys.retentionDays),
+                choices: retentionChoices,
+                fallback: 30
+            ),
+            maximumBackupCount: validChoice(
+                defaults.integer(forKey: Keys.maximumCount),
+                choices: countChoices,
+                fallback: 5
+            ),
+            maximumTotalBytes: validChoice(
+                defaults.object(forKey: Keys.maximumBytes) == nil
+                    ? 2 * 1_024 * 1_024 * 1_024
+                    : Int64(defaults.double(forKey: Keys.maximumBytes)),
+                choices: sizeChoices,
+                fallback: 2 * 1_024 * 1_024 * 1_024
+            ),
+            automaticScopes: (
+                savedScopes.isEmpty
+                    ? Array(LibraryBackupOptions.full.scopes)
+                    : savedScopes
+            ).sorted { $0.rawValue < $1.rawValue },
+            folderDisplayName: directory.hasCustomDirectory
+                ? directory.displayName
+                : nil,
+            folderPath: directory.customDirectoryPath
+        )
+    }
+
+    /// Adopts an imported regimen. Values that this build no longer offers fall
+    /// back rather than sticking as an unselectable row, and the archive's own
+    /// creation date becomes the last automatic run so the inherited schedule
+    /// continues from where the previous installation left off instead of
+    /// firing immediately.
+    nonisolated static func apply(
+        _ profile: LibraryBackupProfile,
+        lastAutomaticBackupAt: Date?,
+        defaults: UserDefaults = .standard
+    ) {
+        defaults.set(profile.automaticEnabled, forKey: Keys.enabled)
+        defaults.set(
+            validChoice(profile.intervalDays, choices: intervalChoices, fallback: 7),
+            forKey: Keys.intervalDays
+        )
+        defaults.set(
+            validChoice(profile.retentionDays, choices: retentionChoices, fallback: 30),
+            forKey: Keys.retentionDays
+        )
+        defaults.set(
+            validChoice(profile.maximumBackupCount, choices: countChoices, fallback: 5),
+            forKey: Keys.maximumCount
+        )
+        defaults.set(
+            Double(
+                validChoice(
+                    profile.maximumTotalBytes,
+                    choices: sizeChoices,
+                    fallback: 2 * 1_024 * 1_024 * 1_024
+                )
+            ),
+            forKey: Keys.maximumBytes
+        )
+        let scopes = profile.automaticScopes.isEmpty
+            ? Array(LibraryBackupOptions.full.scopes)
+            : profile.automaticScopes
+        defaults.set(scopes.map(\.rawValue).sorted(), forKey: Keys.scopes)
+        if let lastAutomaticBackupAt {
+            defaults.set(lastAutomaticBackupAt, forKey: Keys.lastSuccessAt)
+        }
+        defaults.removeObject(forKey: Keys.lastError)
+    }
+
+    nonisolated private static func validChoice<T: Equatable>(
         _ value: T,
         choices: [T],
         fallback: T
@@ -312,6 +429,66 @@ struct LibraryBackupDirectoryStore: @unchecked Sendable {
             ?? "App 本地/Jerreader Backups"
     }
 
+    /// Where the selected folder currently sits. Recorded so an archive can
+    /// name the folder it came from; it is a hint for the next installation's
+    /// folder picker, never a grant.
+    var customDirectoryPath: String? {
+        guard hasCustomDirectory else { return nil }
+        return defaults.string(forKey: Keys.path)
+    }
+
+    func isSelectedDirectory(_ url: URL) -> Bool {
+        let wanted = url.standardizedFileURL.path
+        // Installations that predate the recorded path still have to answer,
+        // so fall back to resolving the bookmark.
+        if let path = customDirectoryPath { return path == wanted }
+        guard let access = try? selectedDirectoryAccess() else { return false }
+        return access.url.standardizedFileURL.path == wanted
+    }
+
+    /// Takes `url` over as the backup folder, but only when this installation
+    /// can actually keep using it.
+    ///
+    /// Selecting proves the folder is writable right now; resolving the
+    /// bookmark straight back is what proves the grant survives the next
+    /// launch, which is the whole point of inheriting a folder. Anything short
+    /// of that leaves the previous selection exactly as it was.
+    @discardableResult
+    func adoptDirectory(_ url: URL) -> Bool {
+        if isSelectedDirectory(url) { return true }
+        let previousBookmark = defaults.data(forKey: Keys.bookmark)
+        let previousName = defaults.string(forKey: Keys.displayName)
+        let previousPath = defaults.string(forKey: Keys.path)
+        do {
+            try selectDirectory(url)
+            guard try selectedDirectoryAccess() != nil else {
+                throw LibraryBackupError.backupFolderUnavailable
+            }
+            return true
+        } catch {
+            if let previousBookmark {
+                defaults.set(previousBookmark, forKey: Keys.bookmark)
+            } else {
+                defaults.removeObject(forKey: Keys.bookmark)
+            }
+            if let previousName {
+                defaults.set(previousName, forKey: Keys.displayName)
+            } else {
+                defaults.removeObject(forKey: Keys.displayName)
+            }
+            if let previousPath {
+                defaults.set(previousPath, forKey: Keys.path)
+            } else {
+                defaults.removeObject(forKey: Keys.path)
+            }
+            NotificationCenter.default.post(
+                name: .libraryBackupDidChange,
+                object: nil
+            )
+            return false
+        }
+    }
+
     func selectDirectory(_ url: URL) throws {
         guard url.isFileURL else {
             throw LibraryBackupError.backupFolderUnavailable
@@ -336,12 +513,14 @@ struct LibraryBackupDirectoryStore: @unchecked Sendable {
         }
         defaults.set(bookmark, forKey: Keys.bookmark)
         defaults.set(Self.userFacingName(for: url), forKey: Keys.displayName)
+        defaults.set(url.standardizedFileURL.path, forKey: Keys.path)
         NotificationCenter.default.post(name: .libraryBackupDidChange, object: nil)
     }
 
     func useDefaultDirectory() {
         defaults.removeObject(forKey: Keys.bookmark)
         defaults.removeObject(forKey: Keys.displayName)
+        defaults.removeObject(forKey: Keys.path)
         NotificationCenter.default.post(name: .libraryBackupDidChange, object: nil)
     }
 
@@ -378,6 +557,7 @@ struct LibraryBackupDirectoryStore: @unchecked Sendable {
                     Self.userFacingName(for: url),
                     forKey: Keys.displayName
                 )
+                defaults.set(url.standardizedFileURL.path, forKey: Keys.path)
             } catch {
                 throw LibraryBackupError.backupFolderUnavailable
             }
@@ -426,6 +606,7 @@ struct LibraryBackupDirectoryStore: @unchecked Sendable {
     private enum Keys {
         static let bookmark = "backup.directory.bookmark"
         static let displayName = "backup.directory.displayName"
+        static let path = "backup.directory.path"
     }
 }
 

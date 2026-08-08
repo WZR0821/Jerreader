@@ -6,7 +6,10 @@ import androidx.room.PrimaryKey
 
 @Entity(
     tableName = "word_lookup_records",
-    indices = [Index(value = ["lastLookedUpAtEpochMillis"])]
+    indices = [
+        Index(value = ["lastLookedUpAtEpochMillis"]),
+        Index(value = ["sourceBookId"])
+    ]
 )
 data class WordLookupEntity(
     @PrimaryKey val lookupKey: String,
@@ -33,7 +36,10 @@ data class WordLookupEntity(
 
 @Entity(
     tableName = "translation_favorites",
-    indices = [Index(value = ["updatedAtEpochMillis"])]
+    indices = [
+        Index(value = ["updatedAtEpochMillis"]),
+        Index(value = ["bookId"])
+    ]
 )
 data class TranslationFavoriteEntity(
     @PrimaryKey val favoriteKey: String,

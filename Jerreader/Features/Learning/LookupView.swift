@@ -221,16 +221,7 @@ struct LookupView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(17)
-        .background {
-            LinearGradient(
-                colors: [
-                    JerreaderTheme.accentFill.opacity(0.92),
-                    JerreaderTheme.paper.opacity(0.96)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        }
+        .background(JerreaderTheme.paper)
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
@@ -638,12 +629,12 @@ struct LookupView: View {
     }
 }
 
-private struct ReferenceDictionaryTerm: Identifiable {
+struct ReferenceDictionaryTerm: Identifiable {
     let id = UUID()
     let term: String
 }
 
-private struct SystemDictionaryView: UIViewControllerRepresentable {
+struct SystemDictionaryView: UIViewControllerRepresentable {
     let term: String
 
     func makeUIViewController(context: Context) -> UIReferenceLibraryViewController {

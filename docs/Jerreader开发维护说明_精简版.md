@@ -16,7 +16,7 @@ Jerreader是一款以中、英、日三语为主的电子书阅读和翻译 App�
 - Apple 翻译及 GPT、Claude、Kimi 等 API，AI 句子结构分析和跨页句段扩展；
 - 阅读内把完整词语加入生词本，以及可关闭的翻译完成触感反馈；
 - PDF 文字点击翻译和 OCR；
-- 查词、生词本、历史、收藏与导出；
+- 词语翻译中的词典详情、生词本、历史、收藏与导出；
 - iPad 与横屏自适应。
 
 ## 2. 开发时必须遵守的原则
@@ -38,13 +38,14 @@ Jerreader/
 ├── Data/Services/     Readium、文件导入、网络、缓存、Keychain、导出
 ├── Features/Library/  书架、导入、分类和书籍管理
 ├── Features/Reader/   EPUB/PDF 阅读、选区、OCR、翻译和阅读设置
-├── Features/Learning/ 查词、生词本、历史、收藏和导出
+├── Features/Learning/ 翻译、词典详情、生词本、历史、收藏和导出
 └── Resources/         图标、颜色、Info.plist 等资源
 
 JerreaderTests/       单元与集成测试
 JerreaderUITests/     阅读选区等真实手势测试
 docs/                  产品、架构和维护文档
-dist/                  IPA 等交付文件
+dist/iOS/              iOS IPA、源码包与交付文档
+dist/Android/          Android APK 与校验文件
 ```
 
 正常依赖方向：
@@ -193,7 +194,7 @@ xcodebuild test \
 ## 8. 当前已知限制
 
 - Apple Translation 的真实语言包需要在支持的 iOS 18+ 真机上验收。
-- 阅读正文“短按单词并直接加入生词本”仍受 Readium 原生选择能力限制；当前稳定入口是长按完整词语、完成翻译后从译文卡片加入，或在“学习”页查词。
+- 阅读正文“短按单词并直接加入生词本”仍受 Readium 原生选择能力限制；当前稳定入口是长按完整词语、完成翻译后从译文卡片加入，或使用“学习 → 翻译 → 词语”。
 - 不支持 DRM 绕过、旧 `.doc`、MOBI/AZW、整本自动翻译、登录、支付或云同步。
 - iPhone、iPad 和横屏均已接入；发布前仍需在目标真机检查旋转与多任务窗口尺寸。
 

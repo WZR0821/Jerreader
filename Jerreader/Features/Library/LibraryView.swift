@@ -14,6 +14,7 @@ struct LibraryView: View {
     @ObservedObject private var translationSettings: TranslationSettingsStore
 
     @State private var isShowingImportOptions = false
+    @State private var isShowingBackupRestore = false
     @State private var isImporting = false
     @State private var incomingImportURLInProgress: URL?
     @State private var readerSession: LibraryReaderSession?
@@ -100,60 +101,10 @@ struct LibraryView: View {
                 }
             }
             .background(JerreaderCanvasBackground())
-            .navigationTitle("书库")
+            .navigationTitle("书架")
             .searchable(text: $searchText, prompt: "搜索书名、作者、系列、文件夹或标签")
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    if !categories.isEmpty {
-                        Menu {
-                            Button {
-                                selectedCategory = nil
-                            } label: {
-                                Label(
-                                    "全部文件夹",
-                                    systemImage: selectedCategory == nil ? "checkmark" : "books.vertical"
-                                )
-                            }
-                            ForEach(categories, id: \.self) { category in
-                                Button {
-                                    selectedCategory = category
-                                } label: {
-                                    Label(
-                                        category,
-                                        systemImage: selectedCategory == category
-                                            ? "checkmark"
-                                            : "folder"
-                                    )
-                                }
-                            }
-                        } label: {
-                            Image(systemName: selectedCategory == nil
-                                ? "line.3.horizontal.decrease.circle"
-                                : "line.3.horizontal.decrease.circle.fill")
-                        }
-                        .accessibilityLabel("按文件夹筛选")
-                    }
-
-                    Button {
-                        isShowingBatchManagement = true
-                    } label: {
-                        Image(systemName: "checklist")
-                    }
-                    .disabled(books.isEmpty)
-                    .accessibilityLabel("批量整理书籍")
-
-                    Menu {
-                        Picker("排序方式", selection: $sortOrder) {
-                            ForEach(LibrarySortOrder.allCases) { order in
-                                Label(order.title, systemImage: order.systemImage)
-                                    .tag(order)
-                            }
-                        }
-                    } label: {
-                        Image(systemName: "arrow.up.arrow.down")
-                    }
-                    .accessibilityLabel("排序书架")
-
                     Button {
                         isShowingImportOptions = true
                     } label: {
@@ -162,6 +113,55 @@ struct LibraryView: View {
                     .disabled(isImporting)
                     .accessibilityLabel("导入电子书")
                     .accessibilityHint("选择 EPUB、PDF、DOCX 或 TXT")
+
+                    Menu {
+                        if !categories.isEmpty {
+                            Section("文件夹") {
+                                Button {
+                                    selectedCategory = nil
+                                } label: {
+                                    Label(
+                                        "全部书籍",
+                                        systemImage: selectedCategory == nil
+                                            ? "checkmark"
+                                            : "books.vertical"
+                                    )
+                                }
+
+                                ForEach(categories, id: \.self) { category in
+                                    Button {
+                                        selectedCategory = category
+                                    } label: {
+                                        Label(
+                                            category,
+                                            systemImage: selectedCategory == category
+                                                ? "checkmark"
+                                                : "folder"
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Section("书架") {
+                            Picker("排序方式", selection: $sortOrder) {
+                                ForEach(LibrarySortOrder.allCases) { order in
+                                    Label(order.title, systemImage: order.systemImage)
+                                        .tag(order)
+                                }
+                            }
+
+                            Button {
+                                isShowingBatchManagement = true
+                            } label: {
+                                Label("批量整理书籍", systemImage: "checklist")
+                            }
+                            .disabled(books.isEmpty)
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .accessibilityLabel("书架更多操作")
                 }
             }
             .overlay {
@@ -183,6 +183,19 @@ struct LibraryView: View {
             )
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $isShowingBackupRestore) {
+            NavigationStack {
+                LibraryBackupSettingsView(
+                    translationSettings: translationSettings,
+                    automaticallyPresentsImport: true
+                )
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("完成") { isShowingBackupRestore = false }
+                    }
+                }
+            }
         }
         .fullScreenCover(item: $readerSession) { session in
             EPUBReaderScreen(
@@ -273,6 +286,27 @@ struct LibraryView: View {
             .tint(JerreaderTheme.accent)
             .disabled(isImporting)
 
+            // An empty shelf is what a reinstall looks like, so the restore
+            // path belongs here rather than only three taps deep in settings.
+            Button {
+                isShowingBackupRestore = true
+            } label: {
+                Label("从备份恢复", systemImage: "arrow.uturn.backward.circle")
+                    .font(.subheadline)
+                    .padding(.horizontal, 8)
+            }
+            .buttonStyle(.bordered)
+            .tint(JerreaderTheme.accent)
+            .disabled(isImporting)
+            .padding(.top, 6)
+            .accessibilityIdentifier("library-restore-backup")
+
+            Text("装过 Jerreader 的话，选中以前的备份文件即可恢复书架、进度和备份计划。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.top, 6)
+
             Label("本机保存，不会上传", systemImage: "lock.fill")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -288,14 +322,11 @@ struct LibraryView: View {
     private var bookGrid: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 26) {
-                LibraryReadingOverview(books: books)
-                    .jerreaderReveal()
-
                 if let recentlyViewedBook {
                     VStack(alignment: .leading, spacing: 12) {
                         JerreaderSectionTitle(
-                            title: "最近查看",
-                            detail: "继续上次阅读",
+                            title: "继续阅读",
+                            detail: "上次打开的书",
                             systemImage: "clock.arrow.circlepath"
                         )
 
@@ -358,6 +389,9 @@ struct LibraryView: View {
                     }
                 }
                 .jerreaderReveal(order: 2)
+
+                LibraryReadingOverview(books: books)
+                    .jerreaderReveal(order: 3)
             }
             .frame(maxWidth: 1_120)
             .frame(maxWidth: .infinity)
@@ -707,7 +741,7 @@ private struct RecentlyViewedBookView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.986))
-        .jerreaderPaperCard(padding: 14, radius: 18, hasShadow: true)
+        .jerreaderPaperCard(padding: 14, radius: 16, hasShadow: true)
         .accessibilityHint("轻点继续阅读")
     }
 }
@@ -764,7 +798,7 @@ private struct LibraryFolderSection: View {
             HStack(spacing: 11) {
                 Image(systemName: systemImage)
                     .font(.title3)
-                    .foregroundStyle(isSelected ? Color.white : JerreaderTheme.accent)
+                    .foregroundStyle(isSelected ? JerreaderTheme.onPrimaryAction : JerreaderTheme.accent)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(.subheadline.weight(.semibold))
@@ -774,17 +808,17 @@ private struct LibraryFolderSection: View {
                         .opacity(0.76)
                 }
             }
-            .foregroundStyle(isSelected ? Color.white : Color.primary)
+            .foregroundStyle(isSelected ? JerreaderTheme.onPrimaryAction : Color.primary)
             .frame(minWidth: 132, alignment: .leading)
             .padding(.horizontal, 14)
             .frame(height: 64)
             .background(
                 isSelected ? JerreaderTheme.primaryAction : JerreaderTheme.paper,
-                in: RoundedRectangle(cornerRadius: 17, style: .continuous)
+                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
             )
             .overlay {
                 if !isSelected {
-                    RoundedRectangle(cornerRadius: 17, style: .continuous)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .stroke(JerreaderTheme.line, lineWidth: 0.75)
                 }
             }
@@ -872,7 +906,7 @@ private struct BookCardView: View {
                     Image(systemName: "ellipsis")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.secondary)
-                        .frame(width: 28, height: 28)
+                        .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
                 .accessibilityLabel("\(book.title)的更多操作")
@@ -916,83 +950,62 @@ private struct LibraryReadingOverview: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 14) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("阅读概览")
-                        .font(.headline.weight(.bold))
-                    Text(startedBooks.isEmpty ? "从一本喜欢的书开始" : "每一次打开，都在向前一点")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text("阅读统计")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
 
                 Spacer(minLength: 8)
 
-                Image(systemName: "chart.line.uptrend.xyaxis")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(JerreaderTheme.accent)
-                    .frame(width: 42, height: 42)
-                    .background(
-                        JerreaderTheme.accentFill,
-                        in: RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    )
+                Text(startedBooks.isEmpty ? "从一本喜欢的书开始" : "只记录本机阅读进度")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
             }
 
             HStack(spacing: 0) {
                 metric(
                     value: totalSeconds.readerDurationText,
                     label: "累计阅读",
-                    systemImage: "clock.fill"
+                    systemImage: "clock"
                 )
 
                 Divider()
-                    .frame(height: 38)
+                    .frame(height: 30)
 
                 metric(
                     value: "\(startedBooks.count)",
                     label: "已开始",
-                    systemImage: "book.pages.fill"
+                    systemImage: "book.pages"
                 )
 
                 Divider()
-                    .frame(height: 38)
+                    .frame(height: 30)
 
                 metric(
                     value: "\(Int((averageProgress * 100).rounded()))%",
                     label: "平均进度",
-                    systemImage: "chart.bar.fill"
+                    systemImage: "chart.bar"
                 )
             }
         }
         .frame(maxWidth: .infinity)
         .frame(maxWidth: 820)
-        .padding(17)
-        .background {
-            ZStack {
-                JerreaderTheme.raisedPaper
-                LinearGradient(
-                    colors: [
-                        JerreaderTheme.accentFill.opacity(0.72),
-                        Color.clear
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 21, style: .continuous))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(JerreaderTheme.paper, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 21, style: .continuous)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(JerreaderTheme.line, lineWidth: 0.75)
         }
-        .shadow(color: JerreaderTheme.shadow, radius: 14, y: 5)
         .accessibilityElement(children: .combine)
     }
 
     private func metric(value: String, label: String, systemImage: String) -> some View {
         VStack(spacing: 5) {
             Label(value, systemImage: systemImage)
-                .font(.subheadline.weight(.semibold))
+                .font(.subheadline.monospacedDigit().weight(.semibold))
                 .foregroundStyle(JerreaderTheme.accent)
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
@@ -1474,14 +1487,6 @@ private struct BookCoverView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
         .overlay {
-            LinearGradient(
-                colors: [.white.opacity(0.10), .clear, .black.opacity(0.045)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .allowsHitTesting(false)
-        }
-        .overlay {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .stroke(.white.opacity(0.18), lineWidth: 0.75)
         }
@@ -1490,10 +1495,10 @@ private struct BookCoverView: View {
 
     private var fallbackPalette: [Color] {
         let palettes: [[Color]] = [
-            [Color(red: 0.15, green: 0.28, blue: 0.32), Color(red: 0.30, green: 0.49, blue: 0.48)],
-            [Color(red: 0.36, green: 0.18, blue: 0.17), Color(red: 0.65, green: 0.37, blue: 0.25)],
-            [Color(red: 0.19, green: 0.23, blue: 0.39), Color(red: 0.39, green: 0.37, blue: 0.59)],
-            [Color(red: 0.29, green: 0.22, blue: 0.31), Color(red: 0.55, green: 0.39, blue: 0.51)]
+            [Color(red: 0.08, green: 0.22, blue: 0.32), Color(red: 0.16, green: 0.42, blue: 0.56)],
+            [Color(red: 0.10, green: 0.20, blue: 0.28), Color(red: 0.28, green: 0.47, blue: 0.60)],
+            [Color(red: 0.13, green: 0.19, blue: 0.32), Color(red: 0.28, green: 0.40, blue: 0.62)],
+            [Color(red: 0.15, green: 0.20, blue: 0.30), Color(red: 0.34, green: 0.40, blue: 0.57)]
         ]
         let scalarTotal = book.title.unicodeScalars.reduce(0) { $0 + Int($1.value) }
         return palettes[scalarTotal % palettes.count]
@@ -1569,7 +1574,7 @@ private struct BookImportOptionsView: View {
                                             .font(.caption.weight(.semibold))
                                     }
                                     .foregroundStyle(
-                                        selectedFormat == format ? Color.white : JerreaderTheme.accent
+                                        selectedFormat == format ? JerreaderTheme.onPrimaryAction : JerreaderTheme.accent
                                     )
                                     .frame(maxWidth: .infinity)
                                     .frame(height: 66)

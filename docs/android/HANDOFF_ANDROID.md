@@ -26,7 +26,8 @@ Android 版与 iOS 1.0.2 在**除备份中心以外**的全部功能上对齐：
   androidApp/              Android 应用
   docs/android/            Android 文档（本文所在目录）
   scripts/                 打包脚本
-  dist/                    产物输出
+  dist/iOS/                iOS 安装包、源码包与交付文档
+  dist/Android/            Android APK 与校验文件
 ```
 
 ### shared（共享层，commonMain）
@@ -80,7 +81,7 @@ JAVA_HOME=$PWD/.tools/jdk17/Contents/Home ./gradlew :shared:testAndroidHostTest 
 JAVA_HOME=$PWD/.tools/jdk17/Contents/Home ./gradlew :androidApp:connectedDebugAndroidTest
 ```
 
-一键打包（跑测试 + lint + 出 APK 与校验和到 `dist/`）：
+一键打包（跑测试 + lint + 出 APK 与校验和到 `dist/Android/`）：
 
 ```bash
 scripts/package_android_parity.sh

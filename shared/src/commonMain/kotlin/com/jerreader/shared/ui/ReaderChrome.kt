@@ -134,7 +134,10 @@ fun ReaderBottomChrome(
                     modifier = Modifier.fillMaxWidth().height(24.dp)
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 if (canGoToAdjacentChapter) {
                     PageButton(JerreaderIcon.CHEVRON_DOUBLE_LEFT, onClick = onPreviousChapter)
                 }
@@ -164,10 +167,10 @@ private fun ChromeCard(
 ) {
     Surface(
         modifier = modifier.fillMaxWidth().widthIn(max = 780.dp),
-        shape = RoundedCornerShape(17.dp),
+        shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-        shadowElevation = 8.dp
+        shadowElevation = 6.dp
     ) {
         Box(modifier = Modifier.padding(10.dp)) { content() }
     }

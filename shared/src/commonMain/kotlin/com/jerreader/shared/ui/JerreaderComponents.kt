@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -26,7 +28,7 @@ import androidx.compose.ui.unit.dp
 
 /**
  * The one card shape used across the app: paper surface, hairline outline and
- * the iOS 22dp corner. Explicit borders are what previously made the settings
+ * the iOS 16dp corner. Explicit borders are what previously made the settings
  * and library screens read as an undifferentiated wall of controls.
  */
 @Composable
@@ -36,7 +38,7 @@ fun JerreaderCard(
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
     ) {
@@ -126,7 +128,16 @@ fun <T> JerreaderSegmented(
         color = MaterialTheme.colorScheme.surfaceVariant,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
     ) {
-        Row(modifier = Modifier.padding(2.dp)) {
+        // Choice labels such as "AI 代理" and the Japanese language names are
+        // intentionally kept on one line.  A horizontal scroll viewport is
+        // preferable to letting a parent measure the children at a tiny width
+        // (which used to clip the last button or push it into a second line in
+        // narrow Android windows).
+        Row(
+            modifier = Modifier
+                .horizontalScroll(rememberScrollState())
+                .padding(2.dp)
+        ) {
             options.forEach { (value, title) ->
                 val isSelected = value == selected
                 Box(

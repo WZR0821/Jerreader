@@ -1,7 +1,7 @@
 # Jerreader（Jerreader）开发与维护交接指南
 
-> 适用版本：1.0.1 正式版（内部 build 40）  
-> 更新日期：2026-07-31  
+> 适用版本：1.0.3 正式版（内部 build 44）
+> 更新日期：2026-08-03
 > 平台基线：iPhone + iPad / iOS 18+ / Swift 6  
 > 文档对象：后续接手开发、排查问题、打包发布的工程师
 
@@ -21,9 +21,10 @@ Jerreader是一款以中、英、日三语阅读与学习为核心的 iOS 电子
 - 日文原版排版与横排模式切换；
 - 可切换句子/段落的轻点翻译、长按智能选词/选句、拖动手柄精确选择；
 - Apple 翻译、GPT、Claude、Kimi、DeepSeek、Gemini、OpenAI 兼容服务及自建代理；
+- “学习 → 翻译”中的中英日词语/句子工作台，可在页面内独立选择 Apple、AI API 或 AI 代理；词语模式合并词典详情，日文句子译文使用本机分词生成假名注音；
 - 翻译缓存、自动重试、备用服务、AI 句子结构分析、跨页句段扩展和译文收藏；
 - 阅读内把完整中、英、日文词语加入生词本，以及可关闭的翻译完成触感反馈；
-- 查词、生词本、历史与 CSV/Markdown/Anki TSV 导出（语音功能当前暂时隐藏）；
+- 词典详情、生词本、查词历史与 CSV/Markdown/Anki TSV 导出（语音功能当前暂时隐藏）；
 - PDF 文字层点击翻译和 Vision OCR；
 - 可选范围的手动/自动备份、保留时间、份数和容量管理，以及校验后增量恢复；
 - iPad、横屏、自适应主导航及 Readium 自动单双页展开。
@@ -60,7 +61,7 @@ Jerreader是一款以中、英、日三语阅读与学习为核心的 iOS 电子
 
 ### 0.5 当前已知边界
 
-- 阅读正文“短按完整单词并直接写入学习记录”仍是 Readium 下的未完成正式目标；当前稳定入口是阅读中长按翻译，手动查词从“学习”页进入。
+- 阅读正文“短按完整单词并直接写入学习记录”仍是 Readium 下的未完成正式目标；当前稳定入口是阅读中长按翻译并加入生词本，或使用“学习 → 翻译 → 词语”获取译文和词典详情。
 - Apple Translation 的真实语言包只能在支持的 iOS 18+ 真机上最终验收；模拟器自动化使用 Mock，不伪造真机结果。
 - 不支持 DRM 绕过、旧 `.doc`、MOBI/AZW/AZW3、整本自动翻译、登录、支付或云同步。
 - 最低系统为 iOS 18.0；Apple Translation 的真实语言包仍需真机验收。
@@ -112,7 +113,7 @@ Jerreader是一款以中、英、日三语阅读与学习为核心的 iOS 电子
 
 | 项目 | 当前选择 | 维护说明 |
 | --- | --- | --- |
-| App 版本 | 1.0.1（内部 build 40） | App 关于页只展示 Marketing Version；发布时仍需递增内部 Build Number |
+| App 版本 | 1.0.3（内部 build 44） | App 关于页只展示 Marketing Version；发布时仍需递增内部 Build Number |
 | 最低系统 | iOS 18.0 | Apple Translation 和现有工程设置均以此为基线 |
 | Swift | Swift 6 | 注意 MainActor、Sendable 和结构化并发检查 |
 | UI | SwiftUI + UIKit 桥接 | SwiftUI 管理页面；Readium Navigator 由 UIKit 容器承载 |
@@ -120,7 +121,7 @@ Jerreader是一款以中、英、日三语阅读与学习为核心的 iOS 电子
 | 阅读引擎 | Readium 提交 `3d8bcdc` | 3.8.0 后续缓存失效修复；`ReadiumShared/Streamer/Navigator/AdapterGCDWebServer` |
 | ZIP | ZIPFoundation 3.0.1 | 用于文档转换与 EPUB 包处理 |
 | 翻译 | Apple / 直接 AI API / HTTPS 代理 | 全部实现 `TranslationService` |
-| 查词 | 中文维基词典 MediaWiki + 系统词典后备 | 自动化测试使用本地 Stub/Mock |
+| 词语模式词典详情 | 中文维基词典 MediaWiki + 系统词典后备 | 自动化测试使用本地 Stub/Mock |
 | 测试基线 | iPhone 16 Pro + iPad Pro 11 英寸 / iOS 18.2 模拟器 | 维护者可替换为本机已有的 iOS 18+ 设备 |
 
 供应商的 endpoint、模型名和 API 版本会变化。修改默认值前应查看供应商官方文档，并同步更新请求构造测试；不要只改设置界面上的文字。
@@ -339,6 +340,7 @@ xcodebuild test -project Jerreader.xcodeproj -scheme Jerreader \
 
 - **范围可选**：`LibraryBackupScope` 分为书籍与封面、阅读进度/书签/批注、生词/查词历史/翻译收藏、非敏感设置四组。学习或阅读范围会保留书籍引用元数据，但只有“书籍与封面”包含实际出版物文件。
 - **备份目录由用户明确选择**：备份中心可授权 iCloud Drive、“我的 iPhone”或其他文件提供商文件夹，自动备份和手动保存都写入当前目录。授权书签只属于当前安装，不进入备份；重装后需重新选择同一目录。若仍使用默认 App Documents，卸载时备份会一起删除。
+- **恢复有两条路径**：当前目录中已列出的备份使用行内可见的“恢复”按钮，不需要再进文件选择器；手动“从备份文件恢复”会以已授权目录为起点。每次点击必须创建新的 picker identity，并在 picker 完全 dismiss 后再弹恢复确认，避免第二次及后续选择与旧会话或确认弹窗竞争。iCloud/File Provider 在文件完成本地物化前可能把 `.jerreader-backup` 报成普通归档、数据，甚至仅符合 `public.item` 的动态 UTI，因此 picker 接受自定义 UTI + `public.archive` + `public.data` + `public.item`；放宽 picker 不等于放宽恢复，实际导入仍必须通过 manifest、路径、大小和摘要校验。
 - **自动执行是到期补做，不是系统闹钟**：`LibraryBackupAutomation` 在 App 启动、回到前台和进入后台时检查到期状态。iOS 不保证 App 完全未运行时准点唤醒。
 - **保留策略**：可配置间隔、保留天数、最多份数和总容量。清理从最旧文件开始，至少保留最新一份；若最新一份本身超过容量上限，会明确报告仍超限。
 - **先验证再写入**：v2 为书籍和封面记录 SHA-256 与字节数，恢复还限制元数据、出版物和封面的解压大小，只提取清单明确引用的安全叶文件名。缺少必需书籍、摘要不一致、损坏或版本过新的归档会在创建 SwiftData 记录前被拒绝。
@@ -353,6 +355,14 @@ xcodebuild test -project Jerreader.xcodeproj -scheme Jerreader \
 3. **精确选择**：用户继续拖动系统选区手柄后，严格翻译最终框选文字。
 
 轻点模式默认开启“轻点翻译时禁用点按翻页”。横向滑动翻页始终保留；关闭保护或关闭轻点模式后，左右边缘点按翻页恢复。段落选择只读当前 DOM 语义块，PDF/OCR 则用空行、缩进和几何间距限定一段；翻译覆盖层必须避让完整选区联合矩形，而不是只避让点击点。
+
+长段落或较长译文不再用内容高度无界生长：`ReaderTranslationViewportPolicy` 只提高最大可用高度，iPhone 上为 260–300pt，iPad 上限 360pt；卡片本身仍按译文实测高度收紧，只有译文触及上限后才启用卡内滚动。点段模式的额外空间必须放在卡片与完整选区之间，禁止通过强制填满卡片高度制造内部空白。竖排时使用原文左边或右边的普通圆角浮窗，而不是贴边的左右侧栏；手机优选 220pt 宽，必要时可收窄至 144pt，并与点按的原文字列保留 12pt 间隔。日文 EPUB 的竖排元数据缺失时，高窄的实时几何是受限的后备判据。`focusFrame` 只为浮窗避让提供几何锚点，禁止用它改动句/段边界、日文引号规则、Readium Range 或高亮。
+
+### 4.3.1 独立翻译工作台
+
+“学习 → 翻译”不是阅读器设置的快捷入口，而是拥有页面本地状态的翻译工作台。原文可自动识别或手动选择中文、英语、日语，目标语言可在三者间选择；词语模式限制 80 字符并要求 AI 只返回简短译词，句子模式限制 2,000 字符并沿用用户的翻译提示词。页面内切换 Apple、AI API 或 AI 代理不得写回 `TranslationSettingsStore` 的全局 provider/direction，避免下一次阅读时服务或语言方向被意外改变。
+
+Apple 翻译由该页面自己的 `TranslationSession.Configuration` 驱动，AI 路径继续通过现有 `TranslationService` 实现。所有请求在启动前统一解析自动语言、拒绝同语言方向并分配 UUID；方向、模式变化或页面退出时取消旧请求，迟到结果不得覆盖当前界面。自动化测试只用 Mock/Stub；Apple 语言包下载和用户真实 API 账户仍在真机验收。
 
 ### 4.4 日文 ruby 注音选区：当前正确实现
 
@@ -475,6 +485,8 @@ PDF 阅读遵循“文字层优先、OCR 后备”：
 6. OCR 高亮保存页内归一化框，缩放/旋转后重新投影；
 7. 日文 OCR 会结合字号、方向、汉字邻接过滤小号注音。
 
+双栏论文使用按书保存的“论文双栏模式”。它只接管自动点句、点段和 OCR：文字层从 PDFKit 的行级真实 UTF-16 范围映射出点击栏，可产生不连续的 `PDFSelection`；OCR 只组合点击的左/右半页行。宽度达到页面 72% 的标题、摘要或图注必须回退普通流程。不要修改原生 PDFKit 长按及手柄选区，也不要把这个模式复用于 EPUB。
+
 原生 PDF 长按选区和点句翻译之间有单调时间手势门，松手产生的尾随 tap 不能清除选区。翻译菜单优先读取 PDFKit `currentSelection`；OCR 长按 recognizer 保持附着，由 delegate 按实际触点页面决定是否启用，以兼容 iPad 双页中的相邻扫描页。
 
 不要用 `screenRect * scaleFactor` 推算 PDF 高亮，也不要把 OCR 结果写入 PDF 文件。
@@ -484,9 +496,10 @@ PDF 阅读遵循“文字层优先、OCR 后备”：
 - `Features/Reader/PDFReaderHost.swift`
 - `Features/Reader/ReaderModels.swift` 中的 PDF/OCR 选择器
 
-### 4.7 查词、学习记录与导出
+### 4.7 词语翻译、词典记录与导出
 
 - `LexicalLookupService` 返回 `WordExplanation`，界面不读取第三方 JSON；
+- 独立查词分页已移除，日语/英语词典详情由 `TranslateToolView` 的词语模式在翻译成功后补充；
 - 默认网络实现使用中文维基词典 MediaWiki API；
 - 网络失败时可打开本机系统词典；
 - `WordLookupRecord` 同时承载缓存、历史和收藏状态；
@@ -528,7 +541,7 @@ PDF 阅读遵循“文字层优先、OCR 后备”：
 | 翻译供应商 | `BackendTranslationService.swift` | `TranslationPreferences.swift`、`TranslationSettingsStore.swift` | 请求体、请求头、错误映射 |
 | Apple 翻译 | `AppleTranslationService.swift` | ViewModel 的 translationTask/watchdog | Mock 生命周期与超时 |
 | PDF/OCR | `PDFReaderHost.swift` | `ReaderModels.swift` | 坐标、分栏、竖排、缩放旋转 |
-| 查词 | `WiktionaryLexicalLookupService.swift` | `LookupView.swift` | 解析、词形回退、传输错误 |
+| 词语翻译与词典详情 | `TranslateToolView.swift` | `WiktionaryLexicalLookupService.swift`、`WordLookupStore.swift` | 方向/长度校验、假名注音、词形回退、传输错误 |
 | 生词/历史/导出 | `Features/Learning` | Store 与 `LearningExportService.swift` | 去重、收藏保留、格式导出 |
 | 数据模型 | `Core/Models` | `JerreaderApp.swift` | 旧值默认、往返持久化 |
 
@@ -603,14 +616,16 @@ xcodebuild \
   test
 ```
 
-当前 1.0.1（内部 build 40）验证基线：
+当前 1.0.3（内部 build 44）验证基线：
 
-- 单元/集成测试共执行 231 项：228 项通过、3 项外部真实 EPUB 夹具测试按设计跳过、0 失败；
+- 单元/集成测试共执行 243 项：240 项通过、3 项真实外部 EPUB 夹具测试因未注入文件按设计跳过、0 失败；独立翻译页面 UI 测试 1 项通过；
+- 上述数据是移除独立查词分页前的历史基线。本轮新增词典合并与假名注音测试，Simulator Debug 代码构建通过；但本机 `CoreSimulatorService` 在用例启动前拒绝连接，暂不将新测试记为已执行通过；
+- 新增中英日自动识别、同语言方向拦截、词语/句子长度与 AI 提示词、短段落译文框按实测高度收紧回归；长译文卡内滚动和竖排浮窗左/右避让回归继续通过；
 - Readium `open()` 返回后的阅读会话修改时间恢复，以及日文问号/叹号引号接引用助词、独立后句和嵌套引号边界回归全部通过；
 - 只读导入、仅打开书籍不改内容/修改时间、句子/段落范围持久化、EPUB/PDF/OCR 单段边界、主题/自定义选区配色、竖排翻译卡片侧向避让、段落间距和备份策略防递归崩溃回归继续通过；
-- 备份目录书签跨实例解析、自动/手动文件落点、目录丢失不回退的回归通过；备份中心 UI 回归覆盖位置、自动策略、范围、手动备份、恢复和当前目录列表；
+- 备份目录书签跨实例解析、自动/手动文件落点、目录丢失不回退的回归通过；picker 接受 File Provider 动态 `public.item` 但恢复仍严格校验，每次恢复重新创建选择会话并延迟确认；备份中心 UI 回归覆盖位置、自动策略、范围、手动备份、恢复和当前目录列表；
 - 备份回归覆盖实体文件和设置往返、书籍 UUID 关系重映射、重复恢复、缺失/损坏出版物拒绝、自动到期、份数清理和容量清理；
-- 全局/单书排版、三语互译、简短 AI 文法提示词迁移、自定义 AI 提示词保留、reasoning 响应解析、Apple 语言包等待、日语词形与 AI 解析、书籍整理、空白译文、缓存自愈、PDF 原生选区及 OCR 回归全部通过；
+- 全局/单书排版、三语互译、简短 AI 文法提示词迁移、自定义 AI 提示词保留、reasoning 响应解析、Apple 语言包等待、日语词形与 AI 解析、书籍整理、空白译文、缓存自愈、PDF 原生选区、论文双栏文字层/标题后备/OCR 及模式备份往返回归全部通过；
 - 真实日文注音 EPUB 的横排、原版竖排和原生回调缺失降级三项物理长按，以及原版→横排→原版往返 UI 测试保留为既有基线；
 - iPad Pro 11 英寸竖屏/横屏全窗口 UI 测试保留为既有基线；
 - Debug Scheme Xcode Analyze，以及干净 Release DerivedData 下的未签名 arm64 真机构建均已通过。
@@ -726,6 +741,7 @@ xcodebuild \
 ### 10.3 封装
 
 ```sh
+PROJECT_ROOT=$(pwd)
 mkdir -p /tmp/JerreaderIPA/Payload
 ditto \
   /tmp/JerreaderRelease/Build/Products/Release-iphoneos/Jerreader.app \
@@ -734,9 +750,13 @@ ditto \
 cd /tmp/JerreaderIPA
 ditto -c -k --norsrc --keepParent Payload \
   Jerreader-2.6-build29-unsigned.ipa
+
+mkdir -p "$PROJECT_ROOT/dist/iOS"
+install -m 0644 Jerreader-2.6-build29-unsigned.ipa \
+  "$PROJECT_ROOT/dist/iOS/Jerreader-2.6-build29-unsigned.ipa"
 ```
 
-`--norsrc` 用于避免生成无用的 macOS `._` 元数据条目。
+`--norsrc` 用于避免生成无用的 macOS `._` 元数据条目。iOS 交付物统一保存到 `dist/iOS/`，不与 Android APK 混放。
 
 ### 10.4 最终检查
 

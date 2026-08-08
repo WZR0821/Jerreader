@@ -237,17 +237,16 @@ struct EPUBReaderScreen: View {
                 }
                 .accessibilityLabel("阅读设置")
             }
-            .padding(10)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 17, style: .continuous)
-                    .stroke(JerreaderTheme.line, lineWidth: 0.75)
-            }
-            .shadow(color: JerreaderTheme.shadow.opacity(0.75), radius: 12, y: 5)
-            .padding(.horizontal, 10)
-            .padding(.top, 6)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
             .frame(maxWidth: 780)
             .frame(maxWidth: .infinity)
+            .background(.thinMaterial)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(JerreaderTheme.line)
+                    .frame(height: 0.5)
+            }
 
             Spacer()
 
@@ -336,17 +335,16 @@ struct EPUBReaderScreen: View {
                     }
                 }
             }
-            .padding(10)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 17, style: .continuous)
-                    .stroke(JerreaderTheme.line, lineWidth: 0.75)
-            }
-            .shadow(color: JerreaderTheme.shadow.opacity(0.75), radius: 12, y: 5)
-            .padding(.horizontal, 10)
-            .padding(.bottom, 6)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
             .frame(maxWidth: 660)
             .frame(maxWidth: .infinity)
+            .background(.thinMaterial)
+            .overlay(alignment: .top) {
+                Rectangle()
+                    .fill(JerreaderTheme.line)
+                    .frame(height: 0.5)
+            }
         }
     }
 
@@ -358,7 +356,7 @@ struct EPUBReaderScreen: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.body.weight(.semibold))
-                .foregroundStyle(isActive ? Color.white : Color.primary)
+                .foregroundStyle(isActive ? JerreaderTheme.onPrimaryAction : Color.primary)
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
                 .background(
@@ -377,13 +375,13 @@ struct EPUBReaderScreen: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.title3.weight(.bold))
-                .foregroundStyle(isActive ? Color.white : Color.primary)
+                .foregroundStyle(isActive ? JerreaderTheme.onPrimaryAction : Color.primary)
                 .frame(maxWidth: .infinity)
-                .frame(height: 54)
+                .frame(minHeight: 48)
                 .contentShape(Rectangle())
                 .background(
-                    isActive ? JerreaderTheme.accent : JerreaderTheme.accentFill,
-                    in: RoundedRectangle(cornerRadius: 14)
+                    isActive ? JerreaderTheme.accent : JerreaderTheme.accentFill.opacity(0.72),
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
                 )
         }
         .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.965))
@@ -487,13 +485,12 @@ struct EPUBReaderScreen: View {
                 Image(systemName: "character.bubble.fill")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(JerreaderTheme.accent)
-                    .frame(width: 36, height: 44)
+                    .frame(width: 44, height: 44)
                     .background(.regularMaterial, in: Capsule())
                     .overlay {
                         Capsule()
                             .stroke(JerreaderTheme.accent.opacity(0.28), lineWidth: 1)
                     }
-                    .shadow(color: Color.black.opacity(0.08), radius: 7, y: 3)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(
@@ -560,8 +557,19 @@ private struct ReaderTranslationLayer: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let cardWidth = adaptiveCardWidth(in: geometry)
-            let overlayLayout = layout(in: geometry, cardWidth: cardWidth)
+            let proposedCardWidth = preferredCardWidth(in: geometry)
+            let overlayLayout = layout(
+                in: geometry,
+                cardWidth: proposedCardWidth
+            )
+            let cardWidth = overlayLayout.cardWidth
+            // Position against the card's measured height. The expanded
+            // policy only raises the *maximum* available to long translations;
+            // it must never force a short result to fill that viewport.
+            let positioningCardHeight = min(
+                max(cardHeight, 108),
+                overlayLayout.maximumCardHeight
+            )
             let automaticPosition = overlayLayout.position
             let basePosition = manualPosition ?? automaticPosition
             let targetPosition = clamp(
@@ -570,17 +578,29 @@ private struct ReaderTranslationLayer: View {
                     y: basePosition.y + dragState.translation.height
                 ),
                 in: geometry,
-                cardWidth: cardWidth
+                cardWidth: cardWidth,
+                cardHeight: positioningCardHeight
             )
+#if DEBUG
+            let readerFrame = geometry.frame(in: .global)
+            let resolvedCardFrameInWindow = CGRect(
+                x: readerFrame.minX + targetPosition.x - cardWidth / 2,
+                y: readerFrame.minY + targetPosition.y - positioningCardHeight / 2,
+                width: cardWidth,
+                height: positioningCardHeight
+            )
+#endif
 
             ReaderTranslationOverlay(
                 model: model,
                 maximumCardHeight: overlayLayout.maximumCardHeight,
+                usesCompactHeader: cardWidth < 238,
                 isDragging: dragState.isActive || isSelectionMoving,
                 handleGesture: dragGesture(
                     from: basePosition,
                     in: geometry,
-                    cardWidth: cardWidth
+                    cardWidth: cardWidth,
+                    cardHeight: positioningCardHeight
                 )
             )
             .frame(width: cardWidth)
@@ -619,6 +639,14 @@ private struct ReaderTranslationLayer: View {
                     transaction.animation = nil
                 }
             }
+#if DEBUG
+            Color.clear
+                .preference(
+                    key: TranslationCardFrameKey.self,
+                    value: resolvedCardFrameInWindow
+                )
+                .allowsHitTesting(false)
+#endif
         }
         .onPreferenceChange(TranslationCardHeightKey.self) { height in
             // SwiftUI delivers preference callbacks from a Sendable closure
@@ -632,6 +660,14 @@ private struct ReaderTranslationLayer: View {
                 cardHeight = height
             }
         }
+#if DEBUG
+        .onPreferenceChange(TranslationCardFrameKey.self) { frame in
+            guard !frame.isNull, !frame.isEmpty else { return }
+            Task { @MainActor in
+                model.installTranslationUITestCard(frameInWindow: frame)
+            }
+        }
+#endif
         .onChange(of: model.translationAnchorFrame) {
             manualPosition = nil
             beginSelectionAdjustment()
@@ -655,21 +691,34 @@ private struct ReaderTranslationLayer: View {
         in geometry: GeometryProxy,
         cardWidth: CGFloat
     ) -> ReaderTranslationOverlayPlacement.Layout {
-        ReaderTranslationOverlayPlacement.layout(
+        let usesVerticalSideAvoidance = usesVerticalSideAvoidance(in: geometry)
+        let allowsHorizontalAvoidance = usesVerticalSideAvoidance
+            || prefersExpandedMaximumHeight
+        let preferredMaximumHeight = preferredMaximumCardHeight(in: geometry)
+        let proposedCardHeight = min(
+            max(cardHeight, 108),
+            preferredMaximumHeight
+        )
+        return ReaderTranslationOverlayPlacement.layout(
             selectionFrame: localSelectionFrame(in: geometry),
+            horizontalAvoidanceFrame: usesVerticalSideAvoidance
+                ? localFocusFrame(in: geometry)
+                : nil,
             viewportSize: geometry.size,
-            cardSize: CGSize(width: cardWidth, height: cardHeight),
+            cardSize: CGSize(width: cardWidth, height: proposedCardHeight),
             topInset: topInset(in: geometry),
             bottomInset: bottomInset(in: geometry),
-            horizontalInset: 16,
-            gap: selectionAvoidanceGap,
-            minimumCardHeight: 108,
-            preferredMaximumCardHeight: min(
-                max(geometry.size.height * 0.30, 166),
-                geometry.size.width >= 700 ? 286 : 246
+            horizontalInset: horizontalInset(in: geometry),
+            gap: ReaderTranslationLayoutPolicy.selectionGap(
+                isParagraph: isQuickParagraphTranslation,
+                usesVerticalSideAvoidance: usesVerticalSideAvoidance
             ),
-            prefersTop: settings.displayMode == .topBanner,
-            prefersHorizontalAvoidance: prefersHorizontalAvoidance
+            minimumCardHeight: 108,
+            preferredMaximumCardHeight: preferredMaximumHeight,
+            prefersTop: settings.displayMode == .topBanner
+                && !usesVerticalSideAvoidance,
+            prefersHorizontalAvoidance: allowsHorizontalAvoidance,
+            minimumHorizontalCardWidth: usesVerticalSideAvoidance ? 144 : 220
         )
     }
 
@@ -684,7 +733,14 @@ private struct ReaderTranslationLayer: View {
         )
     }
 
-    private func adaptiveCardWidth(in geometry: GeometryProxy) -> CGFloat {
+    private func localFocusFrame(in geometry: GeometryProxy) -> CGRect? {
+        ReaderTranslationOverlayPlacement.localSelectionFrame(
+            model.presentedTranslationRequest?.focusFrame,
+            relativeTo: geometry.frame(in: .global)
+        )
+    }
+
+    private func preferredCardWidth(in geometry: GeometryProxy) -> CGFloat {
         let availableWidth = max(geometry.size.width - 32, 1)
         let maximumWidth = min(
             availableWidth,
@@ -715,35 +771,30 @@ private struct ReaderTranslationLayer: View {
             max(preferredWidth, minimumWidth),
             maximumWidth
         )
-        guard prefersHorizontalAvoidance,
-              let rawSelection = localSelectionFrame(in: geometry)
-        else { return resolvedWidth }
-
-        let selection = rawSelection.standardized.intersection(
-            CGRect(origin: .zero, size: geometry.size)
-        )
-        guard !selection.isNull, !selection.isEmpty else {
+        guard usesVerticalSideAvoidance(in: geometry) else {
             return resolvedWidth
         }
-        let leftRoom = max(
-            selection.minX - selectionAvoidanceGap - 16,
-            0
+
+        // Keep this as a normal floating window. In vertical books it starts
+        // narrower so it can sit immediately to the left or right of the
+        // original column; the placement solver can shrink it further on an
+        // iPhone without docking it to an edge.
+        return min(
+            resolvedWidth,
+            geometry.size.width >= 700 ? 320 : 220
         )
-        let rightRoom = max(
-            geometry.size.width - 16 - selectionAvoidanceGap - selection.maxX,
-            0
-        )
-        let sideRoom = max(leftRoom, rightRoom)
-        let minimumSideWidth = min(resolvedWidth, 284)
-        guard sideRoom >= minimumSideWidth else { return resolvedWidth }
-        return min(resolvedWidth, sideRoom.rounded(.down))
     }
 
-    private var prefersHorizontalAvoidance: Bool {
-        settings.displayMode == .nearSelection
-            && model.isReflowableBook
-            && model.publicationLayout.verticalText
-            && model.textOrientation == .publication
+    private func usesVerticalSideAvoidance(
+        in geometry: GeometryProxy
+    ) -> Bool {
+        ReaderTranslationLayoutPolicy.usesVerticalSideAvoidance(
+            isReflowable: model.isReflowableBook,
+            preservesPublicationOrientation: model.textOrientation == .publication,
+            publicationIsVertical: model.publicationLayout.verticalText,
+            isJapaneseBook: model.isJapaneseBook,
+            selectionFrame: localSelectionFrame(in: geometry)
+        )
     }
 
     private var isQuickParagraphTranslation: Bool {
@@ -751,17 +802,41 @@ private struct ReaderTranslationLayer: View {
             && model.quickTranslationUnit == .paragraph
     }
 
-    private var selectionAvoidanceGap: CGFloat {
-        if isQuickParagraphTranslation {
-            return 30
+    private var prefersExpandedMaximumHeight: Bool {
+        guard case let .success(request, result, _) = model.translationState else {
+            return false
         }
-        return prefersHorizontalAvoidance ? 24 : 18
+        return ReaderTranslationViewportPolicy.prefersExpandedMaximumHeight(
+            sourceCharacterCount: request.sourceText.count,
+            translatedCharacterCount: result.translatedText.count,
+            isParagraph: isQuickParagraphTranslation
+        )
+    }
+
+    private func preferredMaximumCardHeight(
+        in geometry: GeometryProxy
+    ) -> CGFloat {
+        if prefersExpandedMaximumHeight {
+            return min(
+                max(geometry.size.height * 0.38, 260),
+                geometry.size.width >= 700 ? 360 : 300
+            )
+        }
+        return min(
+            max(geometry.size.height * 0.30, 166),
+            geometry.size.width >= 700 ? 286 : 246
+        )
+    }
+
+    private func horizontalInset(in geometry: GeometryProxy) -> CGFloat {
+        usesVerticalSideAvoidance(in: geometry) ? 12 : 16
     }
 
     private func dragGesture(
         from basePosition: CGPoint,
         in geometry: GeometryProxy,
-        cardWidth: CGFloat
+        cardWidth: CGFloat,
+        cardHeight: CGFloat
     ) -> some Gesture {
         DragGesture(minimumDistance: 2, coordinateSpace: .global)
             .updating($dragState) { value, state, transaction in
@@ -783,7 +858,8 @@ private struct ReaderTranslationLayer: View {
                     manualPosition = clamp(
                         proposed,
                         in: geometry,
-                        cardWidth: cardWidth
+                        cardWidth: cardWidth,
+                        cardHeight: cardHeight
                     )
                 }
             }
@@ -792,7 +868,8 @@ private struct ReaderTranslationLayer: View {
     private func clamp(
         _ position: CGPoint,
         in geometry: GeometryProxy,
-        cardWidth: CGFloat
+        cardWidth: CGFloat,
+        cardHeight: CGFloat
     ) -> CGPoint {
         ReaderTranslationOverlayPlacement.clampedPosition(
             position,
@@ -800,7 +877,7 @@ private struct ReaderTranslationLayer: View {
             cardSize: CGSize(width: cardWidth, height: cardHeight),
             topInset: topInset(in: geometry),
             bottomInset: bottomInset(in: geometry),
-            horizontalInset: 16
+            horizontalInset: horizontalInset(in: geometry)
         )
     }
 
@@ -865,6 +942,19 @@ private struct TranslationCardHeightKey: PreferenceKey {
     }
 }
 
+#if DEBUG
+private struct TranslationCardFrameKey: PreferenceKey {
+    static let defaultValue = CGRect.null
+
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if !next.isNull, !next.isEmpty {
+            value = next
+        }
+    }
+}
+#endif
+
 private struct TranslationTextHeightKey: PreferenceKey {
     static let defaultValue: CGFloat = 54
 
@@ -877,6 +967,7 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var model: EPUBReaderViewModel
     let maximumCardHeight: CGFloat
+    let usesCompactHeader: Bool
     let isDragging: Bool
     let handleGesture: HandleGesture
     @State private var translatedContentHeight: CGFloat = 54
@@ -898,41 +989,16 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
                 .frame(height: 12)
         }
         .frame(minHeight: 108, alignment: .top)
-        .background {
-            ZStack {
-                Rectangle()
-                    .fill(.regularMaterial)
-                LinearGradient(
-                    colors: [
-                        JerreaderTheme.accentFill.opacity(0.50),
-                        Color.clear,
-                        JerreaderTheme.accent.opacity(0.055)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            JerreaderTheme.accent.opacity(0.34),
-                            JerreaderTheme.line,
-                            JerreaderTheme.accent.opacity(0.12)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.9
-                )
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(JerreaderTheme.line, lineWidth: 0.8)
         }
         .shadow(
-            color: JerreaderTheme.deepShadow.opacity(isDragging ? 0 : 0.86),
-            radius: isDragging ? 0 : 18,
-            y: isDragging ? 0 : 9
+            color: JerreaderTheme.deepShadow.opacity(isDragging ? 0 : 0.58),
+            radius: isDragging ? 0 : 12,
+            y: isDragging ? 0 : 5
         )
         .animation(
             reduceMotion || isDragging ? nil : JerreaderMotion.stateChange,
@@ -952,52 +1018,66 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
         .accessibilityElement(children: .contain)
     }
 
+    @ViewBuilder
     private var overlayHeader: some View {
-        ZStack {
+        if usesCompactHeader {
+            // The compact card can be as narrow as 144pt for vertical books.
+            // Keep the menu, drag handle, and close control in three explicit
+            // slots so their hit targets never overlap.
+            HStack(spacing: 0) {
+                if model.translationState.request != nil {
+                    translationActionsMenu
+                } else {
+                    Color.clear.frame(width: 44, height: 44)
+                }
+                dragHandle
+                closeButton
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+            .frame(height: 48)
+            .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.90))
+            .background(Color.primary.opacity(0.035))
+        } else {
+            // The drag handle used to be laid over this row in a ZStack, and
+            // being last it won every hit test it overlapped. Its 78pt target
+            // is centred, while the trailing buttons grow leftwards from the
+            // edge — so on a horizontal card only a little wider than the
+            // compact threshold the handle sat squarely on top of the actions
+            // menu and the "..." could not be tapped at all.
+            //
+            // Three explicit slots, the same shape the compact header already
+            // uses, so the targets cannot overlap whatever the card's width.
             HStack(spacing: 7) {
-                Image(systemName: headerSymbol)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(JerreaderTheme.accent)
-                    .frame(width: 25, height: 25)
-                    .background(JerreaderTheme.accent.opacity(0.10), in: Circle())
+                HStack(spacing: 7) {
+                    Image(systemName: headerSymbol)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(JerreaderTheme.accent)
+                        .frame(width: 25, height: 25)
+                        .background(
+                            JerreaderTheme.accent.opacity(0.10),
+                            in: Circle()
+                        )
 
-                Text(headerTitle)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    Text(headerTitle)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .layoutPriority(0)
 
-                Spacer(minLength: 54)
+                Spacer(minLength: 0)
+
+                dragHandle
+                    .layoutPriority(1)
+
+                Spacer(minLength: 0)
 
                 HStack(spacing: 6) {
                     if SpeechFeatureAvailability.isEnabled,
                        model.translationState.request?.sourceLanguage != nil
                     {
-                        Button {
-                            model.toggleTranslationSpeech()
-                        } label: {
-                            Image(
-                                systemName: model.isSpeakingTranslationSource
-                                    ? "stop.fill"
-                                    : "speaker.wave.2.fill"
-                            )
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(
-                                model.isSpeakingTranslationSource
-                                    ? Color.white
-                                    : JerreaderTheme.accent
-                            )
-                            .frame(width: 30, height: 30)
-                            .background(
-                                model.isSpeakingTranslationSource
-                                    ? JerreaderTheme.accent
-                                    : JerreaderTheme.accentFill,
-                                in: Circle()
-                            )
-                        }
-                        .accessibilityLabel(
-                            model.isSpeakingTranslationSource
-                                ? "停止朗读"
-                                : "朗读当前句段"
-                        )
+                        speechButton
                     }
 
                     if model.translationState.request != nil {
@@ -1005,57 +1085,128 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
                     }
 
                     if case .success = model.translationState {
-                        Button {
-                            model.toggleTranslationFavorite()
-                        } label: {
-                            Image(
-                                systemName: model.isCurrentTranslationFavorite
-                                    ? "star.fill"
-                                    : "star"
-                            )
-                            .foregroundStyle(
-                                model.isCurrentTranslationFavorite
-                                    ? JerreaderTheme.accent
-                                    : Color.secondary
-                            )
-                            .frame(width: 30, height: 30)
-                            .background(Color.primary.opacity(0.055), in: Circle())
-                        }
-                        .accessibilityLabel(
-                            model.isCurrentTranslationFavorite ? "取消收藏译文" : "收藏译文"
-                        )
+                        favoriteButton
                     }
 
-                    Button {
-                        model.dismissTranslation()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 30, height: 30)
-                            .background(Color.primary.opacity(0.055), in: Circle())
-                    }
-                    .accessibilityLabel("关闭翻译")
+                    closeButton
                 }
-                .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.90))
+                .layoutPriority(1)
+                .fixedSize(horizontal: true, vertical: false)
             }
-
-            Capsule(style: .continuous)
-                .fill(JerreaderTheme.accent.opacity(0.38))
-                .frame(width: 34, height: 4)
-                .frame(width: 78, height: 42)
-                .contentShape(Rectangle())
-                .gesture(handleGesture)
-                .accessibilityLabel("移动翻译浮窗")
-                .accessibilityHint("拖动到屏幕中的其他位置")
+            .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.90))
+            .frame(height: 48)
+            .padding(.horizontal, 10)
+            .background(Color.primary.opacity(0.035))
         }
-        .frame(height: 42)
-        .padding(.horizontal, 10)
-        .background(JerreaderTheme.accentFill.opacity(0.36))
+    }
+
+    private var dragHandle: some View {
+        Capsule(style: .continuous)
+            .fill(JerreaderTheme.accent.opacity(0.38))
+            .frame(width: 34, height: 4)
+            // The visible grabber is 34pt; the rest is hit area. It no longer
+            // needs the old 78pt because it sits in its own slot now instead of
+            // reaching across the row, and a narrower slot leaves the header
+            // title more room before it truncates.
+            .frame(width: usesCompactHeader ? 44 : 56, height: 48)
+            .contentShape(Rectangle())
+            .gesture(handleGesture)
+            .accessibilityLabel("移动翻译浮窗")
+            .accessibilityHint("拖动到屏幕中的其他位置")
+    }
+
+    private var speechButton: some View {
+        Button {
+            model.toggleTranslationSpeech()
+        } label: {
+            ZStack {
+                Image(
+                    systemName: model.isSpeakingTranslationSource
+                        ? "stop.fill"
+                        : "speaker.wave.2.fill"
+                )
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(
+                    model.isSpeakingTranslationSource
+                        ? JerreaderTheme.onPrimaryAction
+                        : JerreaderTheme.accent
+                )
+                .frame(width: 30, height: 30)
+                .background(
+                    model.isSpeakingTranslationSource
+                        ? JerreaderTheme.accent
+                        : JerreaderTheme.accentFill,
+                    in: Circle()
+                )
+            }
+            .frame(width: 44, height: 44)
+            .contentShape(Circle())
+        }
+        .accessibilityLabel(
+            model.isSpeakingTranslationSource ? "停止朗读" : "朗读当前句段"
+        )
+    }
+
+    private var favoriteButton: some View {
+        Button {
+            model.toggleTranslationFavorite()
+        } label: {
+            ZStack {
+                Image(
+                    systemName: model.isCurrentTranslationFavorite
+                        ? "star.fill"
+                        : "star"
+                )
+                .foregroundStyle(
+                    model.isCurrentTranslationFavorite
+                        ? JerreaderTheme.accent
+                        : Color.secondary
+                )
+                .frame(width: 30, height: 30)
+                .background(Color.primary.opacity(0.055), in: Circle())
+            }
+            .frame(width: 44, height: 44)
+            .contentShape(Circle())
+        }
+        .accessibilityLabel(
+            model.isCurrentTranslationFavorite ? "取消收藏译文" : "收藏译文"
+        )
+    }
+
+    private var closeButton: some View {
+        Button {
+            model.dismissTranslation()
+        } label: {
+            ZStack {
+                Image(systemName: "xmark")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 30, height: 30)
+                    .background(Color.primary.opacity(0.055), in: Circle())
+            }
+            .frame(width: 44, height: 44)
+            .contentShape(Circle())
+        }
+        .accessibilityLabel("关闭翻译")
     }
 
     private var translationActionsMenu: some View {
         Menu {
+            if case .success = model.translationState {
+                Button {
+                    model.toggleTranslationFavorite()
+                } label: {
+                    Label(
+                        model.isCurrentTranslationFavorite ? "取消收藏译文" : "收藏译文",
+                        systemImage: model.isCurrentTranslationFavorite
+                            ? "star.slash"
+                            : "star"
+                    )
+                }
+
+                Divider()
+            }
+
             if model.canAnnotateCurrentSelection {
                 Button {
                     if model.isCurrentSelectionAnnotated {
@@ -1129,11 +1280,15 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
             }
             .disabled(!model.canRetryTranslation)
         } label: {
-            Image(systemName: "ellipsis")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(Color.secondary)
-                .frame(width: 30, height: 30)
-                .background(Color.primary.opacity(0.055), in: Circle())
+            ZStack {
+                Image(systemName: "ellipsis")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Color.secondary)
+                    .frame(width: 30, height: 30)
+                    .background(Color.primary.opacity(0.055), in: Circle())
+            }
+            .frame(width: 44, height: 44)
+            .contentShape(Circle())
         }
         .accessibilityLabel("更多翻译操作")
     }
@@ -1155,10 +1310,10 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
     }
 
     private var maximumContentHeight: CGFloat {
-        // Header (42), divider, and bottom breathing room are outside the
+        // Header (48), divider, and bottom breathing room are outside the
         // ScrollView. Reserve all of them so the last translated line never
         // lands under the rounded bottom edge.
-        max(maximumCardHeight - 55, 54)
+        max(maximumCardHeight - 61, 54)
     }
 
     @ViewBuilder
@@ -1186,10 +1341,19 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
                             maximum: maximumContentHeight
                         )
                     )
-                    .scrollIndicators(.hidden)
+                    .scrollIndicators(
+                        translatedContentHeight > maximumContentHeight + 0.5
+                            ? .visible
+                            : .hidden
+                    )
                     .scrollBounceBehavior(.basedOnSize)
+                    .accessibilityIdentifier("translation-result-scroll-view")
                     .scrollDisabled(
-                        translatedContentHeight <= maximumContentHeight + 0.5
+                        translatedContentHeight
+                            <= ReaderTranslationContentMetric.height(
+                                measured: translatedContentHeight,
+                                maximum: maximumContentHeight
+                            ) + 0.5
                     )
                     .onPreferenceChange(TranslationTextHeightKey.self) { value in
                         Task { @MainActor in
@@ -1216,27 +1380,12 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
     }
 
     private func translatedText(_ text: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Capsule(style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [JerreaderTheme.accent, JerreaderTheme.accent.opacity(0.28)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-                .frame(width: 3)
-                .frame(
-                    maxHeight: ReaderTranslationAccentMetric.maximumHeight(for: text)
-                )
-
-            Text(text)
-                .font(.system(.body, design: .rounded).weight(.regular))
-                .lineSpacing(6)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
+        Text(text)
+            .font(.body)
+            .lineSpacing(5)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)
         .padding(.top, 15)
@@ -1526,7 +1675,7 @@ private struct ReaderContextExplanationSheet: View {
         }
         .frame(maxWidth: 560)
         .padding(28)
-        .jerreaderPaperCard(padding: 0, radius: 24, hasShadow: true)
+        .jerreaderPaperCard(padding: 0, radius: 16, hasShadow: true)
         .padding(24)
     }
 
@@ -1545,12 +1694,8 @@ private struct ReaderContextExplanationSheet: View {
                             .foregroundStyle(.white)
                             .frame(width: 34, height: 34)
                             .background(
-                                LinearGradient(
-                                    colors: [JerreaderTheme.primaryAction, JerreaderTheme.accent],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                ),
-                                in: RoundedRectangle(cornerRadius: 11)
+                                JerreaderTheme.primaryAction,
+                                in: RoundedRectangle(cornerRadius: 11, style: .continuous)
                             )
 
                         VStack(alignment: .leading, spacing: 2) {
@@ -1569,22 +1714,13 @@ private struct ReaderContextExplanationSheet: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding(20)
-                .background {
-                    ZStack {
-                        JerreaderTheme.raisedPaper
-                        LinearGradient(
-                            colors: [JerreaderTheme.accentFill.opacity(0.55), .clear],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    }
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 21, style: .continuous))
+                .background(JerreaderTheme.raisedPaper)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 21, style: .continuous)
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
                         .stroke(JerreaderTheme.line, lineWidth: 0.75)
                 }
-                .shadow(color: JerreaderTheme.shadow, radius: 12, y: 5)
+                .shadow(color: JerreaderTheme.shadow, radius: 8, y: 3)
                 .jerreaderReveal(order: 1)
 
                 JerreaderStatusPill(

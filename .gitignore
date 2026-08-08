@@ -25,3 +25,6 @@ PrivateTestFixtures/
 *.keystore
 *.p12
 *.mobileprovision
+
+# Signing credentials
+keystore.properties

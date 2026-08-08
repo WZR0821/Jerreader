@@ -26,6 +26,7 @@ enum class JerreaderIcon {
     TEXT_FORMAT,
     CHEVRON_LEFT,
     CHEVRON_RIGHT,
+    CHEVRON_DOWN,
     CHEVRON_DOUBLE_LEFT,
     CHEVRON_DOUBLE_RIGHT,
     SPEECH_BUBBLE,
@@ -50,7 +51,13 @@ enum class JerreaderIcon {
     STAR_OUTLINE,
     STAR_FILLED,
     DOWNLOAD,
-    LOCK
+    LOCK,
+    SWAP,
+    COPY,
+    WARNING,
+    CHECK_CIRCLE,
+    TRASH,
+    SHARE
 }
 
 @Composable
@@ -102,6 +109,13 @@ fun JerreaderGlyph(
             JerreaderIcon.STAR_FILLED -> drawStar(tint, stroke, unit, filled = true)
             JerreaderIcon.DOWNLOAD -> drawDownload(tint, stroke, unit)
             JerreaderIcon.LOCK -> drawLock(tint, stroke, unit)
+            JerreaderIcon.CHEVRON_DOWN -> drawChevronDown(tint, stroke, unit)
+            JerreaderIcon.SWAP -> drawSwap(tint, stroke, unit)
+            JerreaderIcon.COPY -> drawCopy(tint, stroke, unit)
+            JerreaderIcon.WARNING -> drawWarning(tint, stroke, unit)
+            JerreaderIcon.CHECK_CIRCLE -> drawCheckCircle(tint, unit)
+            JerreaderIcon.TRASH -> drawTrash(tint, stroke, unit)
+            JerreaderIcon.SHARE -> drawShare(tint, stroke, unit)
         }
     }
 }
@@ -200,6 +214,162 @@ private fun DrawScope.drawChevrons(
         drawLine(tint, Offset(backX, c.y - height), Offset(tipX, c.y), stroke.width, stroke.cap)
         drawLine(tint, Offset(tipX, c.y), Offset(backX, c.y + height), stroke.width, stroke.cap)
     }
+}
+
+private fun DrawScope.drawChevronDown(tint: Color, stroke: Stroke, unit: Float) {
+    val c = centered(unit)
+    val width = unit * 0.22f
+    val height = unit * 0.13f
+    drawLine(tint, Offset(c.x - width, c.y - height), Offset(c.x, c.y + height), stroke.width, stroke.cap)
+    drawLine(tint, Offset(c.x, c.y + height), Offset(c.x + width, c.y - height), stroke.width, stroke.cap)
+}
+
+/** `arrow.left.arrow.right`: the language swap control. */
+private fun DrawScope.drawSwap(tint: Color, stroke: Stroke, unit: Float) {
+    val c = centered(unit)
+    val half = unit * 0.26f
+    val gap = unit * 0.12f
+    val head = unit * 0.09f
+    drawLine(tint, Offset(c.x - half, c.y - gap), Offset(c.x + half, c.y - gap), stroke.width, stroke.cap)
+    drawLine(
+        tint,
+        Offset(c.x + half - head, c.y - gap - head),
+        Offset(c.x + half, c.y - gap),
+        stroke.width,
+        stroke.cap
+    )
+    drawLine(
+        tint,
+        Offset(c.x + half - head, c.y - gap + head),
+        Offset(c.x + half, c.y - gap),
+        stroke.width,
+        stroke.cap
+    )
+    drawLine(tint, Offset(c.x + half, c.y + gap), Offset(c.x - half, c.y + gap), stroke.width, stroke.cap)
+    drawLine(
+        tint,
+        Offset(c.x - half + head, c.y + gap - head),
+        Offset(c.x - half, c.y + gap),
+        stroke.width,
+        stroke.cap
+    )
+    drawLine(
+        tint,
+        Offset(c.x - half + head, c.y + gap + head),
+        Offset(c.x - half, c.y + gap),
+        stroke.width,
+        stroke.cap
+    )
+}
+
+private fun DrawScope.drawCopy(tint: Color, stroke: Stroke, unit: Float) {
+    val c = centered(unit)
+    val side = unit * 0.38f
+    drawRoundRect(
+        color = tint,
+        topLeft = Offset(c.x - unit * 0.30f, c.y - unit * 0.30f),
+        size = androidx.compose.ui.geometry.Size(side, side),
+        cornerRadius = androidx.compose.ui.geometry.CornerRadius(unit * 0.07f),
+        style = stroke
+    )
+    drawRoundRect(
+        color = tint,
+        topLeft = Offset(c.x - unit * 0.08f, c.y - unit * 0.08f),
+        size = androidx.compose.ui.geometry.Size(side, side),
+        cornerRadius = androidx.compose.ui.geometry.CornerRadius(unit * 0.07f),
+        style = stroke
+    )
+}
+
+private fun DrawScope.drawWarning(tint: Color, stroke: Stroke, unit: Float) {
+    val c = centered(unit)
+    val path = Path().apply {
+        moveTo(c.x, c.y - unit * 0.30f)
+        lineTo(c.x + unit * 0.32f, c.y + unit * 0.26f)
+        lineTo(c.x - unit * 0.32f, c.y + unit * 0.26f)
+        close()
+    }
+    drawPath(path, tint, style = stroke)
+    drawLine(
+        tint,
+        Offset(c.x, c.y - unit * 0.08f),
+        Offset(c.x, c.y + unit * 0.08f),
+        stroke.width,
+        stroke.cap
+    )
+    drawCircle(tint, radius = unit * 0.035f, center = Offset(c.x, c.y + unit * 0.18f))
+}
+
+private fun DrawScope.drawCheckCircle(tint: Color, unit: Float) {
+    val c = centered(unit)
+    drawCircle(tint, radius = unit * 0.34f, center = c)
+    val tick = Stroke(width = unit * 0.11f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+    val path = Path().apply {
+        moveTo(c.x - unit * 0.15f, c.y)
+        lineTo(c.x - unit * 0.04f, c.y + unit * 0.12f)
+        lineTo(c.x + unit * 0.17f, c.y - unit * 0.13f)
+    }
+    drawPath(path, Color.White, style = tick)
+}
+
+private fun DrawScope.drawTrash(tint: Color, stroke: Stroke, unit: Float) {
+    val c = centered(unit)
+    drawLine(
+        tint,
+        Offset(c.x - unit * 0.28f, c.y - unit * 0.18f),
+        Offset(c.x + unit * 0.28f, c.y - unit * 0.18f),
+        stroke.width,
+        stroke.cap
+    )
+    val body = Path().apply {
+        moveTo(c.x - unit * 0.21f, c.y - unit * 0.18f)
+        lineTo(c.x - unit * 0.17f, c.y + unit * 0.28f)
+        lineTo(c.x + unit * 0.17f, c.y + unit * 0.28f)
+        lineTo(c.x + unit * 0.21f, c.y - unit * 0.18f)
+    }
+    drawPath(body, tint, style = stroke)
+    val lid = Path().apply {
+        moveTo(c.x - unit * 0.11f, c.y - unit * 0.18f)
+        lineTo(c.x - unit * 0.11f, c.y - unit * 0.28f)
+        lineTo(c.x + unit * 0.11f, c.y - unit * 0.28f)
+        lineTo(c.x + unit * 0.11f, c.y - unit * 0.18f)
+    }
+    drawPath(lid, tint, style = stroke)
+}
+
+/** `square.and.arrow.up`: a tray with an arrow leaving through the top. */
+private fun DrawScope.drawShare(tint: Color, stroke: Stroke, unit: Float) {
+    val c = centered(unit)
+    val tray = Path().apply {
+        moveTo(c.x - unit * 0.13f, c.y - unit * 0.05f)
+        lineTo(c.x - unit * 0.25f, c.y - unit * 0.05f)
+        lineTo(c.x - unit * 0.25f, c.y + unit * 0.29f)
+        lineTo(c.x + unit * 0.25f, c.y + unit * 0.29f)
+        lineTo(c.x + unit * 0.25f, c.y - unit * 0.05f)
+        lineTo(c.x + unit * 0.13f, c.y - unit * 0.05f)
+    }
+    drawPath(tray, tint, style = stroke)
+    drawLine(
+        tint,
+        Offset(c.x, c.y - unit * 0.30f),
+        Offset(c.x, c.y + unit * 0.10f),
+        stroke.width,
+        stroke.cap
+    )
+    drawLine(
+        tint,
+        Offset(c.x - unit * 0.12f, c.y - unit * 0.18f),
+        Offset(c.x, c.y - unit * 0.30f),
+        stroke.width,
+        stroke.cap
+    )
+    drawLine(
+        tint,
+        Offset(c.x + unit * 0.12f, c.y - unit * 0.18f),
+        Offset(c.x, c.y - unit * 0.30f),
+        stroke.width,
+        stroke.cap
+    )
 }
 
 private fun DrawScope.drawBubble(tint: Color, stroke: Stroke, unit: Float, filled: Boolean) {

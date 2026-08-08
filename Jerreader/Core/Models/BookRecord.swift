@@ -35,6 +35,9 @@ final class BookRecord: Identifiable {
     // schema property is added to an older store; using `publication` here
     // prevents an unexplained horizontal override on only some existing books.
     var readerTextOrientation: String = ReaderTextOrientationChoice.publication.rawValue
+    /// Restricts automatic PDF sentence/paragraph recognition to the tapped
+    /// paper column. Native PDFKit handle selection remains untouched.
+    var readerPDFPaperModeEnabled: Bool = false
     /// Cached original layout inferred from EPUB metadata and CSS. This stays
     /// separate from the user's horizontal/original choice so toggling can
     /// always restore a metadata-poor vertical publication deterministically.
@@ -69,6 +72,7 @@ final class BookRecord: Identifiable {
         readerCustomSelectionColorHex: String = "",
         readerSpeechRate: Double = 1.0,
         readerTextOrientation: String = ReaderTextOrientationChoice.publication.rawValue,
+        readerPDFPaperModeEnabled: Bool = false,
         readerDetectedPublicationLayout: String = ""
     ) {
         self.id = id
@@ -101,6 +105,7 @@ final class BookRecord: Identifiable {
             ReaderCustomBackground.normalizedHex(readerCustomSelectionColorHex) ?? ""
         self.readerSpeechRate = min(max(readerSpeechRate, 0.5), 2.0)
         self.readerTextOrientation = readerTextOrientation
+        self.readerPDFPaperModeEnabled = readerPDFPaperModeEnabled
         self.readerDetectedPublicationLayout = readerDetectedPublicationLayout
     }
 

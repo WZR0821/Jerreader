@@ -80,7 +80,7 @@ struct AppGuideView: View {
             )
             GuideItem(
                 title: "PDF 翻译",
-                detail: "打开点句翻译后，直接轻点 PDF 句子即可翻译。带文字层的页面会精确读取文字；扫描图片页会在本机按页 OCR，长按仍可精确框选文字层。",
+                detail: "打开点句翻译后，直接轻点 PDF 句子即可翻译。双栏论文可在阅读设置开启“论文双栏模式”，自动点句、点段和 OCR 会只读取点击的左栏或右栏；横跨整页的标题与图注仍按普通版式处理。长按手柄框选始终使用 PDFKit 原生规则，不受该开关影响。",
                 systemImage: "doc.richtext"
             )
         }
@@ -91,8 +91,9 @@ struct AppGuideView: View {
             GuideItem(title: "界面主题", detail: "设置 → 界面主题可选择海洋、森林、紫藤、琥珀或莓果色系；按钮、卡片和背景会一起变化，并自动适配系统浅色或深色外观。", systemImage: "paintpalette.fill")
             GuideItem(title: "阅读设置与选区色", detail: "每本书可独立保存字体、字号、背景、页边距、行距、段距、翻页模式和选区颜色。浅色、护眼、冷灰、深色会自动采用适配的选区色；自定义背景可另选选区色。设置 → 默认阅读排版可决定新书样式，并用开关持续同步或立即应用到现有全部书籍。", systemImage: "textformat.size")
             GuideItem(title: "目录、进度与书签", detail: "阅读器顶部的目录按钮集中提供章节目录、全文搜索、书签和批注；底部进度条可直接拖到整本书的任意位置。", systemImage: "list.bullet.rectangle")
-            GuideItem(title: "悬浮译文", detail: "译文会自动避开选区，也可以拖动顶部手柄手动调整位置。", systemImage: "rectangle.inset.filled.and.person.filled")
-            GuideItem(title: "查词与生词本", detail: "“学习”栏包含手动查词、生词收藏、查词历史和译文收藏。查词语言可自动结合文字与书籍语言识别，也可手动固定为日语或英语；仅含汉字、无法唯一判断时会优先参考当前书籍语言。阅读正文中长按一个词，翻译后也可直接加入。", systemImage: "character.book.closed.fill")
+            GuideItem(title: "悬浮译文", detail: "译文框会与完整选区留出安全距离，框内则按实际译文收紧，不会为了段落模式强行留出大块空白；长译文达到高度上限后可在框内上下滑动。原版竖排时优先放在原文左侧或右侧；也可拖动顶部手柄手动调整。", systemImage: "rectangle.inset.filled.and.person.filled")
+            GuideItem(title: "词典与生词本", detail: "“学习 → 翻译”的词语模式已合并词典功能。翻译日语或英语词语后，会继续显示词典形、读音、词性、释义和例句，自动记入历史，并可直接收藏到生词本。阅读正文中长按完整词语，翻译后也可直接加入。", systemImage: "character.book.closed.fill")
+            GuideItem(title: "独立翻译", detail: "“学习 → 翻译”提供词语和句子两种模式。原文可自动识别或手动选择中文、英语、日语，译文也可在三种语言间选择；页面顶部可单独选择 Apple 系统翻译、AI API 或 AI 代理，不会改动阅读器的翻译设置。词语模式会补充词典详情；句子译成日文时，汉字上方会显示小字假名注音。", systemImage: "character.bubble.fill")
             GuideItem(title: "日语学习增强", detail: "日语词条会显示词典形、假名、词性、常见活用和例句；配置 AI 后可结合书中原句继续分析词语的语法角色与语境义。", systemImage: "text.book.closed.fill")
             GuideItem(title: "AI 句子结构分析", detail: "译文卡片“更多”可分析句子主干、成分、从句或修饰关系，以及英语时态、日语助词和活用等语法点；需要先配置 AI API 或代理。", systemImage: "text.line.magnify")
             GuideItem(title: "学习内容导出", detail: "在“学习 → 生词本与收藏”右上角选择 CSV、Markdown 或 Anki TSV，导出到“文件”或其他 App。", systemImage: "square.and.arrow.up")
@@ -220,7 +221,7 @@ struct AppGuideView: View {
             )
             GuideItem(
                 title: "恢复与合并",
-                detail: "安装并签名新版本后，先重新选择原来的 iCloud Drive 等备份文件夹，备份会出现在下方列表并可直接恢复；也可点“从备份文件恢复”手动选择。Jerreader会先校验文件，同一本书按内容指纹合并。",
+                detail: "安装并签名新版本后，先重新选择原来的 iCloud Drive 等备份文件夹。备份会出现在下方列表，点每个文件右侧的“恢复”即可直接恢复；“从备份文件恢复”每次都会新建文件选择会话，也可浏览其他位置。为兼容 iCloud 暂时显示为通用文件类型的备份，文件可点选后再由Jerreader严格校验；不是有效备份时不会写入任何数据。",
                 systemImage: "arrow.counterclockwise"
             )
             Text("文件夹授权只保存在当前安装中，不进入备份；重装后需要再次选择同一文件夹。API Key 和代理访问凭据也不进入备份。自动备份受 iOS 生命周期限制，App 完全未运行时不能保证准点执行。")

@@ -35,7 +35,7 @@ import androidx.compose.ui.unit.dp
 
 /**
  * Compose port of iOS `AppGuideView`. Section order and wording follow the iOS
- * guide; the backup chapter is omitted because Android has no backup centre.
+ * guide, including the backup chapter.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -66,6 +66,7 @@ fun AppGuideScreen(
             item { FeatureSection() }
             item { JapaneseSection() }
             item { TranslationSection() }
+            item { BackupSection() }
             item { FormatSection() }
         }
     }
@@ -135,7 +136,7 @@ private fun FeatureSection() {
             "每本书可独立保存字体、字号、背景、页边距、行距、段距、翻页模式和选区颜色。浅色、护眼、冷灰、深色会自动采用适配的选区色；自定义背景可另选选区色。设置 → 默认阅读排版可决定新书样式，并用开关持续同步或立即应用到现有全部书籍。"
         )
         GuideItem("目录、搜索、书签与批注", "阅读器的“导航”按钮集中提供章节目录、全文搜索、书签和划线批注；点正文上的高亮可直接编辑该条批注。")
-        GuideItem("查词与生词本", "“学习”栏包含手动查词、生词收藏、查词历史和译文收藏。阅读时长按一个词，从菜单选“查词”也可直接加入生词本。")
+        GuideItem("查词与生词本", "“学习”栏包含翻译、生词本和历史三部分；词典查询合并在翻译的“词语”模式里，译出一个词的同时会补充词典形、读音、词性和释义。阅读时长按一个词，从菜单选“查词”也可直接加入生词本。")
         GuideItem("日语学习增强", "日语词条会显示词典形、假名、词性、常见活用和例句；配置 AI 后可结合书中原句继续分析词语的语法角色与语境义。")
         GuideItem("AI 句子结构分析", "译文卡片的“AI 解析”可分析句子主干、成分、从句或修饰关系，以及英语时态、日语助词和活用等语法点；需要先配置 AI API 或代理。")
         GuideItem("学习内容导出", "在“学习”页选择 CSV、Markdown 或 Anki TSV，分享导出到其他应用。")
@@ -196,6 +197,32 @@ private fun TranslationSection() {
         }
 
         GuideFootnote("直接 API 适合个人自用；准备公开分发时，仍建议用自建代理，避免让共享密钥存在客户端。")
+    }
+}
+
+@Composable
+private fun BackupSection() {
+    GuideSection("备份与恢复") {
+        GuideItem(
+            "选择备份文件夹",
+            "设置 → 备份与恢复 → 选择备份文件夹，可指定本机存储、SD 卡或已安装的云盘目录。自动备份与“立即备份到当前文件夹”都会写入这里，下方列表会直接显示其中可恢复的备份。"
+        )
+        GuideItem(
+            "自动备份",
+            "开启后按所选间隔在打开 App 时检查是否到期；可单独选择自动备份包含哪几类内容，并按保存天数、最多份数和总容量从最旧的一份开始清理。"
+        )
+        GuideItem(
+            "手动备份",
+            "选择“书籍与封面”“进度、书签与批注”“生词与翻译收藏”“阅读与翻译偏好”中需要的范围后点“立即备份到当前文件夹”。包含书籍文件的备份明显更大，但重装后无需重新找书。"
+        )
+        GuideItem(
+            "恢复",
+            "重装后重新选择原来的文件夹，备份会出现在列表中，点右侧“恢复”即可；也可用“选择备份文件”从其他位置恢复。恢复只做合并，已存在的书籍与记录不会产生重复。"
+        )
+        GuideItem(
+            "不进入备份的内容",
+            "文件夹授权只保存在当前安装中，重装后需要再次选择同一文件夹。API Key、代理访问凭据和可再生的翻译缓存都不写入备份文件。"
+        )
     }
 }
 

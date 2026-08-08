@@ -15,6 +15,7 @@ import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import android.widget.FrameLayout
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -44,6 +45,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.boundsInParent
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
@@ -69,12 +72,14 @@ import com.jerreader.shared.domain.BookFormat
 import com.jerreader.shared.library.LibraryBook
 import com.jerreader.shared.library.ReaderAnnotationColor
 import com.jerreader.shared.library.ReaderAppearance
+import com.jerreader.shared.library.ReaderSelectionVisualStyle
 import com.jerreader.shared.library.ReaderTextOrientation
 import com.jerreader.shared.domain.LanguageCode
 import com.jerreader.shared.lexical.WordAnalysis
 import com.jerreader.shared.translation.ContextExplanationRequest
 import com.jerreader.shared.translation.ContextExplanationService
 import com.jerreader.shared.translation.ReaderCrossPageTranslationResolver
+import com.jerreader.shared.translation.TranslationDisplayMode
 import com.jerreader.shared.translation.TranslationRequest
 import com.jerreader.shared.translation.TranslationResult
 import com.jerreader.shared.ui.JerreaderTheme
@@ -91,9 +96,20 @@ import com.jerreader.shared.ui.TranslationCard
 import com.jerreader.shared.ui.TranslationCardState
 import com.jerreader.shared.ui.WordLookupCard
 import com.jerreader.shared.ui.WordLookupCardState
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlin.math.abs
+import org.json.JSONArray
 import org.json.JSONObject
 import org.readium.adapter.pdfium.navigator.PdfiumEngineProvider
 import org.readium.r2.navigator.DecorableNavigator
@@ -135,7 +151,8 @@ class ReaderActivity : AppCompatActivity() {
     private var tapTranslationController: ReaderTapTranslationController? = null
     private var pdfTranslationController: PdfTapTranslationController? = null
     private var annotationDialog: Dialog? = null
-    private val sessionStartedAtMillis = System.currentTimeMillis()
+    private var readingStartedAtMillis: Long? = null
+    private var accumulatedReadingSeconds = 0.0
     private val searchLocators = linkedMapOf<String, Locator>()
     private var pendingAnnotation: PendingAnnotation? = null
 
@@ -144,6 +161,8 @@ class ReaderActivity : AppCompatActivity() {
 
     internal var currentTranslationState by mutableStateOf<TranslationCardState?>(null)
         private set
+
+    private var currentTranslationLocatorJson: String? = null
 
     internal var currentAppearance by mutableStateOf(ReaderAppearance())
         private set
@@ -166,17 +185,44 @@ class ReaderActivity : AppCompatActivity() {
     private var cardDragY by mutableStateOf(0f)
     private var anchorLeftPx by mutableStateOf(0)
     private var anchorRightPx by mutableStateOf(0)
+    // Quick EPUB selections include the paired furigana rects. Keep that
+    // merged geometry as the popup anchor instead of replacing it with
+    // Readium's base-only selection bounds on the next coroutine turn.
+    private var hasSelectionAnchor by mutableStateOf(false)
+    // A post-measure collision correction. The first placement is chosen from
+    // the available room; this value handles real card height, padding and
+    // font-scale differences that are not known during the initial measure.
+    private var popupAvoidanceX by mutableStateOf(0f)
+    private var popupAvoidanceY by mutableStateOf(0f)
     private var selectionRects by mutableStateOf(emptyList<RectF>())
+    private var pdfAnnotationRects by mutableStateOf(emptyList<RectF>())
     private var floatingLayer: ComposeView? = null
+    private var highlightLayer: ComposeView? = null
+    private var locatorObservationJob: Job? = null
+    private var progressPersistenceJob: Job? = null
+    private var writingModeJob: Job? = null
+    private val progressPersistenceMutex = Mutex()
+    private var readerContentLeftPx = 0
     private var readerContentTopPx = 0
     private var readerContentBottomPx = 0
+    private var publicationWritingModeIsVertical by mutableStateOf(false)
+    private var pdfGeometryView: View? = null
+    private var pdfGeometryScrollListener: ViewTreeObserver.OnScrollChangedListener? = null
+    private var pdfGeometryLayoutListener: View.OnLayoutChangeListener? = null
+    private var pdfGeometryTouchListener: View.OnTouchListener? = null
+
+    private data class PopupShift(
+        val dx: Float,
+        val dy: Float
+    )
 
     private data class PendingAnnotation(
         val selectedText: String,
         val locator: Locator,
         val existingId: String? = null,
         val note: String = "",
-        val color: String = "yellow"
+        val color: String = "yellow",
+        val geometryJson: String? = null
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -197,16 +243,33 @@ class ReaderActivity : AppCompatActivity() {
         lifecycleScope.launch { resolveAndOpenPublication() }
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (book != null && publication != null && readingStartedAtMillis == null) {
+            readingStartedAtMillis = System.currentTimeMillis()
+        }
+    }
+
     override fun onPause() {
-        persistLatestLocator()
+        accumulateReadingTime()
+        flushLatestLocator()
+        flushReadingTime()
         super.onPause()
     }
 
     @SuppressLint("LogNotTimber")
     override fun onDestroy() {
-        persistLatestLocator()
-        persistReadingTime()
+        accumulateReadingTime()
+        flushLatestLocator()
+        flushReadingTime()
+        progressPersistenceJob?.cancel()
+        progressPersistenceJob = null
+        writingModeJob?.cancel()
+        writingModeJob = null
+        locatorObservationJob?.cancel()
+        locatorObservationJob = null
         navigator?.removeDecorationListener(annotationDecorationListener)
+        removePdfGeometryListeners()
         wordInteractionController?.detach()
         wordInteractionController = null
         tapTranslationController?.detach()
@@ -233,6 +296,24 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     private suspend fun resolveAndOpenPublication() {
+        try {
+            withTimeout(READER_OPEN_TIMEOUT_MILLIS) {
+                resolveAndOpenPublicationWithinTimeout()
+            }
+        } catch (_: TimeoutCancellationException) {
+            publication?.close()
+            publication = null
+            showError("打开出版物超过 25 秒，请检查文件是否完整后重试。")
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            publication?.close()
+            publication = null
+            showError(error.message ?: "无法打开该出版物。")
+        }
+    }
+
+    private suspend fun resolveAndOpenPublicationWithinTimeout() {
         val bookId = intent.getStringExtra(EXTRA_BOOK_ID)
         val resolvedBook = bookId?.let { graph.repository.book(it) }
         book = resolvedBook
@@ -275,6 +356,7 @@ class ReaderActivity : AppCompatActivity() {
             graph.readerRecords.observeAnnotations(libraryBook.id).collectLatest { records ->
                 annotations = records
                 applyAnnotationDecorations()
+                latestLocator?.let(::refreshPdfAnnotationRects)
             }
         }
     }
@@ -350,6 +432,20 @@ class ReaderActivity : AppCompatActivity() {
             )
         )
 
+        // Keep persisted PDF highlights in a non-interactive layer that is never
+        // hidden with the translation card. This mirrors iOS's independent
+        // PDFAnnotation overlay while keeping cards dismissible.
+        val highlightView = readerComposeView { SelectionHighlightLayer() }.apply {
+            isClickable = false
+            isFocusable = false
+        }
+        root.addView(
+            highlightView,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
         val overlayView = readerComposeView { ReaderFloatingLayer() }
         root.addView(
             overlayView,
@@ -358,6 +454,7 @@ class ReaderActivity : AppCompatActivity() {
                 FrameLayout.LayoutParams.MATCH_PARENT
             )
         )
+        highlightLayer = highlightView
         floatingLayer = overlayView
 
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
@@ -374,6 +471,7 @@ class ReaderActivity : AppCompatActivity() {
             // page offset used for highlights and anchors must exclude it or
             // everything lands one inset too high.
             readerContentTopPx = (CONTENT_TOP_INSET_DP * density).toInt()
+            highlightView.updatePadding(top = bars.top, bottom = bars.bottom)
             overlayView.updatePadding(top = bars.top, bottom = bars.bottom)
             insets
         }
@@ -390,14 +488,14 @@ class ReaderActivity : AppCompatActivity() {
 
     private suspend fun openPublication(file: File, libraryBook: LibraryBook?) {
         val asset = graph.readium.assetRetriever.retrieve(file).getOrElse { error ->
-            showError(error.toString())
+            showError("无法读取该出版物文件。")
             return
         }
         val openedPublication = graph.readium.publicationOpener.open(
             asset,
             allowUserInteraction = false
         ).getOrElse { error ->
-            showError(error.toString())
+            showError("无法打开该出版物，请确认文件未损坏。")
             return
         }
 
@@ -408,6 +506,9 @@ class ReaderActivity : AppCompatActivity() {
         }
 
         publication = openedPublication
+        if (book != null && readingStartedAtMillis == null) {
+            readingStartedAtMillis = System.currentTimeMillis()
+        }
         readingOrder = openedPublication.readingOrder
         positions = runCatching { openedPublication.positions() }.getOrDefault(emptyList())
 
@@ -426,7 +527,11 @@ class ReaderActivity : AppCompatActivity() {
                     scope = lifecycleScope,
                     lookupService = graph.lexicalLookupService,
                     languageHint = { currentBookLanguage() },
-                    onStateChanged = ::showWordLookup
+                    onStateChanged = ::showWordLookup,
+                    onSelectionInvalidated = ::clearTransientCardPresentation,
+                    shortTapEnabled = {
+                        !graph.translationSettings.preferences.value.quickTranslationEnabled
+                    }
                 )
                 wordInteractionController = wordController
                 val tapController = ReaderTapTranslationController(
@@ -438,9 +543,16 @@ class ReaderActivity : AppCompatActivity() {
                     onPreviousPageRequested = ::goToPreviousPage,
                     onNextPageRequested = ::goToNextPage,
                     onLookupRequested = { wordController.lookupSelectionFromMenu() },
+                    onShortTapWordRequested = {
+                        currentTranslationState = null
+                        currentTranslationLocatorJson = null
+                        setFloatingLayerVisible(false)
+                        wordController.lookupSelectionFromMenu()
+                    },
                     onAnnotateRequested = ::requestAnnotationForSelection,
                     onHapticFeedback = ::performTranslationHaptic,
-                    onHighlightChanged = ::updateSelectionHighlight,
+                    onHighlightChanged = ::updateSelectionAnchor,
+                    onSelectionInvalidated = ::clearTransientCardPresentation,
                     appearance = { currentAppearance }
                 )
                 tapTranslationController = tapController
@@ -464,7 +576,11 @@ class ReaderActivity : AppCompatActivity() {
                 attachPdfNavigator(factory, file)
             }
 
-            else -> showError("当前出版物不支持阅读。")
+            else -> {
+                openedPublication.close()
+                publication = null
+                showError("当前出版物不支持阅读。")
+            }
         }
     }
 
@@ -474,10 +590,10 @@ class ReaderActivity : AppCompatActivity() {
             as? EpubNavigatorFragment
             ?: return
         navigator = epubNavigator
-        // Short taps belong to quick translation; word lookup is reachable from
-        // the native selection menu, so the lookup controller does not register
-        // a competing tap listener.
-        wordInteractionController?.attach(epubNavigator, registerShortTap = false)
+        // Quick translation owns the tap while enabled. When it is disabled,
+        // the same native tap path becomes direct word lookup instead of being
+        // silently dropped; the two listeners never consume the same tap.
+        wordInteractionController?.attach(epubNavigator, registerShortTap = true)
         tapTranslationController?.attach(epubNavigator)
         epubNavigator.addDecorationListener(
             ANNOTATION_DECORATION_GROUP,
@@ -503,16 +619,70 @@ class ReaderActivity : AppCompatActivity() {
                 (fragment.currentLocator.value.locations.position ?: 1) - 1
             },
             paperModeEnabled = { currentAppearance.pdfPaperModeEnabled },
-            onStateChanged = ::showTranslation
+            onStateChanged = ::showTranslation,
+            onHapticFeedback = ::performTranslationHaptic,
+            onPreviousPageRequested = ::goToPreviousPage,
+            onNextPageRequested = ::goToNextPage,
+            onHighlightChanged = ::updateSelectionHighlight,
+            onSelectionInvalidated = ::clearTransientCardPresentation
         )
         pdfTranslationController = controller
         controller.attach(fragment)
+        installPdfGeometryListeners(fragment.publicationView)
+        latestLocator?.let(::refreshPdfAnnotationRects)
         observeLocator { fragment.currentLocator.collectLatest(it) }
     }
 
+    private fun installPdfGeometryListeners(view: View) {
+        removePdfGeometryListeners()
+        val scrollListener = ViewTreeObserver.OnScrollChangedListener {
+            latestLocator?.let(::refreshPdfAnnotationRects)
+        }
+        val layoutListener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            latestLocator?.let(::refreshPdfAnnotationRects)
+        }
+        val touchListener = View.OnTouchListener { touchedView, event ->
+            if (event.actionMasked == android.view.MotionEvent.ACTION_UP ||
+                event.actionMasked == android.view.MotionEvent.ACTION_CANCEL
+            ) {
+                touchedView.postDelayed(
+                    { latestLocator?.let(::refreshPdfAnnotationRects) },
+                    PDF_GEOMETRY_REFRESH_DELAY_MILLIS
+                )
+            }
+            // Do not consume the event: PDFView must keep its own pan/zoom
+            // gesture handling and Readium must keep receiving taps.
+            false
+        }
+        view.viewTreeObserver.addOnScrollChangedListener(scrollListener)
+        view.addOnLayoutChangeListener(layoutListener)
+        view.setOnTouchListener(touchListener)
+        pdfGeometryView = view
+        pdfGeometryScrollListener = scrollListener
+        pdfGeometryLayoutListener = layoutListener
+        pdfGeometryTouchListener = touchListener
+    }
+
+    private fun removePdfGeometryListeners() {
+        val view = pdfGeometryView ?: return
+        pdfGeometryScrollListener?.let { listener ->
+            if (view.viewTreeObserver.isAlive) {
+                view.viewTreeObserver.removeOnScrollChangedListener(listener)
+            }
+        }
+        pdfGeometryLayoutListener?.let(view::removeOnLayoutChangeListener)
+        if (pdfGeometryTouchListener != null) view.setOnTouchListener(null)
+        pdfGeometryView = null
+        pdfGeometryScrollListener = null
+        pdfGeometryLayoutListener = null
+        pdfGeometryTouchListener = null
+    }
+
     private fun observeLocator(collect: suspend (suspend (Locator) -> Unit) -> Unit) {
-        lifecycleScope.launch {
+        locatorObservationJob?.cancel()
+        locatorObservationJob = lifecycleScope.launch {
             collect { locator ->
+                resetTransientReaderState()
                 latestLocator = locator
                 latestLocatorJson = locator.toJSON().toString()
                 currentProgress = locator.locations.totalProgression ?: currentProgress
@@ -522,6 +692,7 @@ class ReaderActivity : AppCompatActivity() {
                 currentChapterName = currentChapterTitle(locator)
                 applyWritingModeOverride()
                 refreshBookmarkState()
+                refreshPdfAnnotationRects(locator)
                 delay(PROGRESS_SAVE_DEBOUNCE_MILLIS)
                 persistLatestLocator()
             }
@@ -635,6 +806,7 @@ class ReaderActivity : AppCompatActivity() {
         val updated = appearance.toEpubPreferences(basePreferences)
         basePreferences = updated
         navigator?.submitPreferences(updated)
+        tapTranslationController?.refreshSelectionAppearance()
         applyWritingModeOverride()
 
         // Readium resolves the EPUB layout when the navigator is created and
@@ -685,7 +857,16 @@ class ReaderActivity : AppCompatActivity() {
             ReaderTextOrientation.VERTICAL -> "vertical"
             ReaderTextOrientation.PUBLICATION -> null
         }
-        lifecycleScope.launch { tapTranslationController?.applyWritingModeOverride(mode) }
+        writingModeJob?.cancel()
+        writingModeJob = lifecycleScope.launch {
+            val controller = tapTranslationController ?: return@launch
+            if (mode == null) {
+                publicationWritingModeIsVertical = controller.detectPublicationVertical()
+            } else {
+                publicationWritingModeIsVertical = mode == "vertical"
+            }
+            controller.applyWritingModeOverride(mode)
+        }
     }
 
     private fun showNavigationPanel() {
@@ -760,7 +941,8 @@ class ReaderActivity : AppCompatActivity() {
                                     locator = locator,
                                     existingId = record.id,
                                     note = record.noteText,
-                                    color = record.color
+                                    color = record.color,
+                                    geometryJson = record.geometryJson
                                 )
                             )
                         }
@@ -789,27 +971,30 @@ class ReaderActivity : AppCompatActivity() {
                     return@launch
                 }
                 val collected = mutableListOf<ReaderSearchResultItem>()
-                var pages = 0
-                while (collected.size < SEARCH_RESULT_LIMIT && pages < SEARCH_PAGE_LIMIT) {
-                    val locators = iterator.next().getOrNull()?.locators ?: break
-                    if (locators.isEmpty()) break
-                    locators.forEach { locator ->
-                        if (collected.size >= SEARCH_RESULT_LIMIT) return@forEach
-                        val id = "search-${searchLocators.size}"
-                        searchLocators[id] = locator
-                        collected += ReaderSearchResultItem(
-                            id = id,
-                            excerpt = buildString {
-                                append(locator.text.before?.takeLast(30).orEmpty())
-                                append(locator.text.highlight.orEmpty())
-                                append(locator.text.after?.take(30).orEmpty())
-                            }.trim(),
-                            chapterTitle = currentChapterTitle(locator)
-                        )
+                try {
+                    var pages = 0
+                    while (collected.size < SEARCH_RESULT_LIMIT && pages < SEARCH_PAGE_LIMIT) {
+                        val locators = iterator.next().getOrNull()?.locators ?: break
+                        if (locators.isEmpty()) break
+                        locators.forEach { locator ->
+                            if (collected.size >= SEARCH_RESULT_LIMIT) return@forEach
+                            val id = "search-${searchLocators.size}"
+                            searchLocators[id] = locator
+                            collected += ReaderSearchResultItem(
+                                id = id,
+                                excerpt = buildString {
+                                    append(locator.text.before?.takeLast(30).orEmpty())
+                                    append(locator.text.highlight.orEmpty())
+                                    append(locator.text.after?.take(30).orEmpty())
+                                }.trim(),
+                                chapterTitle = currentChapterTitle(locator)
+                            )
+                        }
+                        pages++
                     }
-                    pages++
+                } finally {
+                    iterator.close()
                 }
-                iterator.close()
                 searchResults = collected
                 searchMessage = if (collected.isEmpty()) {
                     "没有找到匹配结果。"
@@ -898,6 +1083,70 @@ class ReaderActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * PDF annotations are stored as page-normalized rectangles because the
+     * navigator view can change size after rotation, split-screen, or a
+     * restored process. EPUB annotations continue to use Readium decorations.
+     */
+    private fun refreshPdfAnnotationRects(locator: Locator) {
+        val controller = pdfTranslationController
+        val view = pdfNavigator?.publicationView
+        updateReaderContentOffset()
+        if (controller == null || view == null || view.width <= 0 || view.height <= 0) {
+            pdfAnnotationRects = emptyList()
+            return
+        }
+        val pageIndex = ((locator.locations.position ?: 1) - 1)
+            .coerceAtLeast(0)
+        val currentRecords = annotations.filter { record ->
+            val recordPage = parseLocator(record.locatorJson)?.locations?.position
+            recordPage != null && recordPage - 1 == pageIndex
+        }
+        lifecycleScope.launch {
+            val mapped = currentRecords.flatMap { record ->
+                parseGeometry(record.geometryJson).orEmpty().mapNotNull { geometry ->
+                    controller.mapPageGeometryToView(
+                        geometry = geometry,
+                        pageIndex = pageIndex,
+                        viewWidth = view.width,
+                        viewHeight = view.height
+                    )
+                }
+            }
+            // Ignore a stale mapping result if the reader moved while the
+            // renderer was opening a page for its dimensions.
+            if (latestLocator?.locations?.position == locator.locations.position) {
+                pdfAnnotationRects = mapped
+            }
+        }
+    }
+
+    private fun parseGeometry(json: String?): List<RectF>? {
+        if (json.isNullOrBlank()) return null
+        return runCatching {
+            val array = JSONArray(json)
+            buildList(array.length()) {
+                for (index in 0 until array.length()) {
+                    val item = array.optJSONObject(index) ?: continue
+                    val left = item.optDouble("x", Double.NaN).toFloat()
+                    val top = item.optDouble("y", Double.NaN).toFloat()
+                    val right = (left + item.optDouble("w", Double.NaN).toFloat())
+                    val bottom = (top + item.optDouble("h", Double.NaN).toFloat())
+                    if (left.isFinite() && top.isFinite() && right.isFinite() &&
+                        bottom.isFinite() && right > left && bottom > top
+                    ) {
+                        add(RectF(
+                            left.coerceIn(0f, 1f),
+                            top.coerceIn(0f, 1f),
+                            right.coerceIn(0f, 1f),
+                            bottom.coerceIn(0f, 1f)
+                        ))
+                    }
+                }
+            }
+        }.getOrNull()
+    }
+
     private val annotationDecorationListener = object : DecorableNavigator.Listener {
         override fun onDecorationActivated(
             event: DecorableNavigator.OnActivatedEvent
@@ -910,7 +1159,8 @@ class ReaderActivity : AppCompatActivity() {
                     locator = locator,
                     existingId = record.id,
                     note = record.noteText,
-                    color = record.color
+                    color = record.color,
+                    geometryJson = record.geometryJson
                 )
             )
             return true
@@ -932,7 +1182,8 @@ class ReaderActivity : AppCompatActivity() {
                     noteText = note,
                     color = color,
                     chapterTitle = currentChapterTitle(target.locator),
-                    progress = target.locator.locations.totalProgression ?: currentProgress
+                    progress = target.locator.locations.totalProgression ?: currentProgress,
+                    geometryJson = target.geometryJson
                 )
             }
             navigator?.clearSelection()
@@ -947,55 +1198,219 @@ class ReaderActivity : AppCompatActivity() {
     private fun ReaderFloatingLayer() {
         val translation = currentTranslationState
         val lookup = currentWordLookupState
-        // The self-drawn highlight is still a constant offset off vertically,
-        // so the page keeps its native selection paint until that is resolved.
-        if (DRAW_OWN_SELECTION_HIGHLIGHT) SelectionHighlightLayer()
+        val translationPreferences by graph.translationSettings.preferences.collectAsState()
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val available = maxHeight
-            val anchorTop = with(LocalDensity.current) { anchorTopPx.toDp() }
+            val density = LocalDensity.current
+            val rawAnchorTop = with(density) { anchorTopPx.toDp() }
                 .coerceIn(0.dp, available)
-            val anchorBottom = with(LocalDensity.current) { anchorBottomPx.toDp() }
+            val rawAnchorBottom = with(density) { anchorBottomPx.toDp() }
                 .coerceIn(0.dp, available)
-            // Put the card wherever there is more room, so the sentence being
-            // translated stays visible above or below it.
-            val roomBelow = available - anchorBottom - GAP
-            val roomAbove = anchorTop - GAP
-            val placeBelow = roomBelow >= roomAbove
-            val room = (if (placeBelow) roomBelow else roomAbove).coerceAtLeast(0.dp)
-            val cardHeight = room.coerceIn(
-                minimumValue = 0.dp,
-                maximumValue = (available * 0.46f)
-            ).coerceAtLeast(minOf(room, 150.dp))
+            // Reserve the same visual regions as the reader content. The old
+            // solver compared against the full window and could therefore put
+            // a result card on top of the bottom page controls (or directly on
+            // top of the selected sentence when both regions were small).
+            val safeTop = 12.dp.coerceAtLeast(CONTENT_TOP_INSET_DP.dp)
+                .coerceAtMost(available)
+            val safeBottom = (available - CONTENT_BOTTOM_INSET_DP.dp)
+                .coerceAtLeast(safeTop)
+            val selectionTop = rawAnchorTop.coerceIn(safeTop, safeBottom)
+            val selectionBottom = rawAnchorBottom.coerceIn(selectionTop, safeBottom)
+            val roomBelow = (safeBottom - selectionBottom - GAP).coerceAtLeast(0.dp)
+            val roomAbove = (selectionTop - safeTop - GAP).coerceAtLeast(0.dp)
+            val minimumCardHeight = minOf(108.dp, (safeBottom - safeTop).coerceAtLeast(1.dp))
+            val preferredCardHeight = minOf(
+                (available * 0.30f).coerceAtLeast(166.dp),
+                (safeBottom - safeTop).coerceAtLeast(1.dp)
+            )
+            val aboveFits = roomAbove >= minimumCardHeight
+            val belowFits = roomBelow >= minimumCardHeight
+            // Prefer the larger side, but use the side that can actually hold a
+            // compact card whenever only one side can do so.
+            val placeBelow = when {
+                aboveFits && belowFits -> roomBelow > roomAbove
+                belowFits -> true
+                aboveFits -> false
+                else -> roomBelow > roomAbove
+            }
+            val availableCardRoom = if (placeBelow) roomBelow else roomAbove
+            val cardHeight = minOf(
+                preferredCardHeight,
+                availableCardRoom.coerceAtLeast(1.dp)
+            )
             // A vertical Japanese page reads in columns, so iOS puts the card
             // beside the tapped column instead of above or below it.
-            val isVertical = currentAppearance.orientation == ReaderTextOrientation.VERTICAL
+            val isVertical = currentAppearance.orientation == ReaderTextOrientation.VERTICAL ||
+                (currentAppearance.orientation == ReaderTextOrientation.PUBLICATION &&
+                    publicationWritingModeIsVertical)
             val widthPx = constraints.maxWidth
-            val placeLeft = anchorLeftPx > widthPx / 2
-            val sideWidth = with(LocalDensity.current) {
-                (if (placeLeft) anchorLeftPx else widthPx - anchorRightPx).toDp()
-            } - GAP * 2
-            val cardModifier = if (isVertical && sideWidth >= 160.dp) {
-                Modifier
-                    .align(if (placeLeft) Alignment.TopStart else Alignment.TopEnd)
-                    .padding(top = anchorTop.coerceAtMost(available - 200.dp))
-                    .padding(horizontal = GAP)
-                    .widthIn(max = minOf(sideWidth, 300.dp))
-                    .heightIn(max = (available * 0.5f))
-                    .offset { IntOffset(cardDragX.toInt(), cardDragY.toInt()) }
-            } else Modifier
-                .align(if (placeBelow) Alignment.TopStart else Alignment.BottomStart)
-                .padding(
-                    top = if (placeBelow) anchorBottom + GAP else 0.dp,
-                    bottom = if (placeBelow) 0.dp else (available - anchorTop + GAP)
-                        .coerceAtLeast(0.dp)
+            val availableWidth = with(density) { widthPx.toDp() }
+            val anchorLeft = with(density) { anchorLeftPx.toDp() }.coerceIn(0.dp, availableWidth)
+            val anchorRight = with(density) { anchorRightPx.toDp() }
+                .coerceIn(anchorLeft, availableWidth)
+            val safeHorizontalInset = 12.dp
+            val roomLeft = (anchorLeft - safeHorizontalInset - GAP).coerceAtLeast(0.dp)
+            val roomRight = (availableWidth - safeHorizontalInset - anchorRight - GAP)
+                .coerceAtLeast(0.dp)
+            val placeLeft = roomLeft >= roomRight
+            val sideWidth = (if (placeLeft) roomLeft else roomRight)
+                .coerceAtMost(300.dp)
+            val verticalCardHeight = minOf(
+                preferredCardHeight,
+                (safeBottom - safeTop).coerceAtLeast(1.dp)
+            )
+            val verticalCardTop = (
+                (selectionTop + selectionBottom) / 2 - verticalCardHeight / 2
+            ).coerceIn(
+                safeTop,
+                (safeBottom - verticalCardHeight).coerceAtLeast(safeTop)
+            )
+            val topBannerHeight = minOf(preferredCardHeight, available * 0.30f)
+            val topBannerCollides = rawAnchorTop < safeTop + topBannerHeight + GAP &&
+                rawAnchorBottom > safeTop - GAP
+            val useTopBanner = translationPreferences.displayMode == TranslationDisplayMode.TOP_BANNER &&
+                !topBannerCollides
+
+            // The initial solver above only knows the requested card height.
+            // Compose can measure a different height after text wrapping,
+            // font scaling, or a loading/result state change.  Correct the
+            // *actual* measured bounds here so the card never remains over the
+            // selected text just because the first estimate was optimistic.
+            val safeLeftPx = with(density) { safeHorizontalInset.toPx() }
+            val safeRightPx = with(density) { availableWidth.toPx() } - safeLeftPx
+            val safeTopPx = with(density) { safeTop.toPx() }
+            val safeBottomPx = with(density) { safeBottom.toPx() }
+            val gapPx = with(density) { GAP.toPx() }
+            val selectionLeftPx = minOf(anchorLeftPx, anchorRightPx).toFloat()
+            val selectionRightPx = maxOf(anchorLeftPx, anchorRightPx).toFloat()
+            val selectionTopPx = minOf(anchorTopPx, anchorBottomPx).toFloat()
+            val selectionBottomPx = maxOf(anchorTopPx, anchorBottomPx).toFloat()
+            val expandedSelectionLeft = selectionLeftPx - gapPx
+            val expandedSelectionRight = selectionRightPx + gapPx
+            val expandedSelectionTop = selectionTopPx - gapPx
+            val expandedSelectionBottom = selectionBottomPx + gapPx
+
+            val popupCollisionModifier = Modifier.onGloballyPositioned { coordinates ->
+                val bounds = coordinates.boundsInParent()
+                val hasAnchor = hasSelectionAnchor ||
+                    selectionRightPx > selectionLeftPx ||
+                    selectionBottomPx > selectionTopPx
+                if (!hasAnchor) return@onGloballyPositioned
+
+                fun isClear(shift: PopupShift): Boolean {
+                    val left = bounds.left + shift.dx
+                    val top = bounds.top + shift.dy
+                    val right = bounds.right + shift.dx
+                    val bottom = bounds.bottom + shift.dy
+                    val withinSafeBounds = left >= safeLeftPx - 1f &&
+                        right <= safeRightPx + 1f &&
+                        top >= safeTopPx - 1f &&
+                        bottom <= safeBottomPx + 1f
+                    val intersectsSelection = left < expandedSelectionRight &&
+                        right > expandedSelectionLeft &&
+                        top < expandedSelectionBottom &&
+                        bottom > expandedSelectionTop
+                    return withinSafeBounds && !intersectsSelection
+                }
+
+                fun collisionScore(shift: PopupShift): Float {
+                    val left = bounds.left + shift.dx
+                    val top = bounds.top + shift.dy
+                    val right = bounds.right + shift.dx
+                    val bottom = bounds.bottom + shift.dy
+                    val overlapWidth = (minOf(right, expandedSelectionRight) -
+                        maxOf(left, expandedSelectionLeft)).coerceAtLeast(0f)
+                    val overlapHeight = (minOf(bottom, expandedSelectionBottom) -
+                        maxOf(top, expandedSelectionTop)).coerceAtLeast(0f)
+                    val overlapArea = overlapWidth * overlapHeight
+                    val overflow = (safeLeftPx - left).coerceAtLeast(0f) +
+                        (right - safeRightPx).coerceAtLeast(0f) +
+                        (safeTopPx - top).coerceAtLeast(0f) +
+                        (bottom - safeBottomPx).coerceAtLeast(0f)
+                    // Clearing the selection is more important than making a
+                    // very large card perfectly fit in an unusually small
+                    // window, but both penalties are deterministic.
+                    return overlapArea * 1000f + overflow * 100f +
+                        abs(shift.dx) + abs(shift.dy)
+                }
+
+                val current = PopupShift(0f, 0f)
+                if (isClear(current)) return@onGloballyPositioned
+
+                val candidates = listOf(
+                    PopupShift(0f, expandedSelectionBottom - bounds.top),
+                    PopupShift(0f, expandedSelectionTop - bounds.bottom),
+                    PopupShift(expandedSelectionLeft - bounds.right, 0f),
+                    PopupShift(expandedSelectionRight - bounds.left, 0f)
                 )
-                .padding(horizontal = 12.dp)
-                // iOS keeps the overlay narrow so the page stays readable
-                // beside it instead of spanning the full width.
-                .widthIn(max = 320.dp)
-                .fillMaxWidth()
-                .heightIn(max = cardHeight)
-                .offset { IntOffset(cardDragX.toInt(), cardDragY.toInt()) }
+                val shift = candidates
+                    .filter(::isClear)
+                    .minByOrNull { abs(it.dx) + abs(it.dy) }
+                    ?: candidates.minByOrNull(::collisionScore)
+                    ?: current
+                val nextX = popupAvoidanceX + shift.dx
+                val nextY = popupAvoidanceY + shift.dy
+                if (abs(nextX - popupAvoidanceX) > 0.5f ||
+                    abs(nextY - popupAvoidanceY) > 0.5f
+                ) {
+                    popupAvoidanceX = nextX
+                    popupAvoidanceY = nextY
+                }
+            }
+            val cardModifier = when {
+                useTopBanner ->
+                    Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(start = 12.dp, top = safeTop, end = 12.dp, bottom = 0.dp)
+                        .widthIn(max = 420.dp)
+                        .fillMaxWidth()
+                        .heightIn(max = topBannerHeight)
+                        .offset {
+                            IntOffset(
+                                (cardDragX + popupAvoidanceX).toInt(),
+                                (cardDragY + popupAvoidanceY).toInt()
+                            )
+                        }
+                        .then(popupCollisionModifier)
+
+                isVertical && sideWidth >= 160.dp -> {
+                    Modifier
+                        .align(if (placeLeft) Alignment.TopStart else Alignment.TopEnd)
+                        .padding(top = verticalCardTop)
+                        .padding(horizontal = GAP)
+                        .widthIn(max = sideWidth)
+                        .heightIn(max = verticalCardHeight)
+                        .offset {
+                            IntOffset(
+                                (cardDragX + popupAvoidanceX).toInt(),
+                                (cardDragY + popupAvoidanceY).toInt()
+                            )
+                        }
+                        .then(popupCollisionModifier)
+                }
+                else -> {
+                    Modifier
+                        .align(if (placeBelow) Alignment.TopStart else Alignment.BottomStart)
+                        .padding(
+                            top = if (placeBelow) selectionBottom + GAP else 0.dp,
+                            bottom = if (placeBelow) 0.dp else (available - selectionTop + GAP)
+                                .coerceAtLeast(0.dp)
+                        )
+                        .padding(horizontal = 12.dp)
+                        // iOS keeps the overlay narrow so the page stays readable
+                        // beside it instead of spanning the full width.
+                        .widthIn(max = 320.dp)
+                        .fillMaxWidth()
+                        .heightIn(max = cardHeight)
+                        .offset {
+                            IntOffset(
+                                (cardDragX + popupAvoidanceX).toInt(),
+                                (cardDragY + popupAvoidanceY).toInt()
+                            )
+                        }
+                        .then(popupCollisionModifier)
+                }
+            }
 
             if (translation != null) {
                 FloatingSurface(cardModifier) {
@@ -1011,7 +1426,12 @@ class ReaderActivity : AppCompatActivity() {
                         onAddToVocabulary = { addTranslatedWordToVocabulary(translation) },
                         crossPageMessage = crossPageMessage,
                         isExpandingCrossPage = isExpandingCrossPage,
-                        onDrag = { dx, dy -> cardDragX += dx; cardDragY += dy },
+                        onDrag = { dx, dy ->
+                            val maxX = constraints.maxWidth * 0.45f
+                            val maxY = constraints.maxHeight * 0.35f
+                            cardDragX = (cardDragX + dx).coerceIn(-maxX, maxX)
+                            cardDragY = (cardDragY + dy).coerceIn(-maxY, maxY)
+                        },
                         onOpenSettings = ::openTranslationSettings
                     )
                 }
@@ -1056,6 +1476,7 @@ class ReaderActivity : AppCompatActivity() {
     /** Anchors the floating card to the current selection, or to the tap point. */
     private fun updateFloatingAnchor() {
         lifecycleScope.launch {
+            if (hasSelectionAnchor) return@launch
             val rect = navigator?.currentSelection()?.rect
             val density = resources.displayMetrics.density
             if (rect != null) {
@@ -1065,9 +1486,30 @@ class ReaderActivity : AppCompatActivity() {
                 anchorRightPx = rect.right.toInt()
                 return@launch
             }
-            val point = tapTranslationController?.focusPoint()
-            if (point != null) {
-                val y = readerContentTopPx + point.y * density
+            val epubPoint = tapTranslationController?.focusPoint()
+            val pdfPoint = pdfTranslationController?.focusPoint()
+            if (epubPoint != null) {
+                val navigatorView = navigator?.publicationView ?: pdfNavigator?.publicationView
+                val viewLocation = IntArray(2)
+                val overlayLocation = IntArray(2)
+                navigatorView?.getLocationInWindow(viewLocation)
+                floatingLayer?.getLocationInWindow(overlayLocation)
+                val x = epubPoint.x * density + viewLocation[0] - overlayLocation[0]
+                val y = epubPoint.y * density + viewLocation[1] - overlayLocation[1]
+                anchorLeftPx = x.toInt()
+                anchorRightPx = x.toInt()
+                anchorTopPx = (y - 12 * density).toInt()
+                anchorBottomPx = (y + 12 * density).toInt()
+            } else if (pdfPoint != null) {
+                val navigatorView = pdfNavigator?.publicationView
+                val viewLocation = IntArray(2)
+                val overlayLocation = IntArray(2)
+                navigatorView?.getLocationInWindow(viewLocation)
+                floatingLayer?.getLocationInWindow(overlayLocation)
+                val x = pdfPoint.x + viewLocation[0] - overlayLocation[0]
+                val y = pdfPoint.y + viewLocation[1] - overlayLocation[1]
+                anchorLeftPx = x.toInt()
+                anchorRightPx = x.toInt()
                 anchorTopPx = (y - 12 * density).toInt()
                 anchorBottomPx = (y + 12 * density).toInt()
             }
@@ -1078,26 +1520,67 @@ class ReaderActivity : AppCompatActivity() {
         floatingLayer?.visibility = if (visible) View.VISIBLE else View.GONE
     }
 
+    /** Clears cards without touching the always-visible PDF highlight layer. */
+    private fun clearTransientCardPresentation() {
+        currentTranslationState = null
+        currentTranslationLocatorJson = null
+        currentWordLookupState = null
+        hasSelectionAnchor = false
+        crossPageMessage = null
+        isExpandingCrossPage = false
+        cardDragX = 0f
+        cardDragY = 0f
+        popupAvoidanceX = 0f
+        popupAvoidanceY = 0f
+        setFloatingLayerVisible(false)
+    }
+
     private fun dismissTranslation() {
         selectionRects = emptyList()
+        hasSelectionAnchor = false
         tapTranslationController?.clearSelection()
+        pdfTranslationController?.clearSelection()
         currentTranslationState = null
+        currentTranslationLocatorJson = null
         crossPageMessage = null
+        popupAvoidanceX = 0f
+        popupAvoidanceY = 0f
         setFloatingLayerVisible(currentWordLookupState != null)
     }
 
+    private fun resetTransientReaderState() {
+        selectionRects = emptyList()
+        hasSelectionAnchor = false
+        tapTranslationController?.clearSelection()
+        pdfTranslationController?.clearSelection()
+        wordInteractionController?.clearSelection()
+        currentTranslationState = null
+        currentTranslationLocatorJson = null
+        currentWordLookupState = null
+        crossPageMessage = null
+        isExpandingCrossPage = false
+        cardDragX = 0f
+        cardDragY = 0f
+        popupAvoidanceX = 0f
+        popupAvoidanceY = 0f
+        setFloatingLayerVisible(false)
+    }
+
     private fun showWordLookup(state: WordLookupCardState) {
+        popupAvoidanceX = 0f
+        popupAvoidanceY = 0f
         currentWordLookupState = state
         setFloatingLayerVisible(true)
         updateFloatingAnchor()
     }
 
     private fun showTranslation(state: TranslationCardState) {
-        if (currentTranslationState == null) {
-            cardDragX = 0f
-            cardDragY = 0f
-        }
+        cardDragX = 0f
+        cardDragY = 0f
+        popupAvoidanceX = 0f
+        popupAvoidanceY = 0f
         currentTranslationState = state
+        currentTranslationLocatorJson = latestLocatorJson
         setFloatingLayerVisible(true)
         updateFloatingAnchor()
     }
@@ -1110,17 +1593,29 @@ class ReaderActivity : AppCompatActivity() {
      * handles fight with Readium's own gestures.
      */
     private fun updateSelectionHighlight(rects: List<RectF>) {
+        applySelectionRects(rects, paints = true)
+    }
+
+    /**
+     * EPUB paints its own tiles inside the page, where the rects were measured.
+     * Painting the same rects again on this layer stacked a second translucent
+     * fill and a second outline on top of the first, so the reflowable path only
+     * reports geometry for anchoring the card.
+     */
+    private fun updateSelectionAnchor(rects: List<RectF>) {
+        applySelectionRects(rects, paints = false)
+    }
+
+    private fun applySelectionRects(rects: List<RectF>, paints: Boolean) {
         // Measure where the page actually sits instead of deriving it from the
         // inset constants; Readium adds its own padding inside the navigator,
         // so a computed offset put the highlight a line off.
-        val location = IntArray(2)
-        navigator?.publicationView?.getLocationInWindow(location)
-        val overlayLocation = IntArray(2)
-        floatingLayer?.getLocationInWindow(overlayLocation)
-        val overlayPadTop = floatingLayer?.paddingTop ?: 0
-        readerContentTopPx = (location[1] - overlayLocation[1] - overlayPadTop).coerceAtLeast(0)
-        selectionRects = rects
+        updateReaderContentOffset()
+        selectionRects = if (paints) rects else emptyList()
+        hasSelectionAnchor = rects.isNotEmpty()
         if (rects.isNotEmpty()) {
+            popupAvoidanceX = 0f
+            popupAvoidanceY = 0f
             anchorTopPx = (readerContentTopPx + rects.minOf { it.top }).toInt()
             anchorBottomPx = (readerContentTopPx + rects.maxOf { it.bottom }).toInt()
             anchorLeftPx = rects.minOf { it.left }.toInt()
@@ -1128,22 +1623,62 @@ class ReaderActivity : AppCompatActivity() {
         }
     }
 
+    private fun updateReaderContentOffset() {
+        val publicationView = navigator?.publicationView ?: pdfNavigator?.publicationView
+        val location = IntArray(2)
+        val overlayLocation = IntArray(2)
+        publicationView?.getLocationInWindow(location)
+        val highlight = highlightLayer ?: floatingLayer
+        highlight?.getLocationInWindow(overlayLocation)
+        val overlayPadTop = highlight?.paddingTop ?: 0
+        readerContentLeftPx = location[0] - overlayLocation[0]
+        readerContentTopPx = (location[1] - overlayLocation[1] - overlayPadTop).coerceAtLeast(0)
+    }
+
     @androidx.compose.runtime.Composable
     private fun SelectionHighlightLayer() {
         val rects = selectionRects
-        if (rects.isEmpty()) return
-        val tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
+        val persistedRects = pdfAnnotationRects
+        if (rects.isEmpty() && persistedRects.isEmpty()) return
+        val selectionPalette = ReaderSelectionVisualStyle.palette(currentAppearance)
+        val tint = selectionPalette.fillArgb.toComposeColor()
+        val stroke = selectionPalette.strokeArgb.toComposeColor()
+        val persistedTint = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.16f)
         val top = readerContentTopPx.toFloat()
         Canvas(modifier = Modifier.fillMaxSize()) {
-            rects.forEach { rect ->
+            persistedRects.forEach { rect ->
                 drawRoundRect(
-                    color = tint,
-                    topLeft = Offset(rect.left, rect.top + top),
+                    color = persistedTint,
+                    topLeft = Offset(rect.left + readerContentLeftPx, rect.top + top),
                     size = Size(rect.width(), rect.height()),
                     cornerRadius = CornerRadius(4f, 4f)
                 )
             }
+            rects.forEach { rect ->
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(rect.left + readerContentLeftPx, rect.top + top),
+                    size = Size(rect.width(), rect.height()),
+                    cornerRadius = CornerRadius(4f, 4f)
+                )
+                drawRoundRect(
+                    color = stroke,
+                    topLeft = Offset(rect.left + readerContentLeftPx, rect.top + top),
+                    size = Size(rect.width(), rect.height()),
+                    cornerRadius = CornerRadius(4f, 4f),
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1f)
+                )
+            }
         }
+    }
+
+    private fun Long.toComposeColor(): androidx.compose.ui.graphics.Color {
+        return androidx.compose.ui.graphics.Color(
+            red = ((this shr 16) and 0xFF).toInt() / 255f,
+            green = ((this shr 8) and 0xFF).toInt() / 255f,
+            blue = (this and 0xFF).toInt() / 255f,
+            alpha = ((this shr 24) and 0xFF).toInt() / 255f
+        )
     }
 
     private fun performTranslationHaptic() {
@@ -1153,7 +1688,9 @@ class ReaderActivity : AppCompatActivity() {
     private fun retryTranslation() {
         val pdf = pdfTranslationController
         if (pdf != null) {
-            pdf.retry()
+            if (!pdf.retry()) {
+                crossPageMessage = "同一段文字 5 秒内只能手动重试一次。"
+            }
             return
         }
         val accepted = tapTranslationController?.retryManually() ?: false
@@ -1168,12 +1705,12 @@ class ReaderActivity : AppCompatActivity() {
         if (word.isEmpty()) return
         lifecycleScope.launch {
             val explanation = runCatching {
-                graph.lexicalLookupService.lookup(
+                withContext(Dispatchers.IO) { graph.lexicalLookupService.lookup(
                     word = word,
                     sentenceContext = null,
-                    language = currentBookLanguage() ?: LanguageCode.ENGLISH,
+                    language = translationSourceLanguage(state) ?: LanguageCode.ENGLISH,
                     candidates = emptyList()
-                )
+                ) }
             }.getOrNull()
             if (explanation == null) {
                 crossPageMessage = "词典暂时不可用，未加入生词本。"
@@ -1191,12 +1728,13 @@ class ReaderActivity : AppCompatActivity() {
 
     private fun favoriteTranslation(state: TranslationCardState, result: TranslationResult) {
         lifecycleScope.launch {
+            crossPageMessage = "已收藏到学习页。"
             graph.learningRecords.saveTranslationFavorite(
                 sourceText = state.sourceText,
                 result = result,
                 bookId = book?.id,
                 bookTitle = book?.title,
-                locatorJson = latestLocatorJson
+                locatorJson = currentTranslationLocatorJson ?: latestLocatorJson
             )
         }
     }
@@ -1204,15 +1742,21 @@ class ReaderActivity : AppCompatActivity() {
     private fun explainTranslation(state: TranslationCardState) {
         val service = graph.translationService as? ContextExplanationService ?: return
         lifecycleScope.launch {
+            crossPageMessage = "正在请求 AI 解析…"
             val explained = runCatching {
-                service.explain(
+                withContext(Dispatchers.IO) { service.explain(
                     ContextExplanationRequest(
                         focusedText = state.sourceText,
                         contextText = null,
-                        sourceLanguage = currentBookLanguage()
+                        sourceLanguage = translationSourceLanguage(state)
                     )
-                )
-            }.getOrNull() ?: return@launch
+                ) }
+            }.getOrNull()
+            if (explained == null) {
+                crossPageMessage = "AI 解析不可用，请先在设置里配置 AI 服务。"
+                return@launch
+            }
+            crossPageMessage = null
             val current = currentTranslationState
             if (current is TranslationCardState.Success && current.sourceText == state.sourceText) {
                 currentTranslationState = current.copy(analysisText = explained.explanation)
@@ -1231,25 +1775,30 @@ class ReaderActivity : AppCompatActivity() {
         crossPageMessage = null
         lifecycleScope.launch {
             try {
-                val context = tapTranslationController?.crossPageContext(state.sourceText)
-                    ?: pdfTranslationController?.crossPageContext(state.sourceText)
+                val pdfController = pdfTranslationController
+                val epubController = tapTranslationController
+                val context = pdfController?.crossPageContext(state.sourceText)
+                    ?: epubController?.crossPageContext(state.sourceText)
                 val expansion = ReaderCrossPageTranslationResolver.expansion(
                     sourceText = state.sourceText,
                     contextText = context,
-                    language = currentBookLanguage()
+                    language = translationSourceLanguage(state)
                 )
                 if (expansion == null) {
                     crossPageMessage = "没有找到可确认的完整句段，已保留当前译文。"
                     return@launch
                 }
                 val preferences = graph.translationSettings.preferences.value
-                tapTranslationController?.translateExpanded(
-                    TranslationRequest(
-                        text = expansion.text,
-                        sourceLanguage = preferences.sourceChoice.language ?: currentBookLanguage(),
-                        targetLanguage = preferences.targetLanguage
-                    )
+                val request = TranslationRequest(
+                    text = expansion.text,
+                    sourceLanguage = preferences.sourceChoice.language ?: translationSourceLanguage(state),
+                    targetLanguage = preferences.targetLanguage
                 )
+                if (pdfController != null) {
+                    pdfController.translateExpanded(request)
+                } else {
+                    epubController?.translateExpanded(request)
+                }
             } finally {
                 isExpandingCrossPage = false
             }
@@ -1258,8 +1807,23 @@ class ReaderActivity : AppCompatActivity() {
 
     private fun annotateTranslatedText(text: String) {
         val locator = latestLocator ?: return
+        val geometryJson = pdfTranslationController?.selectionGeometry()?.let { geometry ->
+            JSONArray().put(
+                JSONObject()
+                    .put("x", geometry.left)
+                    .put("y", geometry.top)
+                    .put("w", geometry.width())
+                    .put("h", geometry.height())
+            ).toString()
+        }
         dismissTranslation()
-        showAnnotationEditor(PendingAnnotation(selectedText = text, locator = locator))
+        showAnnotationEditor(
+            PendingAnnotation(
+                selectedText = text,
+                locator = locator,
+                geometryJson = geometryJson
+            )
+        )
     }
 
     private fun openTranslationSettings() {
@@ -1280,6 +1844,9 @@ class ReaderActivity : AppCompatActivity() {
     private fun copyToClipboard(text: String) {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("Jerreader", text))
+        // These actions used to finish silently, which reads as "nothing
+        // happened"; the card now confirms each one.
+        crossPageMessage = "已复制到剪贴板。"
     }
 
     internal suspend fun lookupAtForTesting(point: PointF): WordLookupCardState? =
@@ -1334,22 +1901,64 @@ class ReaderActivity : AppCompatActivity() {
         val bookId = book?.id ?: return
         val locatorJson = latestLocatorJson ?: return
         val progress = currentProgress
-        graph.applicationScope.launch {
-            graph.repository.updateReadingProgress(
-                id = bookId,
-                locatorJson = locatorJson,
-                openedAtEpochMillis = System.currentTimeMillis(),
-                progress = progress
-            )
+        progressPersistenceJob?.cancel()
+        progressPersistenceJob = graph.applicationScope.launch {
+            progressPersistenceMutex.withLock {
+                graph.repository.updateReadingProgress(
+                    id = bookId,
+                    locatorJson = locatorJson,
+                    openedAtEpochMillis = System.currentTimeMillis(),
+                    progress = progress
+                )
+            }
         }
     }
 
-    private fun persistReadingTime() {
+    /** Flushes the newest locator before Android can destroy the Activity/process. */
+    @SuppressLint("LogNotTimber")
+    private fun flushLatestLocator() {
         val bookId = book?.id ?: return
-        val seconds = (System.currentTimeMillis() - sessionStartedAtMillis) / 1000.0
+        val locatorJson = latestLocatorJson ?: return
+        val progress = currentProgress
+        progressPersistenceJob?.cancel()
+        runCatching {
+            runBlocking(Dispatchers.IO) {
+                progressPersistenceMutex.withLock {
+                    graph.repository.updateReadingProgress(
+                        id = bookId,
+                        locatorJson = locatorJson,
+                        openedAtEpochMillis = System.currentTimeMillis(),
+                        progress = progress
+                    )
+                }
+            }
+        }.onFailure { error ->
+            Log.w(INTEGRITY_TAG, "Unable to flush reading progress", error)
+        }
+        progressPersistenceJob = null
+    }
+
+    private fun accumulateReadingTime() {
+        val started = readingStartedAtMillis ?: return
+        val elapsed = (System.currentTimeMillis() - started).coerceAtLeast(0L) / 1000.0
+        accumulatedReadingSeconds += elapsed
+        readingStartedAtMillis = null
+    }
+
+    @SuppressLint("LogNotTimber")
+    private fun flushReadingTime() {
+        val bookId = book?.id ?: return
+        val seconds = accumulatedReadingSeconds
         if (seconds < MINIMUM_RECORDED_READING_SECONDS) return
-        graph.applicationScope.launch {
-            graph.repository.addReadingTime(bookId, seconds)
+        runCatching {
+            runBlocking(Dispatchers.IO) {
+                graph.repository.addReadingTime(bookId, seconds)
+            }
+            // Clear the accumulator only after the database confirms the write;
+            // a later lifecycle callback can retry a failed write safely.
+            accumulatedReadingSeconds = 0.0
+        }.onFailure { error ->
+            Log.w(INTEGRITY_TAG, "Unable to flush reading time", error)
         }
     }
 
@@ -1393,6 +2002,9 @@ class ReaderActivity : AppCompatActivity() {
         }
     }
 
+    private fun translationSourceLanguage(state: TranslationCardState): LanguageCode? =
+        (state as? TranslationCardState.Success)?.result?.sourceLanguage ?: currentBookLanguage()
+
     companion object {
         const val EXTRA_BOOK_ID = "com.jerreader.reader.BOOK_ID"
         const val EXTRA_PUBLICATION_PATH = "com.jerreader.reader.PUBLICATION_PATH"
@@ -1402,6 +2014,9 @@ class ReaderActivity : AppCompatActivity() {
 
         // Enough clearance that the card never sits on the descenders of
         // the line it was anchored to.
+        // EPUB draws the highlight inside the WebView, where CSS client rects
+        // and the page share one coordinate space. PDF still uses the Compose
+        // layer for OCR selections and persisted page rectangles.
         private const val DRAW_OWN_SELECTION_HIGHLIGHT = false
         private val GAP = 18.dp
         private const val CONTENT_TOP_INSET_DP = 74
@@ -1411,6 +2026,8 @@ class ReaderActivity : AppCompatActivity() {
         private const val INTEGRITY_TAG = "JerreaderIntegrity"
         private const val PROGRESS_SAVE_DEBOUNCE_MILLIS = 500L
         private const val MINIMUM_RECORDED_READING_SECONDS = 3.0
+        private const val READER_OPEN_TIMEOUT_MILLIS = 25_000L
+        private const val PDF_GEOMETRY_REFRESH_DELAY_MILLIS = 80L
         private const val SEARCH_RESULT_LIMIT = 80
         private const val SEARCH_PAGE_LIMIT = 6
     }
