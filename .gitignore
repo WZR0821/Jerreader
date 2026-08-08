@@ -1,0 +1,30 @@
+.DS_Store
+DerivedData/
+/build/
+.build/
+dist/
+*.xcuserstate
+xcuserdata/
+com.apple.dt.Xcode.plist
+Jerreader.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+
+# Android / Gradle
+.gradle/
+.kotlin/
+.idea/
+.tools/
+local.properties
+**/build/
+captures/
+*.apk
+*.aab
+
+# Local-only publication fixtures and signing material
+PrivateTestFixtures/
+*.jks
+*.keystore
+*.p12
+*.mobileprovision
+
+# Signing credentials
+keystore.properties
