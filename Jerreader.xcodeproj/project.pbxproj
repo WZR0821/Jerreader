@@ -1,0 +1,942 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A00000000000000000000001 /* JerreaderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000001 /* JerreaderApp.swift */; };
+		A00000000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000002 /* ContentView.swift */; };
+		A00000000000000000000003 /* LanguageCode.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000003 /* LanguageCode.swift */; };
+		A00000000000000000000004 /* TranslationResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000004 /* TranslationResult.swift */; };
+		A00000000000000000000005 /* WordExplanation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000005 /* WordExplanation.swift */; };
+		A00000000000000000000006 /* ServiceError.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000006 /* ServiceError.swift */; };
+		A00000000000000000000007 /* TranslationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000007 /* TranslationService.swift */; };
+		A00000000000000000000008 /* LexicalLookupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000008 /* LexicalLookupService.swift */; };
+		A00000000000000000000009 /* SpeechService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000009 /* SpeechService.swift */; };
+		A0000000000000000000000A /* MockTranslationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000A /* MockTranslationService.swift */; };
+		A0000000000000000000000B /* MockLexicalLookupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000B /* MockLexicalLookupService.swift */; };
+		A0000000000000000000000C /* SystemSpeechService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000C /* SystemSpeechService.swift */; };
+		A0000000000000000000000D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000D /* Assets.xcassets */; };
+		A0000000000000000000000E /* ReadiumShared in Frameworks */ = {isa = PBXBuildFile; productRef = D00000000000000000000001 /* ReadiumShared */; };
+		A0000000000000000000000F /* ReadiumStreamer in Frameworks */ = {isa = PBXBuildFile; productRef = D00000000000000000000002 /* ReadiumStreamer */; };
+		A00000000000000000000010 /* ReadiumNavigator in Frameworks */ = {isa = PBXBuildFile; productRef = D00000000000000000000003 /* ReadiumNavigator */; };
+		A00000000000000000000011 /* MockServicesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000E /* MockServicesTests.swift */; };
+		A00000000000000000000012 /* BookRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000011 /* BookRecord.swift */; };
+		A00000000000000000000013 /* BookImportError.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000012 /* BookImportError.swift */; };
+		A00000000000000000000014 /* EPUBImportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000013 /* EPUBImportService.swift */; };
+		A000000000000000000000F3 /* LibraryBackupRecords.swift in Sources */ = {isa = PBXBuildFile; fileRef = B000000000000000000000F3 /* LibraryBackupRecords.swift */; };
+		A000000000000000000000F2 /* LibraryBackupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B000000000000000000000F2 /* LibraryBackupService.swift */; };
+		A000000000000000000000F5 /* LibraryBackupPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = B000000000000000000000F5 /* LibraryBackupPolicy.swift */; };
+		A000000000000000000000F6 /* LibraryBackupServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B000000000000000000000F6 /* LibraryBackupServiceTests.swift */; };
+		A00000000000000000000015 /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000014 /* LibraryView.swift */; };
+		A00000000000000000000016 /* LibraryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000015 /* LibraryTests.swift */; };
+		A00000000000000000000017 /* WordLookupRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000016 /* WordLookupRecord.swift */; };
+		A00000000000000000000018 /* WordLookupStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000017 /* WordLookupStore.swift */; };
+		A00000000000000000000019 /* LookupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000018 /* LookupView.swift */; };
+		A000000000000000000000F4 /* TranslateToolView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B000000000000000000000F4 /* TranslateToolView.swift */; };
+		A0000000000000000000001A /* VocabularyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000019 /* VocabularyView.swift */; };
+		A0000000000000000000001B /* LookupHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000001A /* LookupHistoryView.swift */; };
+		A0000000000000000000001C /* WordRecordViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000001B /* WordRecordViews.swift */; };
+		A0000000000000000000001D /* WordLookupStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000001C /* WordLookupStoreTests.swift */; };
+		A0000000000000000000001E /* JerreaderTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000001D /* JerreaderTheme.swift */; };
+		A0000000000000000000001F /* TranslationCacheRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000001F /* TranslationCacheRecord.swift */; };
+		A00000000000000000000020 /* ReaderError.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000020 /* ReaderError.swift */; };
+		A00000000000000000000021 /* TranslationCacheStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000021 /* TranslationCacheStore.swift */; };
+		A00000000000000000000022 /* AppleTranslationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000022 /* AppleTranslationService.swift */; };
+		A00000000000000000000023 /* EPUBPublicationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000023 /* EPUBPublicationService.swift */; };
+		A00000000000000000000024 /* ReaderModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000024 /* ReaderModels.swift */; };
+		A00000000000000000000025 /* EPUBReaderHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000025 /* EPUBReaderHost.swift */; };
+		A00000000000000000000026 /* EPUBReaderViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000026 /* EPUBReaderViewModel.swift */; };
+		A00000000000000000000027 /* EPUBReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000027 /* EPUBReaderView.swift */; };
+		A00000000000000000000028 /* ReaderServicesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000028 /* ReaderServicesTests.swift */; };
+		A00000000000000000000029 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000029 /* Localizable.xcstrings */; };
+		A0000000000000000000002A /* WiktionaryLexicalLookupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000002A /* WiktionaryLexicalLookupService.swift */; };
+		A0000000000000000000002B /* WiktionaryServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000002B /* WiktionaryServiceTests.swift */; };
+		A0000000000000000000002C /* LearningHubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000002C /* LearningHubView.swift */; };
+		A0000000000000000000002D /* TranslationPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000002D /* TranslationPreferences.swift */; };
+		A0000000000000000000002E /* TranslationFavoriteRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000002E /* TranslationFavoriteRecord.swift */; };
+		A0000000000000000000002F /* TranslationSettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000002F /* TranslationSettingsStore.swift */; };
+		A00000000000000000000030 /* BackendTranslationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000030 /* BackendTranslationService.swift */; };
+		A00000000000000000000031 /* TranslationFavoriteStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000031 /* TranslationFavoriteStore.swift */; };
+		A00000000000000000000032 /* ReaderSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000032 /* ReaderSettingsView.swift */; };
+		A00000000000000000000033 /* BackendTranslationServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000033 /* BackendTranslationServiceTests.swift */; };
+		A00000000000000000000034 /* TranslationFavoriteStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000034 /* TranslationFavoriteStoreTests.swift */; };
+		A00000000000000000000035 /* AppSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000035 /* AppSettingsView.swift */; };
+		A000000000000000000000F1 /* LibraryBackupSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B000000000000000000000F1 /* LibraryBackupSettingsView.swift */; };
+		A00000000000000000000036 /* AppGuideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000036 /* AppGuideView.swift */; };
+		A00000000000000000000037 /* BookFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000037 /* BookFormat.swift */; };
+		A00000000000000000000038 /* DocumentConversionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000038 /* DocumentConversionService.swift */; };
+		A00000000000000000000039 /* PublicationReaderController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000039 /* PublicationReaderController.swift */; };
+		A0000000000000000000003A /* PDFReaderHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000003A /* PDFReaderHost.swift */; };
+		A0000000000000000000003B /* InfoPlist.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000003B /* InfoPlist.xcstrings */; };
+		A0000000000000000000003C /* ReadiumAdapterGCDWebServer in Frameworks */ = {isa = PBXBuildFile; productRef = D00000000000000000000004 /* ReadiumAdapterGCDWebServer */; };
+		A0000000000000000000003D /* ReadiumZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = D00000000000000000000005 /* ReadiumZIPFoundation */; };
+		A0000000000000000000003E /* ReadingBookmarkRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000003C /* ReadingBookmarkRecord.swift */; };
+		A0000000000000000000003F /* ReadingBookmarkStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000003D /* ReadingBookmarkStore.swift */; };
+		A00000000000000000000040 /* LearningExportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000003E /* LearningExportService.swift */; };
+		A00000000000000000000041 /* EPUBSelectionBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000003F /* EPUBSelectionBridge.swift */; };
+		A00000000000000000000042 /* JerreaderSelectionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000040 /* JerreaderSelectionUITests.swift */; };
+		A00000000000000000000043 /* ReadingAnnotationRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000042 /* ReadingAnnotationRecord.swift */; };
+		A00000000000000000000044 /* ReadingAnnotationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000043 /* ReadingAnnotationStore.swift */; };
+		A00000000000000000000045 /* ContextExplanationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000044 /* ContextExplanationService.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		C00000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E00000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E00000000000000000000002;
+			remoteInfo = Jerreader;
+		};
+		C00000000000000000000003 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E00000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E00000000000000000000002;
+			remoteInfo = Jerreader;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		B00000000000000000000001 /* JerreaderApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JerreaderApp.swift; sourceTree = "<group>"; };
+		B00000000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		B00000000000000000000003 /* LanguageCode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanguageCode.swift; sourceTree = "<group>"; };
+		B00000000000000000000004 /* TranslationResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationResult.swift; sourceTree = "<group>"; };
+		B00000000000000000000005 /* WordExplanation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WordExplanation.swift; sourceTree = "<group>"; };
+		B00000000000000000000006 /* ServiceError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServiceError.swift; sourceTree = "<group>"; };
+		B00000000000000000000007 /* TranslationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationService.swift; sourceTree = "<group>"; };
+		B00000000000000000000008 /* LexicalLookupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LexicalLookupService.swift; sourceTree = "<group>"; };
+		B00000000000000000000009 /* SpeechService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechService.swift; sourceTree = "<group>"; };
+		B0000000000000000000000A /* MockTranslationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockTranslationService.swift; sourceTree = "<group>"; };
+		B0000000000000000000000B /* MockLexicalLookupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockLexicalLookupService.swift; sourceTree = "<group>"; };
+		B0000000000000000000000C /* SystemSpeechService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemSpeechService.swift; sourceTree = "<group>"; };
+		B0000000000000000000000D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		B0000000000000000000000E /* MockServicesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockServicesTests.swift; sourceTree = "<group>"; };
+		B0000000000000000000000F /* Jerreader.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jerreader.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B00000000000000000000010 /* JerreaderTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = JerreaderTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B00000000000000000000011 /* BookRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookRecord.swift; sourceTree = "<group>"; };
+		B00000000000000000000012 /* BookImportError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookImportError.swift; sourceTree = "<group>"; };
+		B00000000000000000000013 /* EPUBImportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EPUBImportService.swift; sourceTree = "<group>"; };
+		B000000000000000000000F3 /* LibraryBackupRecords.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryBackupRecords.swift; sourceTree = "<group>"; };
+		B000000000000000000000F2 /* LibraryBackupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryBackupService.swift; sourceTree = "<group>"; };
+		B000000000000000000000F5 /* LibraryBackupPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryBackupPolicy.swift; sourceTree = "<group>"; };
+		B000000000000000000000F6 /* LibraryBackupServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryBackupServiceTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000014 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
+		B00000000000000000000015 /* LibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000016 /* WordLookupRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WordLookupRecord.swift; sourceTree = "<group>"; };
+		B00000000000000000000017 /* WordLookupStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WordLookupStore.swift; sourceTree = "<group>"; };
+		B00000000000000000000018 /* LookupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookupView.swift; sourceTree = "<group>"; };
+		B000000000000000000000F4 /* TranslateToolView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslateToolView.swift; sourceTree = "<group>"; };
+		B00000000000000000000019 /* VocabularyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VocabularyView.swift; sourceTree = "<group>"; };
+		B0000000000000000000001A /* LookupHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookupHistoryView.swift; sourceTree = "<group>"; };
+		B0000000000000000000001B /* WordRecordViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WordRecordViews.swift; sourceTree = "<group>"; };
+		B0000000000000000000001C /* WordLookupStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WordLookupStoreTests.swift; sourceTree = "<group>"; };
+		B0000000000000000000001D /* JerreaderTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JerreaderTheme.swift; sourceTree = "<group>"; };
+		B0000000000000000000001E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		B0000000000000000000001F /* TranslationCacheRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationCacheRecord.swift; sourceTree = "<group>"; };
+		B00000000000000000000020 /* ReaderError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderError.swift; sourceTree = "<group>"; };
+		B00000000000000000000021 /* TranslationCacheStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationCacheStore.swift; sourceTree = "<group>"; };
+		B00000000000000000000022 /* AppleTranslationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleTranslationService.swift; sourceTree = "<group>"; };
+		B00000000000000000000023 /* EPUBPublicationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EPUBPublicationService.swift; sourceTree = "<group>"; };
+		B00000000000000000000024 /* ReaderModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderModels.swift; sourceTree = "<group>"; };
+		B00000000000000000000025 /* EPUBReaderHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EPUBReaderHost.swift; sourceTree = "<group>"; };
+		B00000000000000000000026 /* EPUBReaderViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EPUBReaderViewModel.swift; sourceTree = "<group>"; };
+		B00000000000000000000027 /* EPUBReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EPUBReaderView.swift; sourceTree = "<group>"; };
+		B00000000000000000000028 /* ReaderServicesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderServicesTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000029 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
+		B0000000000000000000002A /* WiktionaryLexicalLookupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WiktionaryLexicalLookupService.swift; sourceTree = "<group>"; };
+		B0000000000000000000002B /* WiktionaryServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WiktionaryServiceTests.swift; sourceTree = "<group>"; };
+		B0000000000000000000002C /* LearningHubView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LearningHubView.swift; sourceTree = "<group>"; };
+		B0000000000000000000002D /* TranslationPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationPreferences.swift; sourceTree = "<group>"; };
+		B0000000000000000000002E /* TranslationFavoriteRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationFavoriteRecord.swift; sourceTree = "<group>"; };
+		B0000000000000000000002F /* TranslationSettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationSettingsStore.swift; sourceTree = "<group>"; };
+		B00000000000000000000030 /* BackendTranslationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendTranslationService.swift; sourceTree = "<group>"; };
+		B00000000000000000000031 /* TranslationFavoriteStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationFavoriteStore.swift; sourceTree = "<group>"; };
+		B00000000000000000000032 /* ReaderSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderSettingsView.swift; sourceTree = "<group>"; };
+		B00000000000000000000033 /* BackendTranslationServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendTranslationServiceTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000034 /* TranslationFavoriteStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationFavoriteStoreTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000035 /* AppSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettingsView.swift; sourceTree = "<group>"; };
+		B000000000000000000000F1 /* LibraryBackupSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryBackupSettingsView.swift; sourceTree = "<group>"; };
+		B00000000000000000000036 /* AppGuideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppGuideView.swift; sourceTree = "<group>"; };
+		B00000000000000000000037 /* BookFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookFormat.swift; sourceTree = "<group>"; };
+		B00000000000000000000038 /* DocumentConversionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentConversionService.swift; sourceTree = "<group>"; };
+		B00000000000000000000039 /* PublicationReaderController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublicationReaderController.swift; sourceTree = "<group>"; };
+		B0000000000000000000003A /* PDFReaderHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFReaderHost.swift; sourceTree = "<group>"; };
+		B0000000000000000000003B /* InfoPlist.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = InfoPlist.xcstrings; sourceTree = "<group>"; };
+		B0000000000000000000003C /* ReadingBookmarkRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingBookmarkRecord.swift; sourceTree = "<group>"; };
+		B0000000000000000000003D /* ReadingBookmarkStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingBookmarkStore.swift; sourceTree = "<group>"; };
+		B0000000000000000000003E /* LearningExportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LearningExportService.swift; sourceTree = "<group>"; };
+		B0000000000000000000003F /* EPUBSelectionBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EPUBSelectionBridge.swift; sourceTree = "<group>"; };
+		B00000000000000000000040 /* JerreaderSelectionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JerreaderSelectionUITests.swift; sourceTree = "<group>"; };
+		B00000000000000000000041 /* JerreaderUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = JerreaderUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B00000000000000000000042 /* ReadingAnnotationRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingAnnotationRecord.swift; sourceTree = "<group>"; };
+		B00000000000000000000043 /* ReadingAnnotationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingAnnotationStore.swift; sourceTree = "<group>"; };
+		B00000000000000000000044 /* ContextExplanationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextExplanationService.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		F00000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A0000000000000000000000E /* ReadiumShared in Frameworks */,
+				A0000000000000000000000F /* ReadiumStreamer in Frameworks */,
+				A00000000000000000000010 /* ReadiumNavigator in Frameworks */,
+				A0000000000000000000003C /* ReadiumAdapterGCDWebServer in Frameworks */,
+				A0000000000000000000003D /* ReadiumZIPFoundation in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F00000000000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F00000000000000000000008 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		E00000000000000000000010 = {
+			isa = PBXGroup;
+			children = (
+				E00000000000000000000011 /* Jerreader */,
+				E00000000000000000000018 /* JerreaderTests */,
+				E00000000000000000000022 /* JerreaderUITests */,
+				E00000000000000000000019 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		E00000000000000000000011 /* Jerreader */ = {
+			isa = PBXGroup;
+			children = (
+				E00000000000000000000012 /* App */,
+				E00000000000000000000013 /* Core */,
+				E00000000000000000000016 /* Data */,
+				E0000000000000000000001B /* Features */,
+				E00000000000000000000017 /* Resources */,
+			);
+			path = Jerreader;
+			sourceTree = "<group>";
+		};
+		E00000000000000000000012 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				B00000000000000000000001 /* JerreaderApp.swift */,
+				B00000000000000000000002 /* ContentView.swift */,
+				B00000000000000000000035 /* AppSettingsView.swift */,
+				B000000000000000000000F1 /* LibraryBackupSettingsView.swift */,
+				B00000000000000000000036 /* AppGuideView.swift */,
+				B0000000000000000000001D /* JerreaderTheme.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		E00000000000000000000013 /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				E00000000000000000000014 /* Models */,
+				E00000000000000000000015 /* Services */,
+			);
+			path = Core;
+			sourceTree = "<group>";
+		};
+		E00000000000000000000014 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				B00000000000000000000011 /* BookRecord.swift */,
+				B00000000000000000000037 /* BookFormat.swift */,
+				B00000000000000000000012 /* BookImportError.swift */,
+				B00000000000000000000020 /* ReaderError.swift */,
+				B00000000000000000000016 /* WordLookupRecord.swift */,
+				B0000000000000000000001F /* TranslationCacheRecord.swift */,
+				B0000000000000000000002E /* TranslationFavoriteRecord.swift */,
+				B0000000000000000000003C /* ReadingBookmarkRecord.swift */,
+				B00000000000000000000042 /* ReadingAnnotationRecord.swift */,
+				B0000000000000000000002D /* TranslationPreferences.swift */,
+				B00000000000000000000003 /* LanguageCode.swift */,
+				B00000000000000000000004 /* TranslationResult.swift */,
+				B00000000000000000000005 /* WordExplanation.swift */,
+				B00000000000000000000006 /* ServiceError.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		E00000000000000000000015 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				B00000000000000000000007 /* TranslationService.swift */,
+				B00000000000000000000008 /* LexicalLookupService.swift */,
+				B00000000000000000000009 /* SpeechService.swift */,
+				B00000000000000000000044 /* ContextExplanationService.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		E00000000000000000000016 /* Data */ = {
+			isa = PBXGroup;
+			children = (
+				E0000000000000000000001A /* Services */,
+			);
+			path = Data;
+			sourceTree = "<group>";
+		};
+		E0000000000000000000001A /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				B00000000000000000000013 /* EPUBImportService.swift */,
+				B000000000000000000000F3 /* LibraryBackupRecords.swift */,
+				B000000000000000000000F2 /* LibraryBackupService.swift */,
+				B000000000000000000000F5 /* LibraryBackupPolicy.swift */,
+				B00000000000000000000038 /* DocumentConversionService.swift */,
+				B00000000000000000000023 /* EPUBPublicationService.swift */,
+				B00000000000000000000017 /* WordLookupStore.swift */,
+				B00000000000000000000021 /* TranslationCacheStore.swift */,
+				B00000000000000000000022 /* AppleTranslationService.swift */,
+				B0000000000000000000002F /* TranslationSettingsStore.swift */,
+				B00000000000000000000030 /* BackendTranslationService.swift */,
+				B00000000000000000000031 /* TranslationFavoriteStore.swift */,
+				B0000000000000000000003D /* ReadingBookmarkStore.swift */,
+				B00000000000000000000043 /* ReadingAnnotationStore.swift */,
+				B0000000000000000000003E /* LearningExportService.swift */,
+				B0000000000000000000002A /* WiktionaryLexicalLookupService.swift */,
+				B0000000000000000000000A /* MockTranslationService.swift */,
+				B0000000000000000000000B /* MockLexicalLookupService.swift */,
+				B0000000000000000000000C /* SystemSpeechService.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		E0000000000000000000001B /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				E0000000000000000000001C /* Library */,
+				E0000000000000000000001D /* Learning */,
+				E0000000000000000000001E /* Reader */,
+			);
+			path = Features;
+			sourceTree = "<group>";
+		};
+		E0000000000000000000001C /* Library */ = {
+			isa = PBXGroup;
+			children = (
+				B00000000000000000000014 /* LibraryView.swift */,
+			);
+			path = Library;
+			sourceTree = "<group>";
+		};
+		E0000000000000000000001D /* Learning */ = {
+			isa = PBXGroup;
+			children = (
+				B0000000000000000000002C /* LearningHubView.swift */,
+				B00000000000000000000018 /* LookupView.swift */,
+				B000000000000000000000F4 /* TranslateToolView.swift */,
+				B00000000000000000000019 /* VocabularyView.swift */,
+				B0000000000000000000001A /* LookupHistoryView.swift */,
+				B0000000000000000000001B /* WordRecordViews.swift */,
+			);
+			path = Learning;
+			sourceTree = "<group>";
+		};
+		E0000000000000000000001E /* Reader */ = {
+			isa = PBXGroup;
+			children = (
+				B00000000000000000000024 /* ReaderModels.swift */,
+				B00000000000000000000039 /* PublicationReaderController.swift */,
+				B0000000000000000000003F /* EPUBSelectionBridge.swift */,
+				B00000000000000000000025 /* EPUBReaderHost.swift */,
+				B0000000000000000000003A /* PDFReaderHost.swift */,
+				B00000000000000000000026 /* EPUBReaderViewModel.swift */,
+				B00000000000000000000027 /* EPUBReaderView.swift */,
+				B00000000000000000000032 /* ReaderSettingsView.swift */,
+			);
+			path = Reader;
+			sourceTree = "<group>";
+		};
+		E00000000000000000000017 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				B0000000000000000000000D /* Assets.xcassets */,
+				B00000000000000000000029 /* Localizable.xcstrings */,
+				B0000000000000000000003B /* InfoPlist.xcstrings */,
+				B0000000000000000000001E /* Info.plist */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		E00000000000000000000018 /* JerreaderTests */ = {
+			isa = PBXGroup;
+			children = (
+				B0000000000000000000000E /* MockServicesTests.swift */,
+				B00000000000000000000015 /* LibraryTests.swift */,
+				B000000000000000000000F6 /* LibraryBackupServiceTests.swift */,
+				B0000000000000000000001C /* WordLookupStoreTests.swift */,
+				B00000000000000000000028 /* ReaderServicesTests.swift */,
+				B0000000000000000000002B /* WiktionaryServiceTests.swift */,
+				B00000000000000000000033 /* BackendTranslationServiceTests.swift */,
+				B00000000000000000000034 /* TranslationFavoriteStoreTests.swift */,
+			);
+			path = JerreaderTests;
+			sourceTree = "<group>";
+		};
+		E00000000000000000000022 /* JerreaderUITests */ = {
+			isa = PBXGroup;
+			children = (
+				B00000000000000000000040 /* JerreaderSelectionUITests.swift */,
+			);
+			path = JerreaderUITests;
+			sourceTree = "<group>";
+		};
+		E00000000000000000000019 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				B0000000000000000000000F /* Jerreader.app */,
+				B00000000000000000000010 /* JerreaderTests.xctest */,
+				B00000000000000000000041 /* JerreaderUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		E00000000000000000000002 /* Jerreader */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E00000000000000000000020 /* Build configuration list for PBXNativeTarget "Jerreader" */;
+			buildPhases = (
+				F00000000000000000000003 /* Sources */,
+				F00000000000000000000001 /* Frameworks */,
+				F00000000000000000000005 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Jerreader;
+			packageProductDependencies = (
+				D00000000000000000000001 /* ReadiumShared */,
+				D00000000000000000000002 /* ReadiumStreamer */,
+				D00000000000000000000003 /* ReadiumNavigator */,
+				D00000000000000000000004 /* ReadiumAdapterGCDWebServer */,
+				D00000000000000000000005 /* ReadiumZIPFoundation */,
+			);
+			productName = Jerreader;
+			productReference = B0000000000000000000000F /* Jerreader.app */;
+			productType = "com.apple.product-type.application";
+		};
+		E00000000000000000000003 /* JerreaderTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E00000000000000000000021 /* Build configuration list for PBXNativeTarget "JerreaderTests" */;
+			buildPhases = (
+				F00000000000000000000004 /* Sources */,
+				F00000000000000000000002 /* Frameworks */,
+				F00000000000000000000006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C00000000000000000000002 /* PBXTargetDependency */,
+			);
+			name = JerreaderTests;
+			productName = JerreaderTests;
+			productReference = B00000000000000000000010 /* JerreaderTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		E00000000000000000000004 /* JerreaderUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E00000000000000000000023 /* Build configuration list for PBXNativeTarget "JerreaderUITests" */;
+			buildPhases = (
+				F00000000000000000000007 /* Sources */,
+				F00000000000000000000008 /* Frameworks */,
+				F00000000000000000000009 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C00000000000000000000004 /* PBXTargetDependency */,
+			);
+			name = JerreaderUITests;
+			productName = JerreaderUITests;
+			productReference = B00000000000000000000041 /* JerreaderUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		E00000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					E00000000000000000000002 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					E00000000000000000000003 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = E00000000000000000000002;
+					};
+					E00000000000000000000004 = {
+						CreatedOnToolsVersion = 16.2;
+						TestTargetID = E00000000000000000000002;
+					};
+				};
+			};
+			buildConfigurationList = E0000000000000000000001F /* Build configuration list for PBXProject "Jerreader" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+				zh-Hans,
+			);
+			mainGroup = E00000000000000000000010;
+			packageReferences = (
+				D00000000000000000000010 /* XCRemoteSwiftPackageReference "swift-toolkit" */,
+				D00000000000000000000011 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
+			);
+			productRefGroup = E00000000000000000000019 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				E00000000000000000000002 /* Jerreader */,
+				E00000000000000000000003 /* JerreaderTests */,
+				E00000000000000000000004 /* JerreaderUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		F00000000000000000000005 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A0000000000000000000000D /* Assets.xcassets in Resources */,
+				A00000000000000000000029 /* Localizable.xcstrings in Resources */,
+				A0000000000000000000003B /* InfoPlist.xcstrings in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F00000000000000000000006 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F00000000000000000000009 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		F00000000000000000000003 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A00000000000000000000001 /* JerreaderApp.swift in Sources */,
+				A00000000000000000000002 /* ContentView.swift in Sources */,
+				A00000000000000000000035 /* AppSettingsView.swift in Sources */,
+				A000000000000000000000F1 /* LibraryBackupSettingsView.swift in Sources */,
+				A00000000000000000000036 /* AppGuideView.swift in Sources */,
+				A0000000000000000000001E /* JerreaderTheme.swift in Sources */,
+				A00000000000000000000012 /* BookRecord.swift in Sources */,
+				A00000000000000000000037 /* BookFormat.swift in Sources */,
+				A00000000000000000000013 /* BookImportError.swift in Sources */,
+				A00000000000000000000020 /* ReaderError.swift in Sources */,
+				A00000000000000000000017 /* WordLookupRecord.swift in Sources */,
+				A0000000000000000000001F /* TranslationCacheRecord.swift in Sources */,
+				A0000000000000000000002E /* TranslationFavoriteRecord.swift in Sources */,
+				A0000000000000000000003E /* ReadingBookmarkRecord.swift in Sources */,
+				A00000000000000000000043 /* ReadingAnnotationRecord.swift in Sources */,
+				A0000000000000000000002D /* TranslationPreferences.swift in Sources */,
+				A00000000000000000000003 /* LanguageCode.swift in Sources */,
+				A00000000000000000000004 /* TranslationResult.swift in Sources */,
+				A00000000000000000000005 /* WordExplanation.swift in Sources */,
+				A00000000000000000000006 /* ServiceError.swift in Sources */,
+				A00000000000000000000007 /* TranslationService.swift in Sources */,
+				A00000000000000000000008 /* LexicalLookupService.swift in Sources */,
+				A00000000000000000000009 /* SpeechService.swift in Sources */,
+				A00000000000000000000045 /* ContextExplanationService.swift in Sources */,
+				A0000000000000000000000A /* MockTranslationService.swift in Sources */,
+				A0000000000000000000000B /* MockLexicalLookupService.swift in Sources */,
+				A0000000000000000000000C /* SystemSpeechService.swift in Sources */,
+				A00000000000000000000014 /* EPUBImportService.swift in Sources */,
+				A000000000000000000000F3 /* LibraryBackupRecords.swift in Sources */,
+				A000000000000000000000F2 /* LibraryBackupService.swift in Sources */,
+				A000000000000000000000F5 /* LibraryBackupPolicy.swift in Sources */,
+				A00000000000000000000038 /* DocumentConversionService.swift in Sources */,
+				A00000000000000000000023 /* EPUBPublicationService.swift in Sources */,
+				A00000000000000000000018 /* WordLookupStore.swift in Sources */,
+				A00000000000000000000021 /* TranslationCacheStore.swift in Sources */,
+				A00000000000000000000022 /* AppleTranslationService.swift in Sources */,
+				A0000000000000000000002F /* TranslationSettingsStore.swift in Sources */,
+				A00000000000000000000030 /* BackendTranslationService.swift in Sources */,
+				A00000000000000000000031 /* TranslationFavoriteStore.swift in Sources */,
+				A0000000000000000000003F /* ReadingBookmarkStore.swift in Sources */,
+				A00000000000000000000044 /* ReadingAnnotationStore.swift in Sources */,
+				A00000000000000000000040 /* LearningExportService.swift in Sources */,
+				A0000000000000000000002A /* WiktionaryLexicalLookupService.swift in Sources */,
+				A00000000000000000000015 /* LibraryView.swift in Sources */,
+				A00000000000000000000024 /* ReaderModels.swift in Sources */,
+				A00000000000000000000039 /* PublicationReaderController.swift in Sources */,
+				A00000000000000000000041 /* EPUBSelectionBridge.swift in Sources */,
+				A00000000000000000000025 /* EPUBReaderHost.swift in Sources */,
+				A0000000000000000000003A /* PDFReaderHost.swift in Sources */,
+				A00000000000000000000026 /* EPUBReaderViewModel.swift in Sources */,
+				A00000000000000000000027 /* EPUBReaderView.swift in Sources */,
+				A00000000000000000000032 /* ReaderSettingsView.swift in Sources */,
+				A00000000000000000000019 /* LookupView.swift in Sources */,
+				A000000000000000000000F4 /* TranslateToolView.swift in Sources */,
+				A0000000000000000000001A /* VocabularyView.swift in Sources */,
+				A0000000000000000000001B /* LookupHistoryView.swift in Sources */,
+				A0000000000000000000001C /* WordRecordViews.swift in Sources */,
+				A0000000000000000000002C /* LearningHubView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F00000000000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A00000000000000000000011 /* MockServicesTests.swift in Sources */,
+				A00000000000000000000016 /* LibraryTests.swift in Sources */,
+				A000000000000000000000F6 /* LibraryBackupServiceTests.swift in Sources */,
+				A0000000000000000000001D /* WordLookupStoreTests.swift in Sources */,
+				A00000000000000000000028 /* ReaderServicesTests.swift in Sources */,
+				A0000000000000000000002B /* WiktionaryServiceTests.swift in Sources */,
+				A00000000000000000000033 /* BackendTranslationServiceTests.swift in Sources */,
+				A00000000000000000000034 /* TranslationFavoriteStoreTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F00000000000000000000007 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A00000000000000000000042 /* JerreaderSelectionUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		C00000000000000000000002 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E00000000000000000000002 /* Jerreader */;
+			targetProxy = C00000000000000000000001 /* PBXContainerItemProxy */;
+		};
+		C00000000000000000000004 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E00000000000000000000002 /* Jerreader */;
+			targetProxy = C00000000000000000000003 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		E00000000000000000000030 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		E00000000000000000000031 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+		};
+			name = Release;
+		};
+		E00000000000000000000032 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 56;
+				DEVELOPMENT_ASSET_PATHS = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Jerreader/Resources/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Jerreader";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 1.3.5;
+				OTHER_SWIFT_FLAGS = "$(inherited) -file-prefix-map \"$(SRCROOT)=.\" -debug-prefix-map \"$(SRCROOT)=.\"";
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.Jerreader;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		E00000000000000000000033 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 56;
+				DEVELOPMENT_ASSET_PATHS = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Jerreader/Resources/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Jerreader";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 1.3.5;
+				OTHER_SWIFT_FLAGS = "$(inherited) -file-prefix-map \"$(SRCROOT)=.\" -debug-prefix-map \"$(SRCROOT)=.\"";
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.Jerreader;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		E00000000000000000000034 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.JerreaderTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Jerreader.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Jerreader";
+			};
+			name = Debug;
+		};
+		E00000000000000000000035 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.JerreaderTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Jerreader.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Jerreader";
+			};
+			name = Release;
+		};
+		E00000000000000000000036 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.JerreaderUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = Jerreader;
+			};
+			name = Debug;
+		};
+		E00000000000000000000037 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.JerreaderUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = Jerreader;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		E0000000000000000000001F /* Build configuration list for PBXProject "Jerreader" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E00000000000000000000030 /* Debug */,
+				E00000000000000000000031 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E00000000000000000000020 /* Build configuration list for PBXNativeTarget "Jerreader" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E00000000000000000000032 /* Debug */,
+				E00000000000000000000033 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E00000000000000000000021 /* Build configuration list for PBXNativeTarget "JerreaderTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E00000000000000000000034 /* Debug */,
+				E00000000000000000000035 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E00000000000000000000023 /* Build configuration list for PBXNativeTarget "JerreaderUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E00000000000000000000036 /* Debug */,
+				E00000000000000000000037 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		D00000000000000000000010 /* XCRemoteSwiftPackageReference "swift-toolkit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/readium/swift-toolkit.git";
+			requirement = {
+				kind = revision;
+				revision = 3d8bcdc981197f8ada1dd73c401da4aeb4e0a359;
+			};
+		};
+		D00000000000000000000011 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/readium/ZIPFoundation.git";
+			requirement = {
+				kind = exactVersion;
+				version = 3.0.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		D00000000000000000000001 /* ReadiumShared */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D00000000000000000000010 /* XCRemoteSwiftPackageReference "swift-toolkit" */;
+			productName = ReadiumShared;
+		};
+		D00000000000000000000002 /* ReadiumStreamer */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D00000000000000000000010 /* XCRemoteSwiftPackageReference "swift-toolkit" */;
+			productName = ReadiumStreamer;
+		};
+		D00000000000000000000003 /* ReadiumNavigator */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D00000000000000000000010 /* XCRemoteSwiftPackageReference "swift-toolkit" */;
+			productName = ReadiumNavigator;
+		};
+		D00000000000000000000004 /* ReadiumAdapterGCDWebServer */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D00000000000000000000010 /* XCRemoteSwiftPackageReference "swift-toolkit" */;
+			productName = ReadiumAdapterGCDWebServer;
+		};
+		D00000000000000000000005 /* ReadiumZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D00000000000000000000011 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ReadiumZIPFoundation;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = E00000000000000000000001 /* Project object */;
+}
