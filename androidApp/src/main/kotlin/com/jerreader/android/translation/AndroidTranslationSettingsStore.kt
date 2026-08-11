@@ -1,14 +1,16 @@
 package com.jerreader.android.translation
 
 import android.content.Context
-import com.jerreader.shared.domain.LanguageCode
-import com.jerreader.shared.translation.DirectAIProvider
-import com.jerreader.shared.translation.QuickTranslationUnit
-import com.jerreader.shared.translation.TranslationPreferences
-import com.jerreader.shared.translation.TranslationProviderMode
-import com.jerreader.shared.translation.TranslationFallbackMode
-import com.jerreader.shared.translation.TranslationDisplayMode
-import com.jerreader.shared.translation.TranslationSourceChoice
+import com.jerreader.unified.domain.LanguageCode
+import com.jerreader.unified.translation.DirectAIProvider
+import com.jerreader.unified.translation.QuickTranslationUnit
+import com.jerreader.unified.translation.TranslationPreferences
+import com.jerreader.unified.translation.TranslationProviderMode
+import com.jerreader.unified.translation.TranslationProviderPlan
+import com.jerreader.unified.translation.TranslationProviderPolicy
+import com.jerreader.unified.translation.TranslationFallbackMode
+import com.jerreader.unified.translation.TranslationDisplayMode
+import com.jerreader.unified.translation.TranslationSourceChoice
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -116,6 +118,10 @@ class AndroidTranslationSettingsStore(
         copy(fallbackMode = value)
     }
 
+    fun updatePreferAIWhenConfigured(value: Boolean) = update(KEY_PREFER_AI, value) {
+        copy(preferAIWhenConfigured = value)
+    }
+
     fun updateTranslationPrompt(value: String) = update(KEY_PROMPT, value) {
         copy(translationPromptTemplate = value)
     }
@@ -191,6 +197,9 @@ class AndroidTranslationSettingsStore(
         updateAutomaticRetry(
             payload.optBoolean("automaticRetryEnabled", current.automaticRetryEnabled)
         )
+        updatePreferAIWhenConfigured(
+            payload.optBoolean("preferAIWhenConfigured", current.preferAIWhenConfigured)
+        )
         updateFallbackMode(
             enumOrCurrent(
                 payload.optString("fallbackMode"),
@@ -252,11 +261,27 @@ class AndroidTranslationSettingsStore(
         }
     }
 
+    /**
+     * Which service a reader translation goes to, and what answers if it fails.
+     *
+     * The rules are [TranslationProviderPolicy]'s; this only reports what is
+     * actually configured, which needs the keystore the policy cannot see.
+     */
+    fun providerPlan(): TranslationProviderPlan = TranslationProviderPolicy.plan(
+        preferences = preferences.value,
+        hasDirectApiCredential = directApiKey(preferences.value.directProvider).isNotBlank(),
+        hasBackendEndpoint = preferences.value.backendEndpoint.isNotBlank()
+    )
+
+    /** The AI service to explain grammar with, or `null` when there is none. */
     fun preferredAIProviderMode(): TranslationProviderMode? {
         val current = preferences.value
         if (current.providerMode != TranslationProviderMode.ON_DEVICE) return current.providerMode
         val fallback = current.fallbackMode.providerMode
         if (fallback != null && fallback != TranslationProviderMode.ON_DEVICE) return fallback
+        // Grammar analysis has no on-device path at all, so unlike
+        // `providerPlan` it reaches for a configured service whatever
+        // `preferAIWhenConfigured` says: the alternative is no answer.
         if (directApiKey(current.directProvider).isNotBlank()) return TranslationProviderMode.DIRECT_API
         if (current.backendEndpoint.isNotBlank()) return TranslationProviderMode.BACKEND_PROXY
         return null
@@ -273,7 +298,7 @@ class AndroidTranslationSettingsStore(
     ): String {
         val current = preferences.value
         return listOf(
-            (mode ?: current.providerMode).name,
+            (mode ?: providerPlan().primary).name,
             current.fallbackMode.name,
             current.directProvider.name,
             current.directEndpoint.trim(),
@@ -323,6 +348,10 @@ class AndroidTranslationSettingsStore(
             ),
             translationHapticsEnabled = storage.getBoolean(KEY_HAPTICS, true),
             automaticRetryEnabled = storage.getBoolean(KEY_AUTOMATIC_RETRY, true),
+            preferAIWhenConfigured = storage.getBoolean(
+                KEY_PREFER_AI,
+                TranslationPreferences().preferAIWhenConfigured
+            ),
             fallbackMode = enumValueOrDefault(
                 storage.getString(KEY_FALLBACK_MODE, null),
                 TranslationFallbackMode.NONE
@@ -382,6 +411,7 @@ class AndroidTranslationSettingsStore(
         const val KEY_HAPTICS = "translation.haptics"
         const val KEY_AUTOMATIC_RETRY = "automatic.retry"
         const val KEY_FALLBACK_MODE = "fallback.mode"
+        const val KEY_PREFER_AI = "prefer.ai.when.configured"
         const val KEY_PROMPT = "translation.prompt"
         const val KEY_GRAMMAR_PROMPT = "grammar.prompt"
         const val BACKEND_CREDENTIAL_ACCOUNT = "backend-proxy-token"

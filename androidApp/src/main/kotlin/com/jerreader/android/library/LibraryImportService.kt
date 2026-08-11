@@ -2,11 +2,11 @@ package com.jerreader.android.library
 
 import android.graphics.Bitmap
 import android.net.Uri
-import com.jerreader.shared.domain.BookFormat
+import com.jerreader.unified.domain.BookFormat
 import com.jerreader.android.reader.ReadiumEnvironment
-import com.jerreader.shared.library.LibraryBook
-import com.jerreader.shared.library.LibraryImportOutcome
-import com.jerreader.shared.library.LibraryRepository
+import com.jerreader.unified.library.LibraryBook
+import com.jerreader.unified.library.LibraryImportOutcome
+import com.jerreader.unified.library.LibraryRepository
 import java.io.ByteArrayOutputStream
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers

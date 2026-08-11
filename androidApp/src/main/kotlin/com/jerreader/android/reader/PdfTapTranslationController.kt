@@ -16,16 +16,16 @@ import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.jerreader.android.translation.AndroidTranslationSettingsStore
-import com.jerreader.shared.domain.LanguageCode
-import com.jerreader.shared.translation.QuickTranslationUnit
-import com.jerreader.shared.translation.ReaderCrossPageContextBuilder
-import com.jerreader.shared.translation.ReaderCrossPageTextFragment
-import com.jerreader.shared.translation.ReaderTextNormalizer
-import com.jerreader.shared.translation.TranslationFailure
-import com.jerreader.shared.translation.TranslationInputPolicy
-import com.jerreader.shared.translation.TranslationRequest
-import com.jerreader.shared.translation.TranslationService
-import com.jerreader.shared.ui.TranslationCardState
+import com.jerreader.unified.domain.LanguageCode
+import com.jerreader.unified.translation.QuickTranslationUnit
+import com.jerreader.unified.translation.ReaderCrossPageContextBuilder
+import com.jerreader.unified.translation.ReaderCrossPageTextFragment
+import com.jerreader.unified.translation.ReaderTextNormalizer
+import com.jerreader.unified.translation.TranslationFailure
+import com.jerreader.unified.translation.TranslationInputPolicy
+import com.jerreader.unified.translation.TranslationRequest
+import com.jerreader.unified.translation.TranslationService
+import com.jerreader.unified.ui.TranslationCardState
 import java.io.Closeable
 import java.io.File
 import kotlinx.coroutines.CancellationException
@@ -61,6 +61,8 @@ class PdfTapTranslationController(
     private val onNextPageRequested: (() -> Unit)? = null,
     private val onHighlightChanged: ((List<RectF>) -> Unit)? = null,
     private val onSelectionInvalidated: (() -> Unit)? = null,
+    /** A tap on no recognised text: the reader chrome toggles instead. */
+    private val onContentTap: (() -> Unit)? = null,
     private val timeSource: () -> Long = System::currentTimeMillis
 ) : Closeable {
     private val descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
@@ -120,7 +122,7 @@ class PdfTapTranslationController(
             lastTapPoint = PointF(event.point.x, event.point.y)
             requestToken++
             job?.cancel()
-            job = scope.launch { translateAt(event.point) }
+            job = scope.launch { translateAt(event.point) { onContentTap?.invoke() } }
             return true
         }
     }
@@ -165,7 +167,15 @@ class PdfTapTranslationController(
         return translate(request, token)
     }
 
-    suspend fun translateAt(point: PointF): TranslationCardState? {
+    suspend fun translateAt(
+        point: PointF,
+        /**
+         * The tap landed on no recognised text — the page margin, a figure, a
+         * blank area. Mirrors the EPUB controller so both reader types toggle
+         * the chrome on a tap that means nothing else.
+         */
+        onNoTextAtPoint: (() -> Unit)? = null
+    ): TranslationCardState? {
         val token = ++requestToken
         val navigator = navigator ?: return null
         lastTapPoint = PointF(point.x, point.y)
@@ -180,7 +190,10 @@ class PdfTapTranslationController(
             viewHeight = navigator.publicationView.height,
             pageRect = pageRect,
             unit = settings.preferences.value.quickTranslationUnit
-        ) ?: return null
+        ) ?: run {
+            onNoTextAtPoint?.invoke()
+            return null
+        }
         lastSelectionGeometry = RectF(extracted.normalizedBounds)
         onHighlightChanged?.invoke(listOf(extracted.bounds))
         val preferences = settings.preferences.value

@@ -1,5 +1,7 @@
 package com.jerreader.android.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -26,6 +29,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import android.content.Intent
@@ -45,45 +50,51 @@ import android.content.Context
 import androidx.core.content.FileProvider
 import androidx.compose.foundation.layout.statusBarsPadding
 import com.jerreader.android.AppGraph
-import com.jerreader.shared.ui.JerreaderDivider
-import com.jerreader.shared.ui.JerreaderErrorCard
-import com.jerreader.shared.ui.JerreaderGlyph
-import com.jerreader.shared.ui.JerreaderCollectionControls
-import com.jerreader.shared.ui.JerreaderCollectionSectionHeader
-import com.jerreader.shared.ui.JerreaderCountBadge
-import com.jerreader.shared.ui.JerreaderEmptyState
-import com.jerreader.shared.ui.JerreaderIcon
-import com.jerreader.shared.ui.JerreaderInlineAction
-import com.jerreader.shared.ui.JerreaderInlineMenu
-import com.jerreader.shared.ui.JerreaderLanguageBar
-import com.jerreader.shared.ui.JerreaderMenuField
-import com.jerreader.shared.ui.JerreaderSegmentedNav
-import com.jerreader.shared.ui.JerreaderSegmentedPicker
-import com.jerreader.shared.ui.JerreaderSwapButton
-import com.jerreader.shared.ui.JerreaderTranslatorCard
-import com.jerreader.shared.ui.JerreaderCard
-import com.jerreader.shared.ui.JerreaderRecordCard
-import com.jerreader.shared.ui.JerreaderRelativeTime
-import com.jerreader.shared.ui.JerreaderRowIconButton
-import com.jerreader.shared.ui.JerreaderSearchField
-import com.jerreader.shared.ui.JerreaderToolbarIconButton
-import com.jerreader.shared.ui.JerreaderTranslationFavoriteRow
-import com.jerreader.shared.ui.JerreaderWordRecordRow
-import com.jerreader.shared.ui.LocalJerreaderColors
+import com.jerreader.unified.design.JerreaderCopy
+import com.jerreader.unified.ui.JerreaderDivider
+import com.jerreader.unified.ui.JerreaderErrorCard
+import com.jerreader.unified.ui.JerreaderGlyph
+import com.jerreader.unified.ui.JerreaderCollectionControls
+import com.jerreader.unified.ui.JerreaderCollectionSectionHeader
+import com.jerreader.unified.ui.JerreaderCountBadge
+import com.jerreader.unified.ui.JerreaderEmptyState
+import com.jerreader.unified.ui.JerreaderIcon
+import com.jerreader.unified.ui.JerreaderInlineAction
+import com.jerreader.unified.ui.JerreaderInlineMenu
+import com.jerreader.unified.ui.JerreaderLanguageBar
+import com.jerreader.unified.ui.JerreaderMenuField
+import com.jerreader.unified.ui.JerreaderSegmentedNav
+import com.jerreader.unified.ui.JerreaderSegmentedPicker
+import com.jerreader.unified.ui.JerreaderSwapButton
+import com.jerreader.unified.ui.JerreaderTranslatorCard
+import com.jerreader.unified.ui.JerreaderCard
+import com.jerreader.unified.ui.JerreaderRecordCard
+import com.jerreader.unified.ui.JerreaderRelativeTime
+import com.jerreader.unified.ui.JerreaderRowIconButton
+import com.jerreader.unified.ui.JerreaderSearchField
+import com.jerreader.unified.ui.JerreaderToolbarIconButton
+import com.jerreader.unified.ui.JerreaderTranslationFavoriteRow
+import com.jerreader.unified.ui.JerreaderWordRecordRow
+import com.jerreader.unified.ui.LocalJerreaderColors
 import com.jerreader.android.data.TranslationFavoriteEntity
 import com.jerreader.android.data.WordLookupEntity
 import com.jerreader.android.learning.LearningRecordRepository
-import com.jerreader.shared.domain.LanguageCode
-import com.jerreader.shared.lexical.WordExplanation
-import com.jerreader.shared.translation.TranslationRequest
-import com.jerreader.shared.translation.TranslationResult
-import com.jerreader.shared.translation.ContextExplanationRequest
-import com.jerreader.shared.translation.ContextExplanationService
-import com.jerreader.shared.translation.StandaloneLexicalLookupPolicy
-import com.jerreader.shared.translation.StandaloneTranslationMode
-import com.jerreader.shared.translation.StandaloneTranslationRequestPolicy
-import com.jerreader.shared.translation.TranslationProviderMode
-import com.jerreader.shared.translation.TranslationSourceChoice
+import com.jerreader.unified.domain.LanguageCode
+import com.jerreader.unified.lexical.WordExplanation
+import com.jerreader.unified.lexical.VocabularyLearningPolicy
+import com.jerreader.unified.lexical.VocabularyStatus
+import com.jerreader.unified.lexical.VocabularyReviewQueueState
+import com.jerreader.unified.lexical.VocabularyReviewRating
+import com.jerreader.unified.lexical.VocabularyReviewScheduler
+import com.jerreader.unified.translation.TranslationRequest
+import com.jerreader.unified.translation.TranslationResult
+import com.jerreader.unified.translation.ContextExplanationRequest
+import com.jerreader.unified.translation.ContextExplanationService
+import com.jerreader.unified.translation.StandaloneLexicalLookupPolicy
+import com.jerreader.unified.translation.StandaloneTranslationMode
+import com.jerreader.unified.translation.StandaloneTranslationRequestPolicy
+import com.jerreader.unified.translation.TranslationProviderMode
+import com.jerreader.unified.translation.TranslationSourceChoice
 import com.jerreader.android.translation.StandaloneTranslationOverride
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
@@ -96,10 +107,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
  * the word mode of the translate page, so one entry point both translates a
  * term and shows its dictionary entry.
  */
-private enum class LearningTab(val title: String) {
-    TRANSLATE("翻译"),
-    VOCABULARY("生词本"),
-    HISTORY("历史")
+private enum class LearningTab(val title: String, val icon: JerreaderIcon) {
+    TRANSLATE(JerreaderCopy.learningTranslateSection, JerreaderIcon.SPEECH_BUBBLE),
+    REVIEW(JerreaderCopy.learningReviewSection, JerreaderIcon.CHECKLIST),
+    VOCABULARY(JerreaderCopy.learningVocabularySection, JerreaderIcon.BOOKMARK_OUTLINE),
+    HISTORY(JerreaderCopy.learningHistorySection, JerreaderIcon.CLOCK)
 }
 
 private enum class LearningExportFormat(val title: String, val mimeType: String) {
@@ -108,7 +120,7 @@ private enum class LearningExportFormat(val title: String, val mimeType: String)
     ANKI_TSV("Anki TSV", "text/tab-separated-values")
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun LearningScreen(graph: AppGraph, bottomBar: @Composable () -> Unit) {
     var tab by remember { mutableStateOf(LearningTab.TRANSLATE) }
@@ -122,7 +134,7 @@ fun LearningScreen(graph: AppGraph, bottomBar: @Composable () -> Unit) {
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             Text(
-                "学习",
+                JerreaderCopy.learningTitle,
                 modifier = Modifier
                     .statusBarsPadding()
                     .padding(start = 16.dp, top = 6.dp, bottom = 10.dp),
@@ -131,98 +143,406 @@ fun LearningScreen(graph: AppGraph, bottomBar: @Composable () -> Unit) {
         },
         bottomBar = bottomBar
     ) { padding ->
+        // The tab bar is chrome, not content: scrolling the whole page took it
+        // off screen and left the reader looking at a section with no way back
+        // to the others. It stays put, and only the section below it moves —
+        // and only when that section is genuinely taller than the space it has.
+        // Overscroll is off for the same reason as on the settings pages: a
+        // rubber-banded drag on a page that fits reads as blank space above and
+        // below the content.
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+                .padding(top = 8.dp)
         ) {
             // iOS uses a pill segmented navigation here, not a chip row. The
             // record tabs run their control bar edge to edge, so the page
             // padding is applied per section instead of to the whole column.
             JerreaderSegmentedNav(
                 modifier = Modifier.padding(horizontal = 16.dp),
-                options = listOf(
-                    Triple(LearningTab.TRANSLATE, "翻译", JerreaderIcon.SPEECH_BUBBLE),
-                    Triple(LearningTab.VOCABULARY, "生词本", JerreaderIcon.BOOKMARK_OUTLINE),
-                    Triple(LearningTab.HISTORY, "历史", JerreaderIcon.CLOCK)
-                ),
+                // The labels come off the enum rather than being listed again
+                // here — this list and the enum used to carry two copies of the
+                // same three words.
+                options = LearningTab.entries.map { Triple(it, it.title, it.icon) },
                 selected = tab,
                 onSelect = { tab = it }
             )
-            when (tab) {
-                LearningTab.TRANSLATE -> Column(
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    TranslationTool(graph)
-                }
-                LearningTab.VOCABULARY -> VocabularySection(
-                    words = words.filter(WordLookupEntity::isFavorite),
-                    translations = translationFavorites,
-                    onToggleWord = { key, favorite ->
-                        graph.applicationScope.launch {
-                            graph.learningRecords.setWordFavorite(key, favorite)
-                        }
-                    },
-                    onDeleteTranslation = { key ->
-                        graph.applicationScope.launch {
-                            graph.learningRecords.deleteTranslationFavorite(key)
-                        }
-                    },
-                    onExport = { format ->
-                        val text = buildLearningExport(words, translationFavorites, format)
-                        exportScope.launch {
-                            val file = withContext(Dispatchers.IO) {
-                                val extension = when (format) {
-                                    LearningExportFormat.CSV -> "csv"
-                                    LearningExportFormat.MARKDOWN -> "md"
-                                    LearningExportFormat.ANKI_TSV -> "tsv"
-                                }
-                                File(
-                                    context.cacheDir,
-                                    "jerreader-learning-${System.currentTimeMillis()}.$extension"
-                                ).apply { writeText(text, Charsets.UTF_8) }
+            Box(modifier = Modifier.weight(1f)) {
+                CompositionLocalProvider(LocalOverscrollFactory provides null) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(top = 14.dp, bottom = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                when (tab) {
+                    LearningTab.TRANSLATE -> Column(
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        TranslationTool(graph)
+                    }
+                    LearningTab.REVIEW -> ReviewSection(
+                        words = words,
+                        onReview = { key, rating ->
+                            graph.applicationScope.launch {
+                                graph.learningRecords.reviewWord(key, rating)
                             }
-                            val uri = FileProvider.getUriForFile(
-                                context,
-                                "${context.packageName}.fileprovider",
-                                file
-                            )
-                            withContext(Dispatchers.Main.immediate) {
-                                context.startActivity(
-                                    Intent.createChooser(
-                                        Intent(Intent.ACTION_SEND)
-                                            .setType(format.mimeType)
-                                            .putExtra(
-                                                Intent.EXTRA_SUBJECT,
-                                                "Jerreader 学习导出·${format.title}"
-                                            )
-                                            .putExtra(Intent.EXTRA_STREAM, uri)
-                                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
-                                        "导出学习记录"
+                        }
+                    )
+                    LearningTab.VOCABULARY -> VocabularySection(
+                        words = words.filter(WordLookupEntity::isFavorite),
+                        translations = translationFavorites,
+                        onToggleWord = { key, favorite ->
+                            graph.applicationScope.launch {
+                                graph.learningRecords.setWordFavorite(key, favorite)
+                            }
+                        },
+                        onStatusChange = { key, status ->
+                            graph.applicationScope.launch {
+                                graph.learningRecords.setVocabularyStatus(key, status)
+                            }
+                        },
+                        onDeleteTranslation = { key ->
+                            graph.applicationScope.launch {
+                                graph.learningRecords.deleteTranslationFavorite(key)
+                            }
+                        },
+                        onExport = { format ->
+                            val text = buildLearningExport(words, translationFavorites, format)
+                            exportScope.launch {
+                                val file = withContext(Dispatchers.IO) {
+                                    val extension = when (format) {
+                                        LearningExportFormat.CSV -> "csv"
+                                        LearningExportFormat.MARKDOWN -> "md"
+                                        LearningExportFormat.ANKI_TSV -> "tsv"
+                                    }
+                                    File(
+                                        context.cacheDir,
+                                        "jerreader-learning-${System.currentTimeMillis()}.$extension"
+                                    ).apply { writeText(text, Charsets.UTF_8) }
+                                }
+                                val uri = FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.fileprovider",
+                                    file
+                                )
+                                withContext(Dispatchers.Main.immediate) {
+                                    context.startActivity(
+                                        Intent.createChooser(
+                                            Intent(Intent.ACTION_SEND)
+                                                .setType(format.mimeType)
+                                                .putExtra(
+                                                    Intent.EXTRA_SUBJECT,
+                                                    "Jerreader 学习导出·${format.title}"
+                                                )
+                                                .putExtra(Intent.EXTRA_STREAM, uri)
+                                                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
+                                            "导出学习记录"
+                                        )
                                     )
+                                }
+                            }
+                        }
+                    )
+                    LearningTab.HISTORY -> HistorySection(
+                        records = words.filter(WordLookupEntity::isInHistory),
+                        onFavorite = { key, favorite ->
+                            graph.applicationScope.launch {
+                                graph.learningRecords.setWordFavorite(key, favorite)
+                            }
+                        },
+                        onDelete = { key ->
+                            graph.applicationScope.launch { graph.learningRecords.removeFromHistory(key) }
+                        },
+                        onClear = {
+                            graph.applicationScope.launch { graph.learningRecords.clearHistory() }
+                        }
+                    )
+                }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReviewSection(
+    words: List<WordLookupEntity>,
+    onReview: (String, VocabularyReviewRating) -> Unit
+) {
+    val now = rememberNowMillis()
+    var reviewedKeys by remember { mutableStateOf(emptySet<String>()) }
+    var reviewedInSession by remember { mutableStateOf(0) }
+
+    val favoriteWords = words.filter(WordLookupEntity::isFavorite)
+    val queueStates = favoriteWords.associateWith { record ->
+        VocabularyReviewScheduler.queueState(
+            isFavorite = record.isFavorite,
+            status = VocabularyStatus.fromStorageId(record.vocabularyStatus),
+            reviewCount = record.reviewCount,
+            nextReviewAtEpochMillis = record.nextReviewAtEpochMillis,
+            nowEpochMillis = now
+        )
+    }
+    val dueWords = favoriteWords
+        .filter { queueStates[it] == VocabularyReviewQueueState.DUE }
+        .sortedWith(
+            compareBy<WordLookupEntity> { it.nextReviewAtEpochMillis }
+                .thenBy { if (it.language == LanguageCode.JAPANESE.tag) 0 else 1 }
+        )
+    val newWords = favoriteWords
+        .filter { queueStates[it] == VocabularyReviewQueueState.UNSEEN }
+        .sortedWith(
+            compareBy<WordLookupEntity> {
+                if (it.language == LanguageCode.JAPANESE.tag) 0 else 1
+            }.thenByDescending(WordLookupEntity::lastLookedUpAtEpochMillis)
+        )
+    val queue = (
+        dueWords.take(VocabularyReviewScheduler.DAILY_DUE_LIMIT) +
+            newWords.take(VocabularyReviewScheduler.DAILY_NEW_LIMIT)
+        ).filterNot { it.lookupKey in reviewedKeys }
+    val current = queue.firstOrNull()
+    var isRevealed by remember { mutableStateOf(false) }
+
+    LaunchedEffect(current?.lookupKey) {
+        isRevealed = false
+    }
+
+    Column(
+        modifier = Modifier.padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        JerreaderCard {
+            Text(
+                "今日学习",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                "优先呈现日语词条；到期词先于新词。所有进度只保存在本机。",
+                modifier = Modifier.padding(top = 5.dp),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                ReviewCountCard("到期", dueWords.size, Modifier.weight(1f))
+                ReviewCountCard("新词", newWords.size, Modifier.weight(1f))
+                ReviewCountCard("本次完成", reviewedInSession, Modifier.weight(1f))
+            }
+        }
+
+        if (current == null) {
+            JerreaderEmptyState(
+                title = if (favoriteWords.isEmpty()) "先收藏一些日语词" else "今天的复习完成了",
+                message = if (favoriteWords.isEmpty()) {
+                    "在阅读或词语翻译中加入生词本，词条就会进入每日复习。"
+                } else {
+                    "到期词和今天的新词都已处理。继续阅读，遇到新词再回来。"
+                },
+                icon = if (favoriteWords.isEmpty()) {
+                    JerreaderIcon.BOOKMARK_OUTLINE
+                } else {
+                    JerreaderIcon.CHECK_CIRCLE
+                }
+            )
+        } else {
+            ReviewCard(
+                record = current,
+                position = reviewedInSession + 1,
+                remaining = queue.size,
+                isRevealed = isRevealed,
+                onReveal = { isRevealed = true },
+                onRate = { rating ->
+                    reviewedKeys = reviewedKeys + current.lookupKey
+                    reviewedInSession += 1
+                    isRevealed = false
+                    onReview(current.lookupKey, rating)
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReviewCountCard(label: String, count: Int, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        color = LocalJerreaderColors.current.mutedSurface
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                count.toString(),
+                style = MaterialTheme.typography.titleLarge,
+                color = LocalJerreaderColors.current.accent,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                label,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReviewCard(
+    record: WordLookupEntity,
+    position: Int,
+    remaining: Int,
+    isRevealed: Boolean,
+    onReveal: () -> Unit,
+    onRate: (VocabularyReviewRating) -> Unit
+) {
+    val contexts = VocabularyLearningPolicy.decodeContexts(record.contextHistoryText)
+    val prompt = VocabularyReviewScheduler.prompt(
+        surfaceForm = record.surfaceForm,
+        lemma = record.lemma,
+        sentenceContext = contexts.firstOrNull() ?: record.sentenceContext
+    )
+    val isJapanese = record.language == LanguageCode.JAPANESE.tag
+    JerreaderCard {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                if (isJapanese) "日语回想" else "词语回想",
+                style = MaterialTheme.typography.labelLarge,
+                color = LocalJerreaderColors.current.accent
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            Text(
+                "第 $position 张 · 还剩 $remaining 张",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Text(
+            prompt.text,
+            modifier = Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 10.dp),
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = if (prompt.isCloze) FontWeight.Medium else FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+        Text(
+            if (prompt.isCloze) {
+                "补全原句，并回想读音和中文释义。"
+            } else if (isJapanese) {
+                "读出这个词，并回想基本形与中文释义。"
+            } else {
+                "回想这个词的读音与中文释义。"
+            },
+            modifier = Modifier.fillMaxWidth(),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+
+        if (!isRevealed) {
+            TextButton(
+                onClick = onReveal,
+                modifier = Modifier.fillMaxWidth().padding(top = 18.dp)
+            ) {
+                Text("显示答案")
+            }
+        } else {
+            JerreaderDivider(modifier = Modifier.padding(top = 18.dp, bottom = 14.dp))
+            Text(
+                record.surfaceForm,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold
+            )
+            val answerMetadata = buildList {
+                record.reading?.takeIf(String::isNotBlank)?.let { add(it) }
+                record.lemma?.takeIf { it.isNotBlank() && it != record.surfaceForm }
+                    ?.let { add("基本形：$it") }
+                record.partOfSpeech?.takeIf(String::isNotBlank)?.let(::add)
+            }
+            if (answerMetadata.isNotEmpty()) {
+                Text(
+                    answerMetadata.joinToString(" · "),
+                    modifier = Modifier.padding(top = 4.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            record.inflectionNote?.takeIf(String::isNotBlank)?.let {
+                Text(
+                    "活用：$it",
+                    modifier = Modifier.padding(top = 7.dp),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+            record.definitionsText
+                .split(LearningRecordRepository.DEFINITION_SEPARATOR)
+                .filter(String::isNotBlank)
+                .take(3)
+                .forEachIndexed { index, definition ->
+                    Text(
+                        "${index + 1}. $definition",
+                        modifier = Modifier.padding(top = if (index == 0) 12.dp else 4.dp),
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                }
+            record.usageNote?.takeIf(String::isNotBlank)?.let {
+                Text(
+                    "用法：$it",
+                    modifier = Modifier.padding(top = 9.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            LearningRecordRepository.decodeExamples(record.examplesText).firstOrNull()?.let { example ->
+                Text(
+                    "例句：${example.sourceText}",
+                    modifier = Modifier.padding(top = 9.dp),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                example.translatedText?.let {
+                    Text(
+                        it,
+                        modifier = Modifier.padding(top = 3.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Text(
+                "这次记得怎么样？",
+                modifier = Modifier.padding(top = 18.dp, bottom = 4.dp),
+                style = MaterialTheme.typography.labelLarge
+            )
+            VocabularyReviewRating.entries.chunked(2).forEach { rowRatings ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    rowRatings.forEach { rating ->
+                        TextButton(
+                            onClick = { onRate(rating) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(rating.title, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    rating.detail,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center
                                 )
                             }
                         }
                     }
-                )
-                LearningTab.HISTORY -> HistorySection(
-                    records = words.filter(WordLookupEntity::isInHistory),
-                    onFavorite = { key, favorite ->
-                        graph.applicationScope.launch {
-                            graph.learningRecords.setWordFavorite(key, favorite)
-                        }
-                    },
-                    onDelete = { key ->
-                        graph.applicationScope.launch { graph.learningRecords.removeFromHistory(key) }
-                    },
-                    onClear = {
-                        graph.applicationScope.launch { graph.learningRecords.clearHistory() }
-                    }
-                )
+                }
             }
         }
     }
@@ -237,7 +557,7 @@ fun LearningScreen(graph: AppGraph, bottomBar: @Composable () -> Unit) {
 @Composable
 private fun TranslationTool(graph: AppGraph) {
     val preferences by graph.translationSettings.preferences.collectAsStateWithLifecycle()
-    var mode by remember { mutableStateOf(StandaloneTranslationMode.SENTENCE) }
+    var mode by remember { mutableStateOf(StandaloneTranslationMode.WORD) }
     var providerMode by remember { mutableStateOf(preferences.providerMode) }
     var sourceChoice by remember { mutableStateOf(preferences.sourceChoice) }
     var targetLanguage by remember { mutableStateOf(preferences.targetLanguage) }
@@ -346,9 +666,17 @@ private fun TranslationTool(graph: AppGraph) {
             selected = mode,
             onSelect = {
                 if (it != mode) {
+                    val previousMode = mode
                     mode = it
                     clearOutput()
-                    input = input.take(it.maximumCharacterCount)
+                    input = if (
+                        previousMode == StandaloneTranslationMode.SENTENCE &&
+                        it == StandaloneTranslationMode.WORD
+                    ) {
+                        ""
+                    } else {
+                        input.take(it.maximumCharacterCount)
+                    }
                 }
             }
         )
@@ -787,16 +1115,20 @@ private fun VocabularySection(
     words: List<WordLookupEntity>,
     translations: List<TranslationFavoriteEntity>,
     onToggleWord: (String, Boolean) -> Unit,
+    onStatusChange: (String, VocabularyStatus) -> Unit,
     onDeleteTranslation: (String) -> Unit,
     onExport: (LearningExportFormat) -> Unit
 ) {
     var search by remember { mutableStateOf("") }
+    var statusFilter by remember { mutableStateOf<String?>(null) }
     val term = search.trim()
-    val visibleWords = if (term.isEmpty()) words else words.filter { record ->
-        record.surfaceForm.contains(term, ignoreCase = true) ||
+    val visibleWords = words.filter { record ->
+        val matchesSearch = term.isEmpty() ||
+            record.surfaceForm.contains(term, ignoreCase = true) ||
             record.lemma?.contains(term, ignoreCase = true) == true ||
             record.reading?.contains(term, ignoreCase = true) == true ||
             record.definitionsText.contains(term, ignoreCase = true)
+        matchesSearch && (statusFilter == null || record.vocabularyStatus == statusFilter)
     }
     val visibleTranslations = if (term.isEmpty()) translations else translations.filter { record ->
         record.sourceText.contains(term, ignoreCase = true) ||
@@ -805,20 +1137,53 @@ private fun VocabularySection(
     }
     val accent = LocalJerreaderColors.current.accent
     val now = rememberNowMillis()
+    var statusMenuOpen by remember { mutableStateOf(false) }
     var exportMenuOpen by remember { mutableStateOf(false) }
+    var selectedWordKey by remember { mutableStateOf<String?>(null) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         JerreaderCollectionControls {
             JerreaderSearchField(
                 value = search,
                 onValueChange = { search = it },
-                placeholder = "搜索词语、原文或译文",
+                placeholder = "搜索词语或译文",
                 modifier = Modifier.weight(1f)
             )
             JerreaderCountBadge(count = words.size + translations.size)
             Box {
                 JerreaderToolbarIconButton(
+                    icon = JerreaderIcon.SLIDERS,
+                    enabled = words.isNotEmpty(),
+                    contentDescription = "按学习状态筛选，当前为" +
+                        (statusFilter?.let(VocabularyLearningPolicy::statusTitle) ?: "全部状态"),
+                    onClick = { statusMenuOpen = true }
+                )
+                DropdownMenu(
+                    expanded = statusMenuOpen,
+                    onDismissRequest = { statusMenuOpen = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("全部状态") },
+                        onClick = {
+                            statusMenuOpen = false
+                            statusFilter = null
+                        }
+                    )
+                    VocabularyLearningPolicy.allStatuses().forEach { status ->
+                        DropdownMenuItem(
+                            text = { Text(status.title) },
+                            onClick = {
+                                statusMenuOpen = false
+                                statusFilter = status.storageId
+                            }
+                        )
+                    }
+                }
+            }
+            Box {
+                JerreaderToolbarIconButton(
                     icon = JerreaderIcon.SHARE,
                     enabled = words.isNotEmpty() || translations.isNotEmpty(),
+                    contentDescription = "导出生词与译文收藏",
                     onClick = { exportMenuOpen = true }
                 )
                 DropdownMenu(
@@ -838,14 +1203,19 @@ private fun VocabularySection(
             }
         }
         if (visibleWords.isEmpty() && visibleTranslations.isEmpty()) {
+            val isStatusOnlyEmpty = term.isEmpty() && statusFilter != null && words.isNotEmpty()
             JerreaderEmptyState(
-                title = if (term.isEmpty()) "收藏还是空的" else "没有匹配内容",
-                message = if (term.isEmpty()) {
-                    "在翻译的词语模式收藏词典结果，或在阅读中的译文卡片点按星标，内容就会出现在这里。"
-                } else {
-                    "请尝试搜索其他词语、原文、译文或书名。"
+                title = when {
+                    term.isNotEmpty() -> "没有匹配内容"
+                    isStatusOnlyEmpty -> "该状态下没有词条"
+                    else -> "收藏还是空的"
                 },
-                icon = if (term.isEmpty()) JerreaderIcon.BOOKMARK_OUTLINE else JerreaderIcon.SEARCH
+                message = when {
+                    term.isNotEmpty() -> "请尝试搜索其他词语、原文、译文或书名。"
+                    isStatusOnlyEmpty -> "请选择其他学习状态，或切换回全部状态。"
+                    else -> "在翻译的词语模式收藏词典结果，或在阅读中的译文卡片点按星标，内容就会出现在这里。"
+                },
+                icon = if (term.isNotEmpty()) JerreaderIcon.SEARCH else JerreaderIcon.BOOKMARK_OUTLINE
             )
         }
         if (visibleWords.isNotEmpty()) {
@@ -854,7 +1224,9 @@ private fun VocabularySection(
                 detail = "词条收藏保存在本机，清空查词历史不会删除它们。"
             )
             visibleWords.forEach { record ->
-                JerreaderRecordCard {
+                val status = VocabularyStatus.fromStorageId(record.vocabularyStatus)
+                val contexts = VocabularyLearningPolicy.decodeContexts(record.contextHistoryText)
+                JerreaderRecordCard(onClick = { selectedWordKey = record.lookupKey }) {
                     JerreaderWordRecordRow(
                         surfaceForm = record.surfaceForm,
                         lemma = record.lemma,
@@ -876,6 +1248,34 @@ private fun VocabularySection(
                             )
                         }
                     )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            "查询 ${record.lookupCount} 次 · 保留 ${contexts.size} 条原文语境",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        JerreaderInlineMenu(
+                            options = VocabularyLearningPolicy.allStatuses()
+                                .map { it to it.title },
+                            selected = status,
+                            onSelect = { onStatusChange(record.lookupKey, it) },
+                            modifier = Modifier.width(92.dp)
+                        )
+                    }
+                    contexts.firstOrNull()?.let { context ->
+                        Text(
+                            context,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                    }
                 }
             }
         }
@@ -908,6 +1308,100 @@ private fun VocabularySection(
             }
         }
     }
+    selectedWordKey?.let { key ->
+        words.firstOrNull { it.lookupKey == key }?.let { record ->
+            VocabularyDetailDialog(
+                record = record,
+                onDismiss = { selectedWordKey = null },
+                onStatusChange = { onStatusChange(record.lookupKey, it) },
+                onRemoveFavorite = {
+                    selectedWordKey = null
+                    onToggleWord(record.lookupKey, false)
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun VocabularyDetailDialog(
+    record: WordLookupEntity,
+    onDismiss: () -> Unit,
+    onStatusChange: (VocabularyStatus) -> Unit,
+    onRemoveFavorite: () -> Unit
+) {
+    val status = VocabularyStatus.fromStorageId(record.vocabularyStatus)
+    val contexts = VocabularyLearningPolicy.decodeContexts(record.contextHistoryText)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("词条详情") },
+        text = {
+            Column(
+                modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    record.surfaceForm,
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                record.lemma?.takeIf { it != record.surfaceForm }?.let {
+                    Text("基本形：$it", style = MaterialTheme.typography.titleMedium)
+                }
+                record.reading?.let {
+                    Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                JerreaderDivider()
+                Text("词典释义", style = MaterialTheme.typography.labelLarge)
+                record.definitionsText
+                    .split(LearningRecordRepository.DEFINITION_SEPARATOR)
+                    .filter(String::isNotBlank)
+                    .forEachIndexed { index, definition ->
+                        Text("${index + 1}. $definition", style = MaterialTheme.typography.bodyLarge)
+                    }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("学习状态", style = MaterialTheme.typography.titleMedium)
+                    Spacer(modifier = Modifier.weight(1f))
+                    JerreaderInlineMenu(
+                        options = VocabularyLearningPolicy.allStatuses().map { it to it.title },
+                        selected = status,
+                        onSelect = onStatusChange,
+                        modifier = Modifier.width(108.dp)
+                    )
+                }
+                Text(
+                    "累计查询 ${record.lookupCount} 次 · 保留 ${contexts.size} 条原文语境",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                contexts.forEachIndexed { index, context ->
+                    if (index > 0) JerreaderDivider()
+                    Text(
+                        if (index == 0) "最近语境" else "较早语境",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(context, style = MaterialTheme.typography.bodyMedium)
+                }
+                record.sourceBookTitle?.let {
+                    Text(
+                        "来源：《$it》",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onRemoveFavorite) { Text("取消收藏") }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("关闭") }
+        }
+    )
 }
 
 /**
@@ -937,8 +1431,10 @@ private fun buildLearningExport(
     appendLine()
     appendLine("## 生词")
     words.filter(WordLookupEntity::isFavorite).forEach { record ->
-        appendLine("- ${record.lemma ?: record.surfaceForm}：${record.definitionsText.replace(LearningRecordRepository.DEFINITION_SEPARATOR, "；")}")
-        record.sentenceContext?.let { appendLine("  - 语境：$it") }
+        appendLine("- ${record.lemma ?: record.surfaceForm} [${VocabularyLearningPolicy.statusTitle(record.vocabularyStatus)}]：${record.definitionsText.replace(LearningRecordRepository.DEFINITION_SEPARATOR, "；")}")
+        VocabularyLearningPolicy.decodeContexts(record.contextHistoryText).forEach {
+            appendLine("  - 语境：$it")
+        }
         record.aiAnalysis?.let { appendLine("  - AI 解析：$it") }
     }
     appendLine()
@@ -976,7 +1472,7 @@ private fun buildLearningExport(
                     record.lemma ?: record.surfaceForm,
                     record.definitionsText.replace(LearningRecordRepository.DEFINITION_SEPARATOR, "；"),
                     record.reading.orEmpty(),
-                    "Jerreader 生词"
+                    "Jerreader ${VocabularyLearningPolicy.statusTitle(record.vocabularyStatus)}"
                 ).joinToString("\t", transform = ::tsvField)
             )
         }
@@ -1023,6 +1519,7 @@ private fun HistorySection(
             JerreaderToolbarIconButton(
                 icon = JerreaderIcon.TRASH,
                 enabled = records.isNotEmpty(),
+                contentDescription = "清空查词历史",
                 onClick = { confirmingClear = true }
             )
         }
@@ -1108,4 +1605,3 @@ private fun languageName(language: LanguageCode): String = when (language) {
     LanguageCode.ENGLISH -> "英语"
     LanguageCode.JAPANESE -> "日语"
 }
-

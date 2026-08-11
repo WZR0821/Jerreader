@@ -9,8 +9,8 @@ import androidx.test.core.app.ApplicationProvider
 import com.jerreader.android.JerreaderApplication
 import com.jerreader.android.library.PublicationIntegrity
 import com.jerreader.android.test.createSyntheticEpub
-import com.jerreader.shared.library.ReaderAppearance
-import com.jerreader.shared.library.ReaderThemeOption
+import com.jerreader.unified.library.ReaderAppearance
+import com.jerreader.unified.library.ReaderThemeOption
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.delay
@@ -134,7 +134,7 @@ class ReaderMilestoneTwoTest {
         assertTrue("ReaderActivity did not attach Readium's EPUB navigator", navigatorReady)
     }
 
-    private suspend fun awaitSavedState(bookId: String): com.jerreader.shared.library.LibraryBook {
+    private suspend fun awaitSavedState(bookId: String): com.jerreader.unified.library.LibraryBook {
         val application = ApplicationProvider.getApplicationContext<JerreaderApplication>()
         repeat(100) {
             val saved = application.graph.repository.book(bookId)

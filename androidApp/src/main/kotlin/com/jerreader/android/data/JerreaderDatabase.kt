@@ -16,7 +16,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ReadingAnnotationEntity::class,
         TranslationCacheEntity::class
     ],
-    version = 5,
+    version = 7,
     exportSchema = true
 )
 abstract class JerreaderDatabase : RoomDatabase() {
@@ -34,7 +34,9 @@ abstract class JerreaderDatabase : RoomDatabase() {
             MIGRATION_1_2,
             MIGRATION_2_3,
             MIGRATION_3_4,
-            MIGRATION_4_5
+            MIGRATION_4_5,
+            MIGRATION_5_6,
+            MIGRATION_6_7
         ).build()
 
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -165,6 +167,67 @@ abstract class JerreaderDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     "ALTER TABLE reading_annotations ADD COLUMN geometryJson TEXT"
+                )
+            }
+        }
+
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE word_lookup_records ADD COLUMN " +
+                        "vocabularyStatus TEXT NOT NULL DEFAULT 'new'"
+                )
+                db.execSQL(
+                    "ALTER TABLE word_lookup_records ADD COLUMN " +
+                        "contextHistoryText TEXT NOT NULL DEFAULT ''"
+                )
+                // A 1.3 favourite already meant “this is in my vocabulary”.
+                // Preserve that intent as actively learning, never as mastered.
+                db.execSQL(
+                    "UPDATE word_lookup_records SET vocabularyStatus = 'learning' " +
+                        "WHERE isFavorite = 1"
+                )
+                db.execSQL(
+                    "UPDATE word_lookup_records SET contextHistoryText = sentenceContext " +
+                        "WHERE sentenceContext IS NOT NULL AND sentenceContext != ''"
+                )
+            }
+        }
+
+        internal val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE word_lookup_records ADD COLUMN " +
+                        "examplesText TEXT NOT NULL DEFAULT ''"
+                )
+                db.execSQL(
+                    "ALTER TABLE word_lookup_records ADD COLUMN " +
+                        "reviewCount INTEGER NOT NULL DEFAULT 0"
+                )
+                db.execSQL(
+                    "ALTER TABLE word_lookup_records ADD COLUMN " +
+                        "reviewStage INTEGER NOT NULL DEFAULT 0"
+                )
+                db.execSQL(
+                    "ALTER TABLE word_lookup_records ADD COLUMN " +
+                        "reviewIntervalDays INTEGER NOT NULL DEFAULT 0"
+                )
+                db.execSQL(
+                    "ALTER TABLE word_lookup_records ADD COLUMN " +
+                        "reviewLapseCount INTEGER NOT NULL DEFAULT 0"
+                )
+                db.execSQL(
+                    "ALTER TABLE word_lookup_records ADD COLUMN " +
+                        "lastReviewedAtEpochMillis INTEGER NOT NULL DEFAULT 0"
+                )
+                db.execSQL(
+                    "ALTER TABLE word_lookup_records ADD COLUMN " +
+                        "nextReviewAtEpochMillis INTEGER NOT NULL DEFAULT 0"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS " +
+                        "index_word_lookup_records_nextReviewAtEpochMillis " +
+                        "ON word_lookup_records(nextReviewAtEpochMillis)"
                 )
             }
         }

@@ -18,6 +18,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -41,11 +42,11 @@ import com.jerreader.android.ui.SettingsScreen
 import com.jerreader.android.ui.TranslationSettingsActions
 import com.jerreader.android.settings.AppThemeChoice
 import com.jerreader.android.reader.encodeStoredReaderPreferences
-import com.jerreader.shared.domain.LanguageCode
-import com.jerreader.shared.library.LibraryBook
-import com.jerreader.shared.translation.TranslationRequest
-import com.jerreader.shared.ui.JerreaderLibraryApp
-import com.jerreader.shared.ui.JerreaderTheme
+import com.jerreader.unified.domain.LanguageCode
+import com.jerreader.unified.library.LibraryBook
+import com.jerreader.unified.translation.TranslationRequest
+import com.jerreader.unified.ui.JerreaderLibraryApp
+import com.jerreader.unified.ui.JerreaderTheme
 import android.net.Uri
 import androidx.core.content.IntentCompat
 import java.io.File
@@ -109,6 +110,12 @@ class MainActivity : ComponentActivity() {
             }
             var settingsRoute by rememberSaveable { mutableStateOf(SettingsRoute.ROOT) }
 
+            LaunchedEffect(appPreferences.learningModuleVisible) {
+                if (!appPreferences.learningModuleVisible && selectedTab == AndroidAppTab.LEARNING) {
+                    selectedTab = AndroidAppTab.LIBRARY
+                }
+            }
+
             // Secondary screens are Compose state, not activities, so back has to
             // unwind them explicitly. Without this, back from a settings sub-page
             // or from a non-library tab dropped straight to the launcher.
@@ -121,10 +128,15 @@ class MainActivity : ComponentActivity() {
             ) { selectedTab = AndroidAppTab.LIBRARY }
 
             val bottomBar: @Composable () -> Unit = {
-                AppNavigationBar(selectedTab) { selectedTab = it }
+                AppNavigationBar(
+                    selected = selectedTab,
+                    showLearning = appPreferences.learningModuleVisible
+                ) { selectedTab = it }
             }
 
-            JerreaderTheme(accent = appPreferences.theme) {
+            val systemIsDark = isSystemInDarkTheme()
+            val appIsDark = appPreferences.appearanceMode.isDark(systemIsDark)
+            JerreaderTheme(accent = appPreferences.theme, dark = appIsDark) {
                 when (selectedTab) {
                     AndroidAppTab.LIBRARY -> JerreaderLibraryApp(
                         state = state,
@@ -174,6 +186,7 @@ class MainActivity : ComponentActivity() {
                         route = settingsRoute,
                         onRouteChanged = { settingsRoute = it },
                         onThemeChanged = graph.appSettings::updateTheme,
+                        onAppearanceModeChanged = graph.appSettings::updateAppearanceMode,
                         onDefaultReaderChanged = { appearance ->
                             graph.appSettings.updateReaderAppearance(appearance)
                             if (appPreferences.applyReaderDefaultsToExistingBooks) {
@@ -186,6 +199,8 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         onShowProgressChanged = graph.appSettings::updateShowReadingProgress,
+                        onLearningModuleVisibleChanged =
+                            graph.appSettings::updateLearningModuleVisible,
                         onApplyDefaultsAutomaticallyChanged = { enabled ->
                             graph.appSettings.updateApplyReaderDefaultsToExistingBooks(enabled)
                             if (enabled) {
@@ -230,6 +245,8 @@ class MainActivity : ComponentActivity() {
                             updateTranslationHaptics = graph.translationSettings::updateTranslationHaptics,
                             updateAutomaticRetry = graph.translationSettings::updateAutomaticRetry,
                             updateFallbackMode = graph.translationSettings::updateFallbackMode,
+                            updatePreferAIWhenConfigured =
+                                graph.translationSettings::updatePreferAIWhenConfigured,
                             updatePrompt = graph.translationSettings::updateTranslationPrompt,
                             updateGrammarPrompt = graph.translationSettings::updateGrammarPrompt
                         ),

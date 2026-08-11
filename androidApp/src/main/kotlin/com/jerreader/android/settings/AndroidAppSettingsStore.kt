@@ -1,11 +1,14 @@
 package com.jerreader.android.settings
 
 import android.content.Context
-import com.jerreader.shared.library.ReaderAppearance
-import com.jerreader.shared.library.ReaderFontOption
-import com.jerreader.shared.library.ReaderTextOrientation
-import com.jerreader.shared.library.ReaderThemeOption
-import com.jerreader.shared.ui.JerreaderAccent
+import com.jerreader.unified.design.JerreaderAppearanceMode
+import com.jerreader.unified.library.ReaderAppearance
+import com.jerreader.unified.library.ReaderColorPreset
+import com.jerreader.unified.library.ReaderColorPresetStore
+import com.jerreader.unified.library.ReaderFontOption
+import com.jerreader.unified.library.ReaderTextOrientation
+import com.jerreader.unified.library.ReaderThemeOption
+import com.jerreader.unified.ui.JerreaderAccent
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -16,11 +19,16 @@ typealias AppThemeChoice = JerreaderAccent
 
 data class AndroidAppPreferences(
     val theme: AppThemeChoice = AppThemeChoice.OCEAN,
+    val appearanceMode: JerreaderAppearanceMode = JerreaderAppearanceMode.SYSTEM,
     val defaultReaderAppearance: ReaderAppearance = ReaderAppearance(
         font = ReaderFontOption.SERIF
     ),
     val showReadingProgress: Boolean = true,
-    val applyReaderDefaultsToExistingBooks: Boolean = false
+    /** Hides only the top-level learning module; records and reader lookup stay intact. */
+    val learningModuleVisible: Boolean = true,
+    val applyReaderDefaultsToExistingBooks: Boolean = false,
+    /** User-saved background + selection colour sets, shared with iOS. */
+    val colorPresets: List<ReaderColorPreset> = emptyList()
 )
 
 class AndroidAppSettingsStore(context: Context) {
@@ -31,6 +39,11 @@ class AndroidAppSettingsStore(context: Context) {
     fun updateTheme(theme: AppThemeChoice) {
         storage.edit().putString(KEY_THEME, theme.name).apply()
         mutablePreferences.value = mutablePreferences.value.copy(theme = theme)
+    }
+
+    fun updateAppearanceMode(mode: JerreaderAppearanceMode) {
+        storage.edit().putString(KEY_APPEARANCE_MODE, mode.id).apply()
+        mutablePreferences.value = mutablePreferences.value.copy(appearanceMode = mode)
     }
 
     fun updateReaderAppearance(appearance: ReaderAppearance) {
@@ -57,6 +70,39 @@ class AndroidAppSettingsStore(context: Context) {
         mutablePreferences.value = mutablePreferences.value.copy(showReadingProgress = value)
     }
 
+    fun updateLearningModuleVisible(value: Boolean) {
+        storage.edit().putBoolean(KEY_LEARNING_MODULE_VISIBLE, value).apply()
+        mutablePreferences.value = mutablePreferences.value.copy(
+            learningModuleVisible = value
+        )
+    }
+
+    fun saveColorPreset(name: String, appearance: ReaderAppearance) {
+        // The overload that resolves the pair from what the page is showing:
+        // a set saved off a built-in theme, or off a background with no
+        // hand-picked selection colour, used to be silently dropped here.
+        updateColorPresets(
+            ReaderColorPresetStore.added(
+                existing = mutablePreferences.value.colorPresets,
+                appearance = appearance,
+                name = name
+            )
+        )
+    }
+
+    fun removeColorPreset(id: String) {
+        updateColorPresets(
+            ReaderColorPresetStore.removed(mutablePreferences.value.colorPresets, id)
+        )
+    }
+
+    private fun updateColorPresets(presets: List<ReaderColorPreset>) {
+        storage.edit()
+            .putString(KEY_COLOR_PRESETS, ReaderColorPresetStore.encode(presets))
+            .apply()
+        mutablePreferences.value = mutablePreferences.value.copy(colorPresets = presets)
+    }
+
     fun updateApplyReaderDefaultsToExistingBooks(value: Boolean) {
         storage.edit().putBoolean(KEY_APPLY_TO_EXISTING, value).apply()
         mutablePreferences.value = mutablePreferences.value.copy(
@@ -74,6 +120,9 @@ class AndroidAppSettingsStore(context: Context) {
         val appearance = payload.optJSONObject("readerAppearance")
         val restored = AndroidAppPreferences(
             theme = enumValue(payload.optString("theme"), current.theme),
+            appearanceMode = JerreaderAppearanceMode.fromId(
+                payload.optString("appearanceMode", current.appearanceMode.id)
+            ),
             defaultReaderAppearance = appearance?.let {
                 ReaderAppearance(
                     fontScale = it.optDouble("fontScale", current.defaultReaderAppearance.fontScale),
@@ -114,19 +163,36 @@ class AndroidAppSettingsStore(context: Context) {
                 "showReadingProgress",
                 current.showReadingProgress
             ),
+            learningModuleVisible = payload.optBoolean(
+                "learningModuleVisible",
+                current.learningModuleVisible
+            ),
             applyReaderDefaultsToExistingBooks = payload.optBoolean(
                 "applyReaderDefaultsToExistingBooks",
                 current.applyReaderDefaultsToExistingBooks
-            )
+            ),
+            // Written by 1.3.3 and later. An older archive leaves the sets the
+            // user already has on this install alone rather than clearing them.
+            colorPresets = if (payload.has("colorPresets")) {
+                ReaderColorPresetStore.decode(payload.optString("colorPresets"))
+            } else {
+                current.colorPresets
+            }
         )
         updateTheme(restored.theme)
+        updateAppearanceMode(restored.appearanceMode)
         updateReaderAppearance(restored.defaultReaderAppearance)
         updateShowReadingProgress(restored.showReadingProgress)
+        updateLearningModuleVisible(restored.learningModuleVisible)
         updateApplyReaderDefaultsToExistingBooks(restored.applyReaderDefaultsToExistingBooks)
+        updateColorPresets(restored.colorPresets)
     }
 
     private fun load(): AndroidAppPreferences = AndroidAppPreferences(
         theme = enumValue(storage.getString(KEY_THEME, null), JerreaderAccent.OCEAN),
+        appearanceMode = JerreaderAppearanceMode.fromId(
+            storage.getString(KEY_APPEARANCE_MODE, null).orEmpty()
+        ),
         defaultReaderAppearance = ReaderAppearance(
             fontScale = storage.getFloat(KEY_FONT_SCALE, 1f).toDouble(),
             theme = enumValue(storage.getString(KEY_READER_THEME, null), ReaderThemeOption.LIGHT),
@@ -135,16 +201,25 @@ class AndroidAppSettingsStore(context: Context) {
             lineHeight = storage.getFloat(KEY_LINE_HEIGHT, 1.4f).toDouble(),
             paragraphSpacing = storage.getFloat(KEY_PARAGRAPH_SPACING, 0f).toDouble(),
             pageMargins = storage.getFloat(KEY_PAGE_MARGINS, 1f).toDouble(),
+            // 竖排 was removed from the picker, so a setting saved by an older
+            // build would otherwise leave the reader in a mode with no control
+            // to leave it by. 原书 already renders a vertically typeset book
+            // vertically, which is what that setting was reached for.
             orientation = enumValue(
                 storage.getString(KEY_ORIENTATION, null),
                 ReaderTextOrientation.PUBLICATION
-            ),
+            ).takeUnless { it == ReaderTextOrientation.VERTICAL }
+                ?: ReaderTextOrientation.PUBLICATION,
             customBackgroundHex = storage.getString(KEY_CUSTOM_BACKGROUND, "").orEmpty(),
             customSelectionColorHex = storage.getString(KEY_CUSTOM_SELECTION, "").orEmpty(),
             pdfPaperModeEnabled = storage.getBoolean(KEY_PDF_PAPER_MODE, false)
         ),
         showReadingProgress = storage.getBoolean(KEY_SHOW_PROGRESS, true),
-        applyReaderDefaultsToExistingBooks = storage.getBoolean(KEY_APPLY_TO_EXISTING, false)
+        learningModuleVisible = storage.getBoolean(KEY_LEARNING_MODULE_VISIBLE, true),
+        applyReaderDefaultsToExistingBooks = storage.getBoolean(KEY_APPLY_TO_EXISTING, false),
+        colorPresets = ReaderColorPresetStore.decode(
+            storage.getString(KEY_COLOR_PRESETS, "").orEmpty()
+        )
     )
 
     private inline fun <reified T : Enum<T>> enumValue(raw: String?, default: T): T =
@@ -152,6 +227,7 @@ class AndroidAppSettingsStore(context: Context) {
 
     private companion object {
         const val KEY_THEME = "app.theme"
+        const val KEY_APPEARANCE_MODE = "app.appearanceMode"
         const val KEY_FONT_SCALE = "reader.fontScale"
         const val KEY_READER_THEME = "reader.theme"
         const val KEY_SCROLL = "reader.scroll"
@@ -164,6 +240,8 @@ class AndroidAppSettingsStore(context: Context) {
         const val KEY_CUSTOM_SELECTION = "reader.customSelection"
         const val KEY_PDF_PAPER_MODE = "reader.pdfPaperMode"
         const val KEY_SHOW_PROGRESS = "reader.showProgress"
+        const val KEY_LEARNING_MODULE_VISIBLE = "feature.learningModuleVisible"
         const val KEY_APPLY_TO_EXISTING = "reader.applyDefaultsToExisting"
+        const val KEY_COLOR_PRESETS = "reader.colorPresets"
     }
 }

@@ -1,11 +1,11 @@
 package com.jerreader.android.lexical
 
-import com.jerreader.shared.domain.LanguageCode
-import com.jerreader.shared.lexical.LexicalLookupFailure
-import com.jerreader.shared.lexical.LexicalLookupService
-import com.jerreader.shared.lexical.WordExplanation
-import com.jerreader.shared.translation.ContextExplanationRequest
-import com.jerreader.shared.translation.ContextExplanationService
+import com.jerreader.unified.domain.LanguageCode
+import com.jerreader.unified.lexical.LexicalLookupFailure
+import com.jerreader.unified.lexical.LexicalLookupService
+import com.jerreader.unified.lexical.WordExplanation
+import com.jerreader.unified.translation.ContextExplanationRequest
+import com.jerreader.unified.translation.ContextExplanationService
 import kotlinx.coroutines.CancellationException
 
 /**

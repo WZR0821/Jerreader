@@ -1,6 +1,6 @@
 package com.jerreader.android.library
 
-import com.jerreader.shared.domain.BookFormat
+import com.jerreader.unified.domain.BookFormat
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File

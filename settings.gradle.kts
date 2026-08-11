@@ -11,13 +11,14 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        // Readium's optional PDFium adapter currently publishes its native
-        // viewer dependencies through JitPack.
+        // Readium's optional PDFium adapter publishes its native viewer
+        // dependencies through JitPack.
         maven("https://jitpack.io")
     }
 }
 
-rootProject.name = "JerreaderMobile"
+rootProject.name = "JerreaderUnified"
 
+include(":core")
+include(":ui")
 include(":androidApp")
-include(":shared")

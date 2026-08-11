@@ -3,7 +3,7 @@ package com.jerreader.android.library
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
-import com.jerreader.shared.domain.BookFormat
+import com.jerreader.unified.domain.BookFormat
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID

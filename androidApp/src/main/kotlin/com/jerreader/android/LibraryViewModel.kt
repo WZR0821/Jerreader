@@ -7,10 +7,10 @@ import androidx.lifecycle.viewModelScope
 import com.jerreader.android.library.LibraryBookService
 import com.jerreader.android.library.LibraryImportService
 import com.jerreader.android.data.RoomLibraryRepository
-import com.jerreader.shared.library.LibraryBook
-import com.jerreader.shared.library.LibraryImportOutcome
-import com.jerreader.shared.library.LibraryRepository
-import com.jerreader.shared.ui.LibraryUiState
+import com.jerreader.unified.library.LibraryBook
+import com.jerreader.unified.library.LibraryImportOutcome
+import com.jerreader.unified.library.LibraryRepository
+import com.jerreader.unified.ui.LibraryUiState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine

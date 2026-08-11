@@ -2,12 +2,12 @@ package com.jerreader.android.translation
 
 import com.jerreader.android.data.TranslationCacheDao
 import com.jerreader.android.data.TranslationCacheEntity
-import com.jerreader.shared.domain.LanguageCode
-import com.jerreader.shared.translation.TranslationRequest
-import com.jerreader.shared.translation.TranslationResult
-import com.jerreader.shared.translation.ContextExplanationRequest
-import com.jerreader.shared.translation.ContextExplanationResult
-import com.jerreader.shared.translation.TranslationInputPolicy
+import com.jerreader.unified.domain.LanguageCode
+import com.jerreader.unified.translation.TranslationRequest
+import com.jerreader.unified.translation.TranslationResult
+import com.jerreader.unified.translation.ContextExplanationRequest
+import com.jerreader.unified.translation.ContextExplanationResult
+import com.jerreader.unified.translation.TranslationInputPolicy
 import java.security.MessageDigest
 import java.text.Normalizer
 
