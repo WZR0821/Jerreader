@@ -1,6 +1,7 @@
 # 读鼠 Jerreader
 
-> **本 APP 通过 GPT-5.6 sol 模型开发。**
+> [!IMPORTANT]
+> **本 APP 通过 GPT-5.6-sol 模型开发。**
 
 Jerreader 是一款面向中、英、日文阅读与学习的 iOS / Android 电子书阅读器。它以原文阅读为主，查词、翻译和解释按需显示，不会把译文写进原书。当前版本为 **1.5.1（build 60）**。
 
