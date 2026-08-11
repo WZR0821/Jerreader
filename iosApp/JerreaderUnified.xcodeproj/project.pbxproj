@@ -1,0 +1,617 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A00000000000000000000001 /* ReadiumShared in Frameworks */ = {isa = PBXBuildFile; productRef = D00000000000000000000001 /* ReadiumShared */; };
+		A00000000000000000000002 /* ReadiumStreamer in Frameworks */ = {isa = PBXBuildFile; productRef = D00000000000000000000002 /* ReadiumStreamer */; };
+		A00000000000000000000003 /* ReadiumNavigator in Frameworks */ = {isa = PBXBuildFile; productRef = D00000000000000000000003 /* ReadiumNavigator */; };
+		A00000000000000000000004 /* ReadiumAdapterGCDWebServer in Frameworks */ = {isa = PBXBuildFile; productRef = D00000000000000000000004 /* ReadiumAdapterGCDWebServer */; };
+		A00000000000000000000005 /* ReadiumZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = D00000000000000000000005 /* ReadiumZIPFoundation */; };
+		A00000000000000000000006 /* jmdict-common.tsv in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000005 /* jmdict-common.tsv */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		B00000000000000000000001 /* JerreaderUnified.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = JerreaderUnified.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B00000000000000000000002 /* JerreaderTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = JerreaderTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B00000000000000000000003 /* JerreaderUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = JerreaderUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B00000000000000000000004 /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Version.xcconfig; sourceTree = "<group>"; };
+		B00000000000000000000005 /* jmdict-common.tsv */ = {isa = PBXFileReference; lastKnownFileType = text; name = jmdict-common.tsv; path = ../sharedResources/dictionaries/jmdict-common.tsv; sourceTree = SOURCE_ROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		F00000000000000000000002 /* Exceptions for "Jerreader" folder in "JerreaderUnified" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Resources/Info.plist,
+			);
+			target = E00000000000000000000002 /* JerreaderUnified */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		F00000000000000000000001 /* Jerreader */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				F00000000000000000000002 /* Exceptions for "Jerreader" folder in "JerreaderUnified" target */,
+			);
+			path = Jerreader;
+			sourceTree = "<group>";
+		};
+		F00000000000000000000003 /* JerreaderTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = JerreaderTests;
+			sourceTree = "<group>";
+		};
+		F00000000000000000000004 /* JerreaderUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = JerreaderUITests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		E00000000000000000000010 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A00000000000000000000001 /* ReadiumShared in Frameworks */,
+				A00000000000000000000002 /* ReadiumStreamer in Frameworks */,
+				A00000000000000000000003 /* ReadiumNavigator in Frameworks */,
+				A00000000000000000000004 /* ReadiumAdapterGCDWebServer in Frameworks */,
+				A00000000000000000000005 /* ReadiumZIPFoundation in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E00000000000000000000014 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E00000000000000000000015 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		E00000000000000000000005 = {
+			isa = PBXGroup;
+			children = (
+				B00000000000000000000004 /* Version.xcconfig */,
+				B00000000000000000000005 /* jmdict-common.tsv */,
+				F00000000000000000000001 /* Jerreader */,
+				F00000000000000000000003 /* JerreaderTests */,
+				F00000000000000000000004 /* JerreaderUITests */,
+				E00000000000000000000006 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		E00000000000000000000006 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				B00000000000000000000001 /* JerreaderUnified.app */,
+				B00000000000000000000002 /* JerreaderTests.xctest */,
+				B00000000000000000000003 /* JerreaderUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		E00000000000000000000002 /* JerreaderUnified */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E00000000000000000000020 /* Build configuration list for PBXNativeTarget "JerreaderUnified" */;
+			buildPhases = (
+				E00000000000000000000012 /* Build shared Kotlin framework */,
+				E00000000000000000000011 /* Sources */,
+				E00000000000000000000010 /* Frameworks */,
+				E00000000000000000000013 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				F00000000000000000000001 /* Jerreader */,
+			);
+			name = JerreaderUnified;
+			packageProductDependencies = (
+				D00000000000000000000001 /* ReadiumShared */,
+				D00000000000000000000002 /* ReadiumStreamer */,
+				D00000000000000000000003 /* ReadiumNavigator */,
+				D00000000000000000000004 /* ReadiumAdapterGCDWebServer */,
+				D00000000000000000000005 /* ReadiumZIPFoundation */,
+			);
+			productName = JerreaderUnified;
+			productReference = B00000000000000000000001 /* JerreaderUnified.app */;
+			productType = "com.apple.product-type.application";
+		};
+		E00000000000000000000003 /* JerreaderTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E00000000000000000000022 /* Build configuration list for PBXNativeTarget "JerreaderTests" */;
+			buildPhases = (
+				E00000000000000000000016 /* Sources */,
+				E00000000000000000000014 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C00000000000000000000002 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				F00000000000000000000003 /* JerreaderTests */,
+			);
+			name = JerreaderTests;
+			productName = JerreaderTests;
+			productReference = B00000000000000000000002 /* JerreaderTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		E00000000000000000000004 /* JerreaderUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E00000000000000000000023 /* Build configuration list for PBXNativeTarget "JerreaderUITests" */;
+			buildPhases = (
+				E00000000000000000000017 /* Sources */,
+				E00000000000000000000015 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C00000000000000000000004 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				F00000000000000000000004 /* JerreaderUITests */,
+			);
+			name = JerreaderUITests;
+			productName = JerreaderUITests;
+			productReference = B00000000000000000000003 /* JerreaderUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXContainerItemProxy section */
+		C00000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E00000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E00000000000000000000002;
+			remoteInfo = JerreaderUnified;
+		};
+		C00000000000000000000003 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E00000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E00000000000000000000002;
+			remoteInfo = JerreaderUnified;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXTargetDependency section */
+		C00000000000000000000002 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E00000000000000000000002 /* JerreaderUnified */;
+			targetProxy = C00000000000000000000001 /* PBXContainerItemProxy */;
+		};
+		C00000000000000000000004 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E00000000000000000000002 /* JerreaderUnified */;
+			targetProxy = C00000000000000000000003 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin PBXProject section */
+		E00000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1620;
+				LastUpgradeCheck = 1620;
+				TargetAttributes = {
+					E00000000000000000000002 = {
+						CreatedOnToolsVersion = 16.2;
+					};
+					E00000000000000000000003 = {
+						CreatedOnToolsVersion = 16.2;
+						TestTargetID = E00000000000000000000002;
+					};
+					E00000000000000000000004 = {
+						CreatedOnToolsVersion = 16.2;
+						TestTargetID = E00000000000000000000002;
+					};
+				};
+			};
+			buildConfigurationList = E00000000000000000000021 /* Build configuration list for PBXProject "JerreaderUnified" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+				"zh-Hans",
+			);
+			mainGroup = E00000000000000000000005;
+			packageReferences = (
+				D00000000000000000000010 /* XCRemoteSwiftPackageReference "swift-toolkit" */,
+				D00000000000000000000011 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
+			);
+			productRefGroup = E00000000000000000000006 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				E00000000000000000000002 /* JerreaderUnified */,
+				E00000000000000000000003 /* JerreaderTests */,
+				E00000000000000000000004 /* JerreaderUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		E00000000000000000000013 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A00000000000000000000006 /* jmdict-common.tsv in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		E00000000000000000000012 /* Build shared Kotlin framework */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Build shared Kotlin framework";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"$SRCROOT/Scripts/build-shared-framework.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		E00000000000000000000011 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E00000000000000000000016 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E00000000000000000000017 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		E00000000000000000000030 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = B00000000000000000000004 /* Version.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		E00000000000000000000031 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = B00000000000000000000004 /* Version.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		E00000000000000000000032 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_ASSET_PATHS = "";
+				ENABLE_PREVIEWS = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../core/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)",
+				);
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Jerreader/Resources/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Jerreader;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					JerreaderCore,
+				);
+				OTHER_SWIFT_FLAGS = "$(inherited) -file-prefix-map \"$(SRCROOT)=.\" -debug-prefix-map \"$(SRCROOT)=.\"";
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.Jerreader;
+				PRODUCT_MODULE_NAME = JerreaderUnified;
+				PRODUCT_NAME = Jerreader;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		E00000000000000000000033 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_ASSET_PATHS = "";
+				ENABLE_PREVIEWS = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../core/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)",
+				);
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Jerreader/Resources/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Jerreader;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					JerreaderCore,
+				);
+				OTHER_SWIFT_FLAGS = "$(inherited) -file-prefix-map \"$(SRCROOT)=.\" -debug-prefix-map \"$(SRCROOT)=.\"";
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.Jerreader;
+				PRODUCT_MODULE_NAME = JerreaderUnified;
+				PRODUCT_NAME = Jerreader;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		E00000000000000000000034 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../core/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)",
+				);
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.JerreaderTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Jerreader.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Jerreader";
+			};
+			name = Debug;
+		};
+		E00000000000000000000035 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../core/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)",
+				);
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.JerreaderTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Jerreader.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Jerreader";
+			};
+			name = Release;
+		};
+		E00000000000000000000036 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.JerreaderUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = JerreaderUnified;
+			};
+			name = Debug;
+		};
+		E00000000000000000000037 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.JerreaderUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = JerreaderUnified;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		E00000000000000000000020 /* Build configuration list for PBXNativeTarget "JerreaderUnified" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E00000000000000000000032 /* Debug */,
+				E00000000000000000000033 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E00000000000000000000021 /* Build configuration list for PBXProject "JerreaderUnified" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E00000000000000000000030 /* Debug */,
+				E00000000000000000000031 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E00000000000000000000022 /* Build configuration list for PBXNativeTarget "JerreaderTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E00000000000000000000034 /* Debug */,
+				E00000000000000000000035 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E00000000000000000000023 /* Build configuration list for PBXNativeTarget "JerreaderUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E00000000000000000000036 /* Debug */,
+				E00000000000000000000037 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		D00000000000000000000010 /* XCRemoteSwiftPackageReference "swift-toolkit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/readium/swift-toolkit.git";
+			requirement = {
+				kind = revision;
+				revision = 3d8bcdc981197f8ada1dd73c401da4aeb4e0a359;
+			};
+		};
+		D00000000000000000000011 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/readium/ZIPFoundation.git";
+			requirement = {
+				kind = exactVersion;
+				version = 3.0.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		D00000000000000000000001 /* ReadiumShared */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D00000000000000000000010 /* XCRemoteSwiftPackageReference "swift-toolkit" */;
+			productName = ReadiumShared;
+		};
+		D00000000000000000000002 /* ReadiumStreamer */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D00000000000000000000010 /* XCRemoteSwiftPackageReference "swift-toolkit" */;
+			productName = ReadiumStreamer;
+		};
+		D00000000000000000000003 /* ReadiumNavigator */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D00000000000000000000010 /* XCRemoteSwiftPackageReference "swift-toolkit" */;
+			productName = ReadiumNavigator;
+		};
+		D00000000000000000000004 /* ReadiumAdapterGCDWebServer */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D00000000000000000000010 /* XCRemoteSwiftPackageReference "swift-toolkit" */;
+			productName = ReadiumAdapterGCDWebServer;
+		};
+		D00000000000000000000005 /* ReadiumZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D00000000000000000000011 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ReadiumZIPFoundation;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = E00000000000000000000001 /* Project object */;
+}

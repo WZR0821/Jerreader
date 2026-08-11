@@ -9,19 +9,24 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.jerreader.shared.ui.JerreaderGlyph
-import com.jerreader.shared.ui.JerreaderIcon
+import com.jerreader.unified.design.JerreaderCopy
+import com.jerreader.unified.ui.JerreaderGlyph
+import com.jerreader.unified.ui.JerreaderIcon
 
 enum class AndroidAppTab(val title: String, internal val icon: JerreaderIcon) {
-    LIBRARY("书架", JerreaderIcon.BOOKS),
-    LEARNING("学习", JerreaderIcon.DICTIONARY),
-    SETTINGS("设置", JerreaderIcon.GEAR)
+    LIBRARY(JerreaderCopy.libraryTab, JerreaderIcon.BOOKS),
+    LEARNING(JerreaderCopy.learningTab, JerreaderIcon.DICTIONARY),
+    SETTINGS(JerreaderCopy.settingsTab, JerreaderIcon.GEAR)
 }
 
 @Composable
-fun AppNavigationBar(selected: AndroidAppTab, onSelected: (AndroidAppTab) -> Unit) {
+fun AppNavigationBar(
+    selected: AndroidAppTab,
+    showLearning: Boolean = true,
+    onSelected: (AndroidAppTab) -> Unit
+) {
     NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-        AndroidAppTab.entries.forEach { tab ->
+        AndroidAppTab.entries.filter { showLearning || it != AndroidAppTab.LEARNING }.forEach { tab ->
             NavigationBarItem(
                 selected = selected == tab,
                 onClick = { onSelected(tab) },

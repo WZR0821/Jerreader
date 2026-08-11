@@ -1,8 +1,8 @@
 package com.jerreader.android.backup
 
-import com.jerreader.shared.library.LibraryBackupPolicy
-import com.jerreader.shared.library.LibraryBackupProfile
-import com.jerreader.shared.library.LibraryBackupScope
+import com.jerreader.unified.library.LibraryBackupPolicy
+import com.jerreader.unified.library.LibraryBackupProfile
+import com.jerreader.unified.library.LibraryBackupScope
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull

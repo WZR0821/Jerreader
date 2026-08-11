@@ -4,7 +4,7 @@ import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import androidx.room.ColumnInfo
-import com.jerreader.shared.library.LibraryBook
+import com.jerreader.unified.library.LibraryBook
 
 @Entity(
     tableName = "books",

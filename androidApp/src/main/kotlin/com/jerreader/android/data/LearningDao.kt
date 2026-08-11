@@ -17,8 +17,35 @@ interface LearningDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertWord(record: WordLookupEntity)
 
-    @Query("UPDATE word_lookup_records SET isFavorite = :favorite WHERE lookupKey = :key")
-    suspend fun setWordFavorite(key: String, favorite: Boolean)
+    @Query(
+        "UPDATE word_lookup_records SET isFavorite = :favorite, " +
+            "vocabularyStatus = :status WHERE lookupKey = :key"
+    )
+    suspend fun setWordFavorite(key: String, favorite: Boolean, status: String)
+
+    @Query(
+        "UPDATE word_lookup_records SET isFavorite = 1, vocabularyStatus = :status " +
+            "WHERE lookupKey = :key"
+    )
+    suspend fun setVocabularyStatus(key: String, status: String)
+
+    @Query(
+        "UPDATE word_lookup_records SET vocabularyStatus = :status, " +
+            "reviewCount = :reviewCount, reviewStage = :reviewStage, " +
+            "reviewIntervalDays = :intervalDays, reviewLapseCount = :lapseCount, " +
+            "lastReviewedAtEpochMillis = :lastReviewedAt, " +
+            "nextReviewAtEpochMillis = :nextReviewAt WHERE lookupKey = :key"
+    )
+    suspend fun updateReviewState(
+        key: String,
+        status: String,
+        reviewCount: Int,
+        reviewStage: Int,
+        intervalDays: Int,
+        lapseCount: Int,
+        lastReviewedAt: Long,
+        nextReviewAt: Long
+    )
 
     @Query("UPDATE word_lookup_records SET aiAnalysis = :analysis, aiProviderIdentifier = :provider WHERE lookupKey = :key")
     suspend fun updateWordAnalysis(key: String, analysis: String, provider: String)

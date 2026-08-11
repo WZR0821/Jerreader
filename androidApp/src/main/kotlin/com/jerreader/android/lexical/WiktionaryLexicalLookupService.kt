@@ -1,11 +1,11 @@
 package com.jerreader.android.lexical
 
 import android.net.Uri
-import com.jerreader.shared.domain.LanguageCode
-import com.jerreader.shared.lexical.LexicalLookupFailure
-import com.jerreader.shared.lexical.LexicalLookupPolicy
-import com.jerreader.shared.lexical.LexicalLookupService
-import com.jerreader.shared.lexical.WordExplanation
+import com.jerreader.unified.domain.LanguageCode
+import com.jerreader.unified.lexical.LexicalLookupFailure
+import com.jerreader.unified.lexical.LexicalLookupPolicy
+import com.jerreader.unified.lexical.LexicalLookupService
+import com.jerreader.unified.lexical.WordExplanation
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL

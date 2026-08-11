@@ -1,9 +1,9 @@
 package com.jerreader.android.reader
 
 import android.os.Build
-import com.jerreader.shared.domain.LanguageCode
-import com.jerreader.shared.lexical.TextToken
-import com.jerreader.shared.lexical.WordBoundaryTokenizer
+import com.jerreader.unified.domain.LanguageCode
+import com.jerreader.unified.lexical.TextToken
+import com.jerreader.unified.lexical.WordBoundaryTokenizer
 import java.util.Locale
 
 class AndroidWordBoundaryTokenizer : WordBoundaryTokenizer {

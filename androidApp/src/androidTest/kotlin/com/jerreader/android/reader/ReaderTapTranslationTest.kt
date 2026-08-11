@@ -10,9 +10,9 @@ import androidx.test.core.app.ApplicationProvider
 import com.jerreader.android.JerreaderApplication
 import com.jerreader.android.library.PublicationIntegrity
 import com.jerreader.android.test.createSyntheticEpub
-import com.jerreader.shared.translation.MockTranslationService
-import com.jerreader.shared.translation.QuickTranslationUnit
-import com.jerreader.shared.ui.TranslationCardState
+import com.jerreader.unified.translation.MockTranslationService
+import com.jerreader.unified.translation.QuickTranslationUnit
+import com.jerreader.unified.ui.TranslationCardState
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
@@ -67,11 +67,11 @@ class ReaderTapTranslationTest {
                 paragraph as TranslationCardState.Success
                 assertEquals("She went home. Then she opened a book.", paragraph.sourceText)
 
-                // Readium delivers taps in navigator pixels, not CSS pixels. The
-                // reader must convert them, otherwise a real tap resolves no caret.
+                // Readium multiplies CSS coordinates by this WebView's own DPR.
+                // The reader must undo that exact scale in the same document;
+                // Android display density is not an equivalent source of truth.
                 graph.translationSettings.updateQuickTranslationUnit(QuickTranslationUnit.SENTENCE)
-                val density = context.resources.displayMetrics.density
-                val devicePoint = PointF(point.x * density, point.y * density)
+                val devicePoint = elementCenter(activity, "english-word", readiumPixels = true)
                 val fromDeviceTap = withContext(Dispatchers.Main) {
                     activity.translateAtDevicePointForTesting(devicePoint)
                 }
@@ -110,7 +110,11 @@ class ReaderTapTranslationTest {
         error("ReaderActivity did not attach Readium's EPUB navigator")
     }
 
-    private suspend fun elementCenter(activity: ReaderActivity, id: String): PointF {
+    private suspend fun elementCenter(
+        activity: ReaderActivity,
+        id: String,
+        readiumPixels: Boolean = false
+    ): PointF {
         repeat(100) {
             val raw = withContext(Dispatchers.Main) {
                 val navigator = activity.supportFragmentManager.fragments
@@ -122,7 +126,11 @@ class ReaderTapTranslationTest {
                       const element = document.getElementById('$id');
                       if (!element) return null;
                       const rect = element.getBoundingClientRect();
-                      return JSON.stringify({x: rect.left + rect.width / 2, y: rect.top + rect.height / 2});
+                      const scale = ${if (readiumPixels) "window.devicePixelRatio" else "1"};
+                      return JSON.stringify({
+                        x: (rect.left + rect.width / 2) * scale,
+                        y: (rect.top + rect.height / 2) * scale
+                      });
                     })()
                     """.trimIndent()
                 )

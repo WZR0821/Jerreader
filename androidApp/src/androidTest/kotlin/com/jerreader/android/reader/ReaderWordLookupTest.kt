@@ -12,10 +12,10 @@ import com.jerreader.android.lexical.DictionaryHttpClient
 import com.jerreader.android.lexical.WiktionaryLexicalLookupService
 import com.jerreader.android.library.PublicationIntegrity
 import com.jerreader.android.test.createSyntheticEpub
-import com.jerreader.shared.domain.LanguageCode
-import com.jerreader.shared.lexical.MockLexicalLookupService
-import com.jerreader.shared.lexical.WordSelectionSource
-import com.jerreader.shared.ui.WordLookupCardState
+import com.jerreader.unified.domain.LanguageCode
+import com.jerreader.unified.lexical.MockLexicalLookupService
+import com.jerreader.unified.lexical.WordSelectionSource
+import com.jerreader.unified.ui.WordLookupCardState
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
@@ -54,12 +54,27 @@ class ReaderWordLookupTest {
                 val english = withContext(Dispatchers.Main) {
                     activity.lookupAtForTesting(englishPoint)
                 }
-                assertTrue(english is WordLookupCardState.Success)
+                assertTrue("English lookup returned $english", english is WordLookupCardState.Success)
                 english as WordLookupCardState.Success
                 assertEquals("went", english.analysis.surfaceForm.lowercase())
                 assertEquals("go", english.analysis.lemma)
                 assertEquals(WordSelectionSource.SHORT_TAP, english.analysis.source)
                 assertTrue("去" in english.explanation.definitions)
+
+                val readiumPixelPoint = elementCenter(
+                    activity,
+                    "english-word",
+                    readiumPixels = true
+                )
+                val fromRealTapSpace = withContext(Dispatchers.Main) {
+                    activity.lookupAtDevicePointForTesting(readiumPixelPoint)
+                }
+                assertTrue(
+                    "Readium-pixel lookup returned $fromRealTapSpace",
+                    fromRealTapSpace is WordLookupCardState.Success
+                )
+                fromRealTapSpace as WordLookupCardState.Success
+                assertEquals("went", fromRealTapSpace.analysis.surfaceForm.lowercase())
 
                 val japanesePoint = elementCenter(activity, "japanese-word")
                 val japanese = withContext(Dispatchers.Main) {
@@ -157,7 +172,11 @@ class ReaderWordLookupTest {
         error("ReaderActivity did not attach Readium's EPUB navigator")
     }
 
-    private suspend fun elementCenter(activity: ReaderActivity, id: String): PointF {
+    private suspend fun elementCenter(
+        activity: ReaderActivity,
+        id: String,
+        readiumPixels: Boolean = false
+    ): PointF {
         repeat(100) {
             val raw = withContext(Dispatchers.Main) {
                 val navigator = activity.supportFragmentManager.fragments
@@ -169,7 +188,11 @@ class ReaderWordLookupTest {
                       const element = document.getElementById('$id');
                       if (!element) return null;
                       const rect = element.getBoundingClientRect();
-                      return JSON.stringify({x: rect.left + rect.width / 2, y: rect.top + rect.height / 2});
+                      const scale = ${if (readiumPixels) "window.devicePixelRatio" else "1"};
+                      return JSON.stringify({
+                        x: (rect.left + rect.width / 2) * scale,
+                        y: (rect.top + rect.height / 2) * scale
+                      });
                     })()
                     """.trimIndent()
                 )

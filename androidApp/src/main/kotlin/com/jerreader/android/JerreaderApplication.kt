@@ -11,6 +11,7 @@ import com.jerreader.android.library.LibraryBookService
 import com.jerreader.android.library.LibraryImportService
 import com.jerreader.android.lexical.DefaultLexicalLookupService
 import com.jerreader.android.lexical.ResilientLexicalLookupService
+import com.jerreader.android.lexical.JmdictOfflineLexicalLookupService
 import com.jerreader.android.learning.LearningRecordRepository
 import com.jerreader.android.reader.ReaderRecordRepository
 import com.jerreader.android.reader.ReadiumEnvironment
@@ -23,7 +24,7 @@ import com.jerreader.android.settings.AndroidAppSettingsStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import com.jerreader.shared.translation.TranslationService
+import com.jerreader.unified.translation.TranslationService
 
 class JerreaderApplication : Application() {
     val graph: AppGraph by lazy { AppGraph(this) }
@@ -50,8 +51,10 @@ class AppGraph(application: Application) {
     )
     var translationService: TranslationService = cachedTranslationService
     val lexicalLookupService = ResilientLexicalLookupService(
-        DefaultLexicalLookupService(),
-        translationService as com.jerreader.shared.translation.ContextExplanationService
+        DefaultLexicalLookupService(
+            offlineJapanese = JmdictOfflineLexicalLookupService(application)
+        ),
+        translationService as com.jerreader.unified.translation.ContextExplanationService
     )
     val speechService = AndroidSpeechService(application)
     val backupDirectory = BackupDirectoryStore(application)

@@ -1,13 +1,13 @@
 package com.jerreader.android.translation
 
-import com.jerreader.shared.translation.ContextExplanationRequest
-import com.jerreader.shared.translation.ContextExplanationResult
-import com.jerreader.shared.translation.ContextExplanationService
-import com.jerreader.shared.translation.TranslationRequest
-import com.jerreader.shared.translation.TranslationResult
-import com.jerreader.shared.translation.TranslationService
-import com.jerreader.shared.translation.TranslationInputPolicy
-import com.jerreader.shared.translation.TranslationFailure
+import com.jerreader.unified.translation.ContextExplanationRequest
+import com.jerreader.unified.translation.ContextExplanationResult
+import com.jerreader.unified.translation.ContextExplanationService
+import com.jerreader.unified.translation.TranslationRequest
+import com.jerreader.unified.translation.TranslationResult
+import com.jerreader.unified.translation.TranslationService
+import com.jerreader.unified.translation.TranslationInputPolicy
+import com.jerreader.unified.translation.TranslationFailure
 
 class CachedTranslationService(
     private val delegate: TranslationService,

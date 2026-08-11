@@ -1,7 +1,7 @@
 package com.jerreader.android.data
 
-import com.jerreader.shared.library.LibraryBook
-import com.jerreader.shared.library.LibraryRepository
+import com.jerreader.unified.library.LibraryBook
+import com.jerreader.unified.library.LibraryRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import androidx.room.withTransaction

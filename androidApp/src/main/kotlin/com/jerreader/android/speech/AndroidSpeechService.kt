@@ -2,7 +2,7 @@ package com.jerreader.android.speech
 
 import android.content.Context
 import android.speech.tts.TextToSpeech
-import com.jerreader.shared.domain.LanguageCode
+import com.jerreader.unified.domain.LanguageCode
 import java.util.Locale
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred

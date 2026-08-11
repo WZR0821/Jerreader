@@ -3,6 +3,7 @@ package com.jerreader.android.backup
 import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
+import androidx.room.withTransaction
 import com.jerreader.android.data.BookEntity
 import com.jerreader.android.data.JerreaderDatabase
 import com.jerreader.android.data.ReadingAnnotationEntity
@@ -10,18 +11,24 @@ import com.jerreader.android.data.ReadingBookmarkEntity
 import com.jerreader.android.data.TranslationFavoriteEntity
 import com.jerreader.android.data.WordLookupEntity
 import com.jerreader.android.library.ImmutablePublicationStore
+import com.jerreader.android.library.PublicationIntegrity
+import com.jerreader.android.reader.AndroidReaderRecordKeys
 import com.jerreader.android.settings.AndroidAppSettingsStore
 import com.jerreader.android.translation.AndroidTranslationSettingsStore
-import com.jerreader.shared.library.LibraryBackupArchiveInfo
-import com.jerreader.shared.library.LibraryBackupPolicy
-import com.jerreader.shared.library.LibraryBackupProfile
-import com.jerreader.shared.library.LibraryBackupPruner
-import com.jerreader.shared.library.LibraryBackupScope
+import com.jerreader.unified.library.LibraryBackupArchiveInfo
+import com.jerreader.unified.library.LibraryBackupNaming
+import com.jerreader.unified.library.LibraryBackupPolicy
+import com.jerreader.unified.library.LibraryBackupProfile
+import com.jerreader.unified.library.LibraryBackupPruner
+import com.jerreader.unified.library.LibraryBackupScope
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
+import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -153,7 +160,17 @@ class LibraryBackupService(
         withContext(Dispatchers.IO) {
             val stream = context.contentResolver.openInputStream(source)
                 ?: throw BackupFailure("无法读取这个备份文件，请重新选择。")
-            stream.use { readArchive(it) }
+            stream.use { input ->
+                try {
+                    readArchive(input)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: BackupFailure) {
+                    throw error
+                } catch (_: Exception) {
+                    throw BackupFailure("这个文件不是有效的 Jerreader 备份，或者已经损坏。")
+                }
+            }
         }
     }
 
@@ -268,171 +285,422 @@ class LibraryBackupService(
     // MARK: - Reading
 
     private suspend fun readArchive(stream: InputStream): RestoreResult {
-        var manifestSeen = false
-        var books = 0
-        var bookmarks = 0
-        var annotations = 0
-        var words = 0
-        var favorites = 0
-        var restoredSettings = false
-        var skipped = 0
-        var inheritedProfile: LibraryBackupProfile? = null
-        var archiveCreatedAt = System.currentTimeMillis()
+        var manifest: JSONObject? = null
+        var booksPayload: JSONObject? = null
+        var readingPayload: JSONObject? = null
+        var learningPayload: JSONObject? = null
+        var settingsPayload: JSONObject? = null
+        var extractedBytes = 0L
+        val seenEntries = mutableSetOf<String>()
 
-        // Publication bytes are staged first because a book row is worthless
-        // without its file, and zip entries arrive in whatever order they were
-        // written.
+        // Nothing is written to Room, SharedPreferences or the immutable
+        // publication store until the whole archive has been parsed and
+        // validated. Zip entries may arrive in any order.
         val stagedFiles = mutableMapOf<String, File>()
         val stagingDirectory = File(context.cacheDir, "backup-restore-${System.nanoTime()}")
-        stagingDirectory.mkdirs()
+        check(stagingDirectory.mkdirs()) { "无法准备备份恢复。" }
 
         try {
-            var pendingBooks: List<BookEntity> = emptyList()
             ZipInputStream(stream.buffered()).use { zip ->
                 var entry: ZipEntry? = zip.nextEntry
                 while (entry != null) {
                     val name = entry.name
+                    if (!seenEntries.add(name) || entry.isDirectory) {
+                        throw BackupFailure("这个备份包含重复或无效的文件条目。")
+                    }
                     when {
                         name == ENTRY_MANIFEST -> {
-                            val manifest = JSONObject(zip.readText())
-                            if (manifest.optString("format") != ARCHIVE_FORMAT) {
-                                throw BackupFailure("这个文件不是有效的 Jerreader 备份，或者已经损坏。")
-                            }
-                            if (manifest.optInt("formatVersion", 1) > ARCHIVE_VERSION) {
-                                throw BackupFailure("这个备份来自更新版本的 Jerreader，请先升级 App。")
-                            }
-                            manifest.optLong("createdAt", 0L)
-                                .takeIf { it > 0L }
-                                ?.let { archiveCreatedAt = it }
-                            inheritedProfile = parseBackupProfile(manifest)
-                            manifestSeen = true
+                            val bytes = zip.readEntryBytes(
+                                AndroidBackupRestorePolicy.MAXIMUM_METADATA_BYTES
+                            )
+                            extractedBytes = checkedRestoreBytes(extractedBytes, bytes.size.toLong())
+                            manifest = JSONObject(bytes.toString(Charsets.UTF_8))
                         }
 
                         name == ENTRY_BOOKS -> {
-                            pendingBooks = JSONObject(zip.readText())
-                                .optJSONArray("books")
-                                .toObjectList()
-                                .map(::bookEntity)
+                            val bytes = zip.readEntryBytes(
+                                AndroidBackupRestorePolicy.MAXIMUM_METADATA_BYTES
+                            )
+                            extractedBytes = checkedRestoreBytes(extractedBytes, bytes.size.toLong())
+                            booksPayload = JSONObject(bytes.toString(Charsets.UTF_8))
                         }
 
                         name == ENTRY_READING -> {
-                            val payload = JSONObject(zip.readText())
-                            val dao = database.readerRecordDao()
-                            val bookmarkRows = payload.optJSONArray("bookmarks")
-                                .toObjectList()
-                                .map(::bookmarkEntity)
-                            val annotationRows = payload.optJSONArray("annotations")
-                                .toObjectList()
-                                .map(::annotationEntity)
-                            val insertedBookmarks = dao
-                                .insertBookmarksIgnoringExisting(bookmarkRows)
-                                .count { it >= 0 }
-                            val insertedAnnotations = dao
-                                .insertAnnotationsIgnoringExisting(annotationRows)
-                                .count { it >= 0 }
-                            bookmarks = insertedBookmarks
-                            annotations = insertedAnnotations
-                            skipped += (bookmarkRows.size - insertedBookmarks) +
-                                (annotationRows.size - insertedAnnotations)
+                            val bytes = zip.readEntryBytes(
+                                AndroidBackupRestorePolicy.MAXIMUM_METADATA_BYTES
+                            )
+                            extractedBytes = checkedRestoreBytes(extractedBytes, bytes.size.toLong())
+                            readingPayload = JSONObject(bytes.toString(Charsets.UTF_8))
                         }
 
                         name == ENTRY_LEARNING -> {
-                            val payload = JSONObject(zip.readText())
-                            val dao = database.learningDao()
-                            val wordRows = payload.optJSONArray("words")
-                                .toObjectList()
-                                .map(::wordEntity)
-                            val favoriteRows = payload.optJSONArray("favorites")
-                                .toObjectList()
-                                .map(::favoriteEntity)
-                            val insertedWords = dao
-                                .insertWordsIgnoringExisting(wordRows)
-                                .count { it >= 0 }
-                            val insertedFavorites = dao
-                                .insertTranslationFavoritesIgnoringExisting(favoriteRows)
-                                .count { it >= 0 }
-                            words = insertedWords
-                            favorites = insertedFavorites
-                            skipped += (wordRows.size - insertedWords) +
-                                (favoriteRows.size - insertedFavorites)
+                            val bytes = zip.readEntryBytes(
+                                AndroidBackupRestorePolicy.MAXIMUM_METADATA_BYTES
+                            )
+                            extractedBytes = checkedRestoreBytes(extractedBytes, bytes.size.toLong())
+                            learningPayload = JSONObject(bytes.toString(Charsets.UTF_8))
                         }
 
                         name == ENTRY_SETTINGS -> {
-                            applySettings(JSONObject(zip.readText()))
-                            restoredSettings = true
+                            val bytes = zip.readEntryBytes(
+                                AndroidBackupRestorePolicy.MAXIMUM_METADATA_BYTES
+                            )
+                            extractedBytes = checkedRestoreBytes(extractedBytes, bytes.size.toLong())
+                            settingsPayload = JSONObject(bytes.toString(Charsets.UTF_8))
                         }
 
-                        name.startsWith(DIRECTORY_PUBLICATIONS) ||
-                            name.startsWith(DIRECTORY_COVERS) -> {
-                            val staged = File(stagingDirectory, name.substringAfterLast('/'))
-                            staged.outputStream().use { output -> zip.copyTo(output) }
+                        name.startsWith(DIRECTORY_PUBLICATIONS) -> {
+                            val leafName = name.removePrefix(DIRECTORY_PUBLICATIONS)
+                            if (!AndroidBackupRestorePolicy.isSafeLeafName(leafName)) {
+                                throw BackupFailure("这个备份包含不安全的书籍文件名。")
+                            }
+                            val staged = File(stagingDirectory, UUID.randomUUID().toString())
+                            val count = zip.copyEntryTo(
+                                staged,
+                                AndroidBackupRestorePolicy.MAXIMUM_PUBLICATION_BYTES
+                            )
+                            extractedBytes = checkedRestoreBytes(extractedBytes, count)
                             stagedFiles[name] = staged
                         }
+
+                        name.startsWith(DIRECTORY_COVERS) -> {
+                            val leafName = name.removePrefix(DIRECTORY_COVERS)
+                            if (!AndroidBackupRestorePolicy.isSafeLeafName(leafName)) {
+                                throw BackupFailure("这个备份包含不安全的封面文件名。")
+                            }
+                            val staged = File(stagingDirectory, UUID.randomUUID().toString())
+                            val count = zip.copyEntryTo(
+                                staged,
+                                AndroidBackupRestorePolicy.MAXIMUM_COVER_BYTES
+                            )
+                            extractedBytes = checkedRestoreBytes(extractedBytes, count)
+                            stagedFiles[name] = staged
+                        }
+
+                        else -> throw BackupFailure("这个备份包含无法识别的文件条目。")
                     }
                     zip.closeEntry()
                     entry = zip.nextEntry
                 }
             }
 
-            if (!manifestSeen) {
+            val resolvedManifest = manifest ?: run {
+                throw BackupFailure("这个文件不是有效的 Jerreader 备份，或者已经损坏。")
+            }
+            if (resolvedManifest.optString("format") != ARCHIVE_FORMAT) {
+                throw BackupFailure("这个文件不是有效的 Jerreader 备份，或者已经损坏。")
+            }
+            val archiveVersion = resolvedManifest.optInt("formatVersion", ARCHIVE_VERSION)
+            if (!AndroidBackupRestorePolicy.isSupportedArchiveVersion(archiveVersion)) {
+                if (archiveVersion > ARCHIVE_VERSION) {
+                    throw BackupFailure("这个备份来自更新版本的 Jerreader，请先升级 App。")
+                }
                 throw BackupFailure("这个文件不是有效的 Jerreader 备份，或者已经损坏。")
             }
 
-            if (pendingBooks.isNotEmpty()) {
-                val restorable = pendingBooks.filter { book ->
-                    stagedFiles.containsKey("$DIRECTORY_PUBLICATIONS${book.publicationFileName}")
-                }
-                restorable.forEach { book ->
-                    stagedFiles["$DIRECTORY_PUBLICATIONS${book.publicationFileName}"]?.copyTo(
-                        publicationStore.resolvePublication(book.publicationFileName)
-                            .also { it.parentFile?.mkdirs() },
-                        overwrite = true
-                    )
-                    book.coverFileName?.let { coverName ->
-                        stagedFiles["$DIRECTORY_COVERS$coverName"]?.copyTo(
-                            publicationStore.resolveCover(coverName)
-                                .also { it.parentFile?.mkdirs() },
-                            overwrite = true
-                        )
-                    }
-                }
-                val inserted = database.bookDao()
-                    .insertIgnoringExisting(restorable)
-                    .count { it >= 0 }
-                books = inserted
-                skipped += pendingBooks.size - inserted
+            val scopes = validateArchiveScopes(
+                manifest = resolvedManifest,
+                hasBooks = booksPayload != null,
+                hasReading = readingPayload != null,
+                hasLearning = learningPayload != null,
+                hasSettings = settingsPayload != null
+            )
+            val pendingBooks = booksPayload?.optJSONArray("books")
+                .toObjectList()
+                .map(::bookEntity)
+                .orEmpty()
+            val pendingBookmarks = readingPayload?.optJSONArray("bookmarks")
+                .toObjectList()
+                .map(::bookmarkEntity)
+                .orEmpty()
+            val pendingAnnotations = readingPayload?.optJSONArray("annotations")
+                .toObjectList()
+                .map(::annotationEntity)
+                .orEmpty()
+            val pendingWords = learningPayload?.optJSONArray("words")
+                .toObjectList()
+                .map(::wordEntity)
+                .orEmpty()
+            val pendingFavorites = learningPayload?.optJSONArray("favorites")
+                .toObjectList()
+                .map(::favoriteEntity)
+                .orEmpty()
+            val totalRecords = pendingBooks.size.toLong() + pendingBookmarks.size +
+                pendingAnnotations.size + pendingWords.size + pendingFavorites.size
+            if (totalRecords > AndroidBackupRestorePolicy.MAXIMUM_RECORD_COUNT ||
+                !AndroidBackupRestorePolicy.haveUniqueIds(pendingBooks) ||
+                pendingBooks.any { !AndroidBackupRestorePolicy.isValidBook(it) }
+            ) {
+                throw BackupFailure("这个备份包含无效或过多的记录。")
             }
+
+            val restored = restoreValidatedPayload(
+                scopes = scopes,
+                books = pendingBooks,
+                bookmarks = pendingBookmarks,
+                annotations = pendingAnnotations,
+                words = pendingWords,
+                favorites = pendingFavorites,
+                stagedFiles = stagedFiles
+            )
+
+            if (LibraryBackupScope.SETTINGS in scopes && settingsPayload != null) {
+                applySettings(settingsPayload)
+            }
+
+            val archiveCreatedAt = resolvedManifest.optLong("createdAt", 0L)
+                .takeIf { it > 0L }
+                ?: System.currentTimeMillis()
+            val inheritedProfile = parseBackupProfile(resolvedManifest)
+            var adoptedFolderName: String? = null
+            var suggestedFolderUri: Uri? = null
+            var suggestedFolderName: String? = null
+            if (inheritedProfile != null) {
+                policyStore.applyInherited(inheritedProfile, archiveCreatedAt)
+                val (adopted, suggestedUri, suggestedName) = inheritFolder(inheritedProfile)
+                adoptedFolderName = adopted
+                suggestedFolderUri = suggestedUri
+                suggestedFolderName = suggestedName
+            }
+
+            return restored.copy(
+                restoredSettings = LibraryBackupScope.SETTINGS in scopes && settingsPayload != null,
+                inheritedProfile = inheritedProfile,
+                adoptedFolderName = adoptedFolderName,
+                suggestedFolderUri = suggestedFolderUri,
+                suggestedFolderName = suggestedFolderName
+            )
         } finally {
             stagingDirectory.deleteRecursively()
         }
+    }
 
-        // Applied only once the payload is in: a restore that threw halfway
-        // must not leave the user with someone else's backup schedule.
-        val profile = inheritedProfile
-        var adoptedFolderName: String? = null
-        var suggestedFolderUri: Uri? = null
-        var suggestedFolderName: String? = null
-        if (profile != null) {
-            policyStore.applyInherited(profile, archiveCreatedAt)
-            val (adopted, suggestedUri, suggestedName) = inheritFolder(profile)
-            adoptedFolderName = adopted
-            suggestedFolderUri = suggestedUri
-            suggestedFolderName = suggestedName
+    private suspend fun restoreValidatedPayload(
+        scopes: Set<LibraryBackupScope>,
+        books: List<BookEntity>,
+        bookmarks: List<ReadingBookmarkEntity>,
+        annotations: List<ReadingAnnotationEntity>,
+        words: List<WordLookupEntity>,
+        favorites: List<TranslationFavoriteEntity>,
+        stagedFiles: Map<String, File>
+    ): RestoreResult {
+        data class NewBook(val entity: BookEntity, val publication: File, val cover: File?)
+
+        val existingBooks = database.bookDao().allBooks()
+        val knownByFingerprint = existingBooks.associateBy(BookEntity::fingerprint).toMutableMap()
+        val knownBySourceFingerprint = existingBooks
+            .associateBy(BookEntity::sourceFingerprint)
+            .toMutableMap()
+        val usedIds = existingBooks.mapTo(mutableSetOf(), BookEntity::id)
+        val occupiedPublications = existingBooks.mapTo(mutableSetOf(), BookEntity::publicationFileName)
+        val occupiedCovers = existingBooks.mapNotNullTo(mutableSetOf(), BookEntity::coverFileName)
+        val bookIdMap = existingBooks.associate { it.id to it.id }.toMutableMap()
+        val bookTitleMap = existingBooks.associate { it.id to it.title }.toMutableMap()
+        val newBooks = mutableListOf<NewBook>()
+
+        if (LibraryBackupScope.LIBRARY in scopes) {
+            books.forEach { book ->
+                val existing = knownByFingerprint[book.fingerprint]
+                    ?: knownBySourceFingerprint[book.sourceFingerprint]
+                if (existing != null) {
+                    bookIdMap[book.id] = existing.id
+                    bookTitleMap[book.id] = existing.title
+                    return@forEach
+                }
+
+                val publication = stagedFiles[
+                    "$DIRECTORY_PUBLICATIONS${book.publicationFileName}"
+                ] ?: return@forEach
+                if (publication.length() != book.fileSize ||
+                    PublicationIntegrity.capture(publication).sha256 != book.fingerprint.lowercase()
+                ) {
+                    throw BackupFailure("备份中的书籍文件校验失败。")
+                }
+
+                val restoredId = runCatching { UUID.fromString(book.id).toString() }
+                    .getOrNull()
+                    ?.takeIf { usedIds.add(it) }
+                    ?: generateSequence { UUID.randomUUID().toString() }
+                        .first { usedIds.add(it) }
+                val publicationExtension = book.publicationFileName.substringAfterLast('.')
+                val publicationName = AndroidBackupRestorePolicy.uniqueLeafName(
+                    restoredId,
+                    publicationExtension,
+                    occupiedPublications
+                )
+                val coverSource = book.coverFileName?.let { coverName ->
+                    stagedFiles["$DIRECTORY_COVERS$coverName"]
+                }
+                val coverName = coverSource?.let {
+                    AndroidBackupRestorePolicy.uniqueLeafName(
+                        "$restoredId-cover",
+                        book.coverFileName.orEmpty().substringAfterLast('.', "jpg"),
+                        occupiedCovers
+                    )
+                }
+                val restoredBook = book.copy(
+                    id = restoredId,
+                    publicationFileName = publicationName,
+                    coverFileName = coverName
+                )
+                bookIdMap[book.id] = restoredId
+                bookTitleMap[book.id] = restoredBook.title
+                knownByFingerprint[restoredBook.fingerprint] = restoredBook
+                knownBySourceFingerprint[restoredBook.sourceFingerprint] = restoredBook
+                newBooks += NewBook(restoredBook, publication, coverSource)
+            }
         }
 
-        return RestoreResult(
-            books = books,
-            bookmarks = bookmarks,
-            annotations = annotations,
-            words = words,
-            translationFavorites = favorites,
-            restoredSettings = restoredSettings,
-            skippedExisting = skipped,
-            inheritedProfile = profile,
-            adoptedFolderName = adoptedFolderName,
-            suggestedFolderUri = suggestedFolderUri,
-            suggestedFolderName = suggestedFolderName
-        )
+        val createdFiles = mutableListOf<File>()
+        try {
+            newBooks.forEach { plan ->
+                val publication = publicationStore.resolvePublication(plan.entity.publicationFileName)
+                check(publication.parentFile?.let { it.exists() || it.mkdirs() } == true) {
+                    "无法准备书籍目录。"
+                }
+                plan.publication.copyTo(publication, overwrite = false)
+                createdFiles += publication
+                if (!publication.setReadOnly()) {
+                    throw BackupFailure("无法保护恢复后的书籍文件。")
+                }
+                plan.entity.coverFileName?.let { coverName ->
+                    val cover = publicationStore.resolveCover(coverName)
+                    check(cover.parentFile?.let { it.exists() || it.mkdirs() } == true) {
+                        "无法准备封面目录。"
+                    }
+                    plan.cover?.copyTo(cover, overwrite = false)
+                    if (cover.exists()) createdFiles += cover
+                }
+            }
+
+            var insertedBookmarks = 0
+            var insertedAnnotations = 0
+            var insertedWords = 0
+            var insertedFavorites = 0
+            database.withTransaction {
+                newBooks.forEach { database.bookDao().insert(it.entity) }
+
+                if (LibraryBackupScope.READING in scopes) {
+                    val mappedBookmarks = bookmarks.mapNotNull { record ->
+                        val bookId = bookIdMap[record.bookId] ?: return@mapNotNull null
+                        val key = AndroidReaderRecordKeys.bookmark(bookId, record.locatorJson)
+                            ?: return@mapNotNull null
+                        record.copy(
+                            id = UUID.randomUUID().toString(),
+                            bookmarkKey = key,
+                            bookId = bookId,
+                            bookTitle = bookTitleMap[record.bookId] ?: record.bookTitle
+                        )
+                    }
+                    val mappedAnnotations = annotations.mapNotNull { record ->
+                        val bookId = bookIdMap[record.bookId] ?: return@mapNotNull null
+                        record.copy(
+                            id = UUID.randomUUID().toString(),
+                            annotationKey = AndroidReaderRecordKeys.annotation(
+                                bookId,
+                                record.locatorJson,
+                                record.selectedText
+                            ),
+                            bookId = bookId,
+                            bookTitle = bookTitleMap[record.bookId] ?: record.bookTitle
+                        )
+                    }
+                    insertedBookmarks = database.readerRecordDao()
+                        .insertBookmarksIgnoringExisting(mappedBookmarks)
+                        .count { it >= 0 }
+                    insertedAnnotations = database.readerRecordDao()
+                        .insertAnnotationsIgnoringExisting(mappedAnnotations)
+                        .count { it >= 0 }
+                }
+
+                if (LibraryBackupScope.LEARNING in scopes) {
+                    val mappedWords = words.map { record ->
+                        val mappedBookId = record.sourceBookId?.let(bookIdMap::get)
+                        record.copy(
+                            sourceBookId = mappedBookId,
+                            sourceBookTitle = mappedBookId?.let {
+                                bookTitleMap[record.sourceBookId]
+                            }
+                        )
+                    }
+                    val mappedFavorites = favorites.map { record ->
+                        val mappedBookId = record.bookId?.let(bookIdMap::get)
+                        record.copy(
+                            bookId = mappedBookId,
+                            bookTitle = mappedBookId?.let {
+                                bookTitleMap[record.bookId]
+                            }
+                        )
+                    }
+                    insertedWords = database.learningDao()
+                        .insertWordsIgnoringExisting(mappedWords)
+                        .count { it >= 0 }
+                    insertedFavorites = database.learningDao()
+                        .insertTranslationFavoritesIgnoringExisting(mappedFavorites)
+                        .count { it >= 0 }
+                }
+            }
+
+            val insertedBooks = newBooks.size
+            val totalExpected = books.size + bookmarks.size + annotations.size +
+                words.size + favorites.size
+            val totalInserted = insertedBooks + insertedBookmarks + insertedAnnotations +
+                insertedWords + insertedFavorites
+            return RestoreResult(
+                books = insertedBooks,
+                bookmarks = insertedBookmarks,
+                annotations = insertedAnnotations,
+                words = insertedWords,
+                translationFavorites = insertedFavorites,
+                restoredSettings = false,
+                skippedExisting = (totalExpected - totalInserted).coerceAtLeast(0)
+            )
+        } catch (error: Throwable) {
+            createdFiles.asReversed().forEach { file ->
+                if (file.extension.lowercase() in setOf("epub", "pdf")) file.setWritable(true)
+                file.delete()
+            }
+            throw error
+        }
+    }
+
+    private fun validateArchiveScopes(
+        manifest: JSONObject,
+        hasBooks: Boolean,
+        hasReading: Boolean,
+        hasLearning: Boolean,
+        hasSettings: Boolean
+    ): Set<LibraryBackupScope> {
+        val declared = manifest.optJSONArray("scopes")?.let { array ->
+            val names = (0 until array.length()).map { array.optString(it) }
+            val scopes = names.mapNotNull { name ->
+                LibraryBackupScope.entries.firstOrNull { it.name == name }
+            }.toSet()
+            if (scopes.size != names.size) {
+                throw BackupFailure("这个备份包含当前版本无法识别的数据范围。")
+            }
+            scopes
+        }
+        val inferred = buildSet {
+            if (hasBooks) add(LibraryBackupScope.LIBRARY)
+            if (hasReading) add(LibraryBackupScope.READING)
+            if (hasLearning) add(LibraryBackupScope.LEARNING)
+            if (hasSettings) add(LibraryBackupScope.SETTINGS)
+        }
+        if (declared != null && declared != inferred) {
+            throw BackupFailure("备份声明的数据范围与实际内容不一致。")
+        }
+        return declared ?: inferred
+    }
+
+    private fun checkedRestoreBytes(current: Long, added: Long): Long {
+        val total = current + added
+        if (added < 0 || total < current ||
+            total > AndroidBackupRestorePolicy.MAXIMUM_RESTORE_BYTES
+        ) {
+            throw BackupFailure("这个备份过大，无法安全恢复。")
+        }
+        return total
     }
 
     // MARK: - Settings, minus every secret
@@ -443,8 +711,14 @@ class LibraryBackupService(
         val translation = translationSettings.preferences.value
         return JSONObject()
             .put("theme", app.theme.name)
+            .put("appearanceMode", app.appearanceMode.id)
             .put("showReadingProgress", app.showReadingProgress)
+            .put("learningModuleVisible", app.learningModuleVisible)
             .put("applyReaderDefaultsToExistingBooks", app.applyReaderDefaultsToExistingBooks)
+            .put(
+                "colorPresets",
+                com.jerreader.unified.library.ReaderColorPresetStore.encode(app.colorPresets)
+            )
             .put(
                 "readerAppearance",
                 JSONObject()
@@ -483,6 +757,7 @@ class LibraryBackupService(
                     .put("translationHapticsEnabled", translation.translationHapticsEnabled)
                     .put("automaticRetryEnabled", translation.automaticRetryEnabled)
                     .put("fallbackMode", translation.fallbackMode.name)
+                    .put("preferAIWhenConfigured", translation.preferAIWhenConfigured)
                     .put("translationPromptTemplate", translation.translationPromptTemplate)
                     .put("grammarAnalysisPromptTemplate", translation.grammarAnalysisPromptTemplate)
             )
@@ -497,7 +772,7 @@ class LibraryBackupService(
 
     private fun listBackups(directory: DocumentFile): List<LibraryBackupArchiveInfo> =
         directory.listFiles()
-            .filter { it.isFile && it.name?.endsWith(ARCHIVE_SUFFIX) == true }
+            .filter { it.isFile && LibraryBackupNaming.isArchiveName(it.name.orEmpty()) }
             .map {
                 LibraryBackupArchiveInfo(
                     name = it.name.orEmpty(),
@@ -518,8 +793,8 @@ class LibraryBackupService(
 
     private companion object {
         const val ARCHIVE_FORMAT = "jerreader.backup"
-        const val ARCHIVE_VERSION = 1
-        const val ARCHIVE_SUFFIX = ".jerbackup.zip"
+        const val ARCHIVE_VERSION = AndroidBackupRestorePolicy.SUPPORTED_ARCHIVE_VERSION
+        val ARCHIVE_SUFFIX = LibraryBackupNaming.ARCHIVE_SUFFIX
         const val ENTRY_MANIFEST = "manifest.json"
         const val ENTRY_BOOKS = "library/books.json"
         const val ENTRY_READING = "reading/records.json"
@@ -687,6 +962,7 @@ private fun wordJson(record: WordLookupEntity) = JSONObject()
     .put("partOfSpeech", record.partOfSpeech)
     .put("definitionsText", record.definitionsText)
     .put("inflectionNote", record.inflectionNote)
+    .put("examplesText", record.examplesText)
     .put("usageNote", record.usageNote)
     .put("aiAnalysis", record.aiAnalysis)
     .put("aiProviderIdentifier", record.aiProviderIdentifier)
@@ -699,6 +975,14 @@ private fun wordJson(record: WordLookupEntity) = JSONObject()
     .put("lastLookedUpAtEpochMillis", record.lastLookedUpAtEpochMillis)
     .put("isFavorite", record.isFavorite)
     .put("isInHistory", record.isInHistory)
+    .put("vocabularyStatus", record.vocabularyStatus)
+    .put("contextHistoryText", record.contextHistoryText)
+    .put("reviewCount", record.reviewCount)
+    .put("reviewStage", record.reviewStage)
+    .put("reviewIntervalDays", record.reviewIntervalDays)
+    .put("reviewLapseCount", record.reviewLapseCount)
+    .put("lastReviewedAtEpochMillis", record.lastReviewedAtEpochMillis)
+    .put("nextReviewAtEpochMillis", record.nextReviewAtEpochMillis)
 
 private fun wordEntity(json: JSONObject) = WordLookupEntity(
     lookupKey = json.getString("lookupKey"),
@@ -709,6 +993,7 @@ private fun wordEntity(json: JSONObject) = WordLookupEntity(
     partOfSpeech = json.optStringOrNull("partOfSpeech"),
     definitionsText = json.optString("definitionsText"),
     inflectionNote = json.optStringOrNull("inflectionNote"),
+    examplesText = json.optString("examplesText", ""),
     usageNote = json.optStringOrNull("usageNote"),
     aiAnalysis = json.optStringOrNull("aiAnalysis"),
     aiProviderIdentifier = json.optStringOrNull("aiProviderIdentifier"),
@@ -720,7 +1005,21 @@ private fun wordEntity(json: JSONObject) = WordLookupEntity(
     createdAtEpochMillis = json.optLong("createdAtEpochMillis"),
     lastLookedUpAtEpochMillis = json.optLong("lastLookedUpAtEpochMillis"),
     isFavorite = json.optBoolean("isFavorite"),
-    isInHistory = json.optBoolean("isInHistory", true)
+    isInHistory = json.optBoolean("isInHistory", true),
+    vocabularyStatus = json.optString(
+        "vocabularyStatus",
+        if (json.optBoolean("isFavorite")) "learning" else "new"
+    ),
+    contextHistoryText = json.optString(
+        "contextHistoryText",
+        json.optStringOrNull("sentenceContext").orEmpty()
+    ),
+    reviewCount = json.optInt("reviewCount", 0),
+    reviewStage = json.optInt("reviewStage", 0),
+    reviewIntervalDays = json.optInt("reviewIntervalDays", 0),
+    reviewLapseCount = json.optInt("reviewLapseCount", 0),
+    lastReviewedAtEpochMillis = json.optLong("lastReviewedAtEpochMillis", 0),
+    nextReviewAtEpochMillis = json.optLong("nextReviewAtEpochMillis", 0)
 )
 
 private fun favoriteJson(record: TranslationFavoriteEntity) = JSONObject()
@@ -772,4 +1071,36 @@ private fun ZipOutputStream.writeFile(name: String, file: File) {
     closeEntry()
 }
 
-private fun ZipInputStream.readText(): String = readBytes().toString(Charsets.UTF_8)
+private fun ZipInputStream.readEntryBytes(maximumBytes: Long): ByteArray {
+    val output = ByteArrayOutputStream()
+    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+    var total = 0L
+    while (true) {
+        val count = read(buffer)
+        if (count < 0) break
+        total += count
+        if (total > maximumBytes) {
+            throw BackupFailure("备份中的数据条目过大。")
+        }
+        output.write(buffer, 0, count)
+    }
+    return output.toByteArray()
+}
+
+private fun ZipInputStream.copyEntryTo(destination: File, maximumBytes: Long): Long {
+    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+    var total = 0L
+    destination.outputStream().use { output ->
+        while (true) {
+            val count = read(buffer)
+            if (count < 0) break
+            total += count
+            if (total > maximumBytes) {
+                throw BackupFailure("备份中的文件条目过大。")
+            }
+            output.write(buffer, 0, count)
+        }
+        output.flush()
+    }
+    return total
+}

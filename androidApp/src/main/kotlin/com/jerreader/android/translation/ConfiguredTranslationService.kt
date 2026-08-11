@@ -1,18 +1,18 @@
 package com.jerreader.android.translation
 
-import com.jerreader.shared.domain.LanguageCode
-import com.jerreader.shared.translation.DirectAIProtocol
-import com.jerreader.shared.translation.ContextExplanationRequest
-import com.jerreader.shared.translation.ContextExplanationResult
-import com.jerreader.shared.translation.ContextExplanationService
-import com.jerreader.shared.translation.TranslationFailure
-import com.jerreader.shared.translation.TranslationInputPolicy
-import com.jerreader.shared.translation.TranslationProviderMode
-import com.jerreader.shared.translation.TranslationRequest
-import com.jerreader.shared.translation.TranslationResult
-import com.jerreader.shared.translation.TranslationService
-import com.jerreader.shared.translation.renderedPrompt
-import com.jerreader.shared.translation.renderedGrammarPrompt
+import com.jerreader.unified.domain.LanguageCode
+import com.jerreader.unified.translation.DirectAIProtocol
+import com.jerreader.unified.translation.ContextExplanationRequest
+import com.jerreader.unified.translation.ContextExplanationResult
+import com.jerreader.unified.translation.ContextExplanationService
+import com.jerreader.unified.translation.TranslationFailure
+import com.jerreader.unified.translation.TranslationInputPolicy
+import com.jerreader.unified.translation.TranslationProviderMode
+import com.jerreader.unified.translation.TranslationRequest
+import com.jerreader.unified.translation.TranslationResult
+import com.jerreader.unified.translation.TranslationService
+import com.jerreader.unified.translation.renderedPrompt
+import com.jerreader.unified.translation.renderedGrammarPrompt
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URI
@@ -74,8 +74,8 @@ class ConfiguredTranslationService(
     ): TranslationResult {
         val text = TranslationInputPolicy.validate(request.text)
         val normalizedRequest = request.copy(text = text)
-        val preferences = settings.preferences.value
-        val mode = override?.providerMode ?: preferences.providerMode
+        val plan = settings.providerPlan()
+        val mode = override?.providerMode ?: plan.primary
         return try {
             translateUsing(mode, normalizedRequest, override?.promptTemplate)
         } catch (error: CancellationException) {
@@ -88,8 +88,8 @@ class ConfiguredTranslationService(
             ) {
                 throw error
             }
-            val fallback = preferences.fallbackMode.providerMode
-            if (fallback == null || fallback == preferences.providerMode) throw error
+            val fallback = plan.fallback
+            if (fallback == null || fallback == mode) throw error
             translateUsing(fallback, normalizedRequest, null)
         }
     }

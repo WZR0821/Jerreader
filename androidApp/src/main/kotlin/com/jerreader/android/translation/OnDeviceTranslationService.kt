@@ -5,12 +5,14 @@ import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.TranslatorOptions
-import com.jerreader.shared.domain.LanguageCode
-import com.jerreader.shared.translation.TranslationFailure
-import com.jerreader.shared.translation.TranslationInputPolicy
-import com.jerreader.shared.translation.TranslationRequest
-import com.jerreader.shared.translation.TranslationResult
-import com.jerreader.shared.translation.TranslationService
+import com.jerreader.unified.domain.LanguageCode
+import com.jerreader.unified.translation.OnDeviceTranslationPlan
+import com.jerreader.unified.translation.TranslationFailure
+import com.jerreader.unified.translation.TranslationInputPolicy
+import com.jerreader.unified.translation.TranslationLanguageHeuristic
+import com.jerreader.unified.translation.TranslationRequest
+import com.jerreader.unified.translation.TranslationResult
+import com.jerreader.unified.translation.TranslationService
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CancellationException
@@ -25,8 +27,12 @@ class OnDeviceTranslationService : TranslationService {
 
     override suspend fun translate(request: TranslationRequest): TranslationResult {
         val text = TranslationInputPolicy.validate(request.text)
-        val source = request.sourceLanguage ?: detectLanguage(text)
+        val source = request.sourceLanguage ?: TranslationLanguageHeuristic.detect(text)
         if (source == request.targetLanguage) throw TranslationFailure.UnsupportedLanguage
+        // The model works a sentence at a time; a whole selection handed over in
+        // one call comes back truncated or half-translated.
+        val segments = OnDeviceTranslationPlan.segments(text, source)
+        if (segments.isEmpty()) throw TranslationFailure.EmptyInput
         val options = TranslatorOptions.Builder()
             .setSourceLanguage(source.mlKitTag())
             .setTargetLanguage(request.targetLanguage.mlKitTag())
@@ -34,7 +40,11 @@ class OnDeviceTranslationService : TranslationService {
         val translator = Translation.getClient(options)
         try {
             translator.downloadModelIfNeeded(DownloadConditions.Builder().build()).await()
-            val translated = translator.translate(text).await().trim()
+            val parts = segments.map { segment -> translator.translate(segment).await().trim() }
+            val translated = OnDeviceTranslationPlan.joinedTranslation(
+                parts = parts,
+                target = request.targetLanguage
+            )
             if (!TranslationInputPolicy.isVisiblyNonEmpty(translated)) {
                 throw TranslationFailure.ServiceUnavailable
             }
@@ -59,12 +69,6 @@ class OnDeviceTranslationService : TranslationService {
         LanguageCode.CHINESE_SIMPLIFIED -> TranslateLanguage.CHINESE
         LanguageCode.ENGLISH -> TranslateLanguage.ENGLISH
         LanguageCode.JAPANESE -> TranslateLanguage.JAPANESE
-    }
-
-    private fun detectLanguage(text: String): LanguageCode = when {
-        text.any { it in '\u3040'..'\u30ff' } -> LanguageCode.JAPANESE
-        text.any { it in '\u3400'..'\u9fff' } -> LanguageCode.CHINESE_SIMPLIFIED
-        else -> LanguageCode.ENGLISH
     }
 }
 

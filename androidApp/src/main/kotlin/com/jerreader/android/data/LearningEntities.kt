@@ -8,7 +8,8 @@ import androidx.room.PrimaryKey
     tableName = "word_lookup_records",
     indices = [
         Index(value = ["lastLookedUpAtEpochMillis"]),
-        Index(value = ["sourceBookId"])
+        Index(value = ["sourceBookId"]),
+        Index(value = ["nextReviewAtEpochMillis"])
     ]
 )
 data class WordLookupEntity(
@@ -20,6 +21,8 @@ data class WordLookupEntity(
     val partOfSpeech: String?,
     val definitionsText: String,
     val inflectionNote: String?,
+    /** Encoded WordExample rows; added because 1.4 only persisted examples on iOS. */
+    val examplesText: String = "",
     val usageNote: String?,
     val aiAnalysis: String?,
     val aiProviderIdentifier: String?,
@@ -31,7 +34,18 @@ data class WordLookupEntity(
     val createdAtEpochMillis: Long,
     val lastLookedUpAtEpochMillis: Long,
     val isFavorite: Boolean,
-    val isInHistory: Boolean
+    val isInHistory: Boolean,
+    /** Stable id from core VocabularyStatus; existing favourites migrate to learning. */
+    val vocabularyStatus: String = "new",
+    /** Newest-first, bounded source sentences encoded by VocabularyLearningPolicy. */
+    val contextHistoryText: String = "",
+    val reviewCount: Int = 0,
+    val reviewStage: Int = 0,
+    val reviewIntervalDays: Int = 0,
+    val reviewLapseCount: Int = 0,
+    /** Zero means never reviewed and therefore eligible for the new-card queue. */
+    val lastReviewedAtEpochMillis: Long = 0,
+    val nextReviewAtEpochMillis: Long = 0
 )
 
 @Entity(

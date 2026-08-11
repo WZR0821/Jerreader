@@ -16,7 +16,17 @@ val keystoreProperties = Properties().apply {
     }
 }
 
+// One version for both platforms, read from the repository root. See
+// `version.properties` and `iosApp/Scripts/sync-version.sh`.
+val jerreaderVersion = Properties().apply {
+    rootProject.file("version.properties").inputStream().use { load(it) }
+}
+
 android {
+    // The Android host keeps its own package. `applicationId` in particular is
+    // an installed identity: the user's phone already carries books and reading
+    // positions under `com.jerreader.android`, and changing it would install a
+    // second, empty app beside the real one.
     namespace = "com.jerreader.android"
     compileSdk = 36
 
@@ -24,8 +34,8 @@ android {
         applicationId = "com.jerreader.android"
         minSdk = 23
         targetSdk = 36
-        versionCode = 56
-        versionName = "1.3.5"
+        versionCode = jerreaderVersion.getProperty("versionCode").toInt()
+        versionName = jerreaderVersion.getProperty("versionName")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -65,6 +75,16 @@ android {
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
+
+    sourceSets.named("main") {
+        // One generated dictionary asset is consumed by both native hosts.
+        // Keeping the bytes outside either platform tree prevents two releases
+        // from silently shipping different JMdict snapshots.
+        assets.directories.add(rootProject.file("sharedResources").absolutePath)
+    }
+    sourceSets.named("androidTest") {
+        assets.directories.add("schemas")
+    }
 }
 
 ksp {
@@ -74,7 +94,11 @@ ksp {
 dependencies {
     coreLibraryDesugaring(libs.desugar.jdk.libs)
 
-    implementation(project(":shared"))
+    // `:ui` re-exports `:core`, but naming both keeps the dependency honest:
+    // this module calls plenty of `:core` directly, and a future UI-free host
+    // should not be able to lose it silently.
+    implementation(project(":core"))
+    implementation(project(":ui"))
     implementation(libs.androidx.activity.compose)
     implementation(libs.compose.foundation)
     implementation(libs.compose.material3)
@@ -92,6 +116,8 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
 
+    // The reading engine stays native: Readium's Kotlin toolkit renders the
+    // publication, `:core` owns every decision above it.
     implementation(libs.readium.shared)
     implementation(libs.readium.streamer)
     implementation(libs.readium.navigator)
@@ -114,4 +140,5 @@ dependencies {
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.room.testing)
 }

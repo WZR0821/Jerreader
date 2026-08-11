@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.PointF
+import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Bundle
 import android.util.Log
@@ -21,19 +22,18 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.ComponentDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.unit.IntOffset
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -41,7 +41,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.draw.clip
@@ -68,34 +67,43 @@ import com.jerreader.android.data.ReadingAnnotationEntity
 import com.jerreader.android.data.ReadingBookmarkEntity
 import com.jerreader.android.library.PublicationIntegrity
 import com.jerreader.android.library.PublicationSnapshot
-import com.jerreader.shared.domain.BookFormat
-import com.jerreader.shared.library.LibraryBook
-import com.jerreader.shared.library.ReaderAnnotationColor
-import com.jerreader.shared.library.ReaderAppearance
-import com.jerreader.shared.library.ReaderSelectionVisualStyle
-import com.jerreader.shared.library.ReaderTextOrientation
-import com.jerreader.shared.domain.LanguageCode
-import com.jerreader.shared.lexical.WordAnalysis
-import com.jerreader.shared.translation.ContextExplanationRequest
-import com.jerreader.shared.translation.ContextExplanationService
-import com.jerreader.shared.translation.ReaderCrossPageTranslationResolver
-import com.jerreader.shared.translation.TranslationDisplayMode
-import com.jerreader.shared.translation.TranslationRequest
-import com.jerreader.shared.translation.TranslationResult
-import com.jerreader.shared.ui.JerreaderTheme
-import com.jerreader.shared.ui.ReaderAnnotationEditor
-import com.jerreader.shared.ui.ReaderAnnotationItem
-import com.jerreader.shared.ui.ReaderAppearancePanel
-import com.jerreader.shared.ui.ReaderBookmarkItem
-import com.jerreader.shared.ui.ReaderChapter
-import com.jerreader.shared.ui.ReaderNavigationPanel
-import com.jerreader.shared.ui.ReaderSearchResultItem
-import com.jerreader.shared.ui.ReaderBottomChrome
-import com.jerreader.shared.ui.ReaderTopChrome
-import com.jerreader.shared.ui.TranslationCard
-import com.jerreader.shared.ui.TranslationCardState
-import com.jerreader.shared.ui.WordLookupCard
-import com.jerreader.shared.ui.WordLookupCardState
+import com.jerreader.unified.domain.BookFormat
+import com.jerreader.unified.library.LibraryBook
+import com.jerreader.unified.library.ReaderAnnotationColor
+import com.jerreader.unified.library.ReaderAppearance
+import com.jerreader.unified.reader.geometry.ReaderPoint
+import com.jerreader.unified.reader.geometry.ReaderRect
+import com.jerreader.unified.reader.geometry.ReaderSize
+import com.jerreader.unified.reader.overlay.ReaderOverlayPlacement
+import com.jerreader.unified.reader.overlay.ReaderOverlayRequest
+import com.jerreader.unified.reader.overlay.ReaderTranslationLayoutPolicy
+import com.jerreader.unified.reader.selection.ReaderSelectionVisualStyle
+import com.jerreader.unified.reader.selection.ReaderWritingMode
+import com.jerreader.unified.reader.ui.ReaderSelectionHighlightLayer
+import com.jerreader.unified.library.ReaderTextOrientation
+import com.jerreader.unified.domain.LanguageCode
+import com.jerreader.unified.lexical.WordAnalysis
+import com.jerreader.unified.translation.ContextExplanationRequest
+import com.jerreader.unified.translation.ContextExplanationService
+import com.jerreader.unified.translation.QuickTranslationUnit
+import com.jerreader.unified.translation.ReaderCrossPageTranslationResolver
+import com.jerreader.unified.translation.TranslationDisplayMode
+import com.jerreader.unified.translation.TranslationRequest
+import com.jerreader.unified.translation.TranslationResult
+import com.jerreader.unified.ui.JerreaderTheme
+import com.jerreader.unified.ui.ReaderAnnotationEditor
+import com.jerreader.unified.ui.ReaderAnnotationItem
+import com.jerreader.unified.ui.ReaderAppearancePanel
+import com.jerreader.unified.ui.ReaderBookmarkItem
+import com.jerreader.unified.ui.ReaderChapter
+import com.jerreader.unified.ui.ReaderNavigationPanel
+import com.jerreader.unified.ui.ReaderSearchResultItem
+import com.jerreader.unified.ui.ReaderBottomChrome
+import com.jerreader.unified.ui.ReaderTopChrome
+import com.jerreader.unified.ui.TranslationCard
+import com.jerreader.unified.ui.TranslationCardState
+import com.jerreader.unified.ui.WordLookupCard
+import com.jerreader.unified.ui.WordLookupCardState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
@@ -109,6 +117,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import org.json.JSONArray
 import org.json.JSONObject
 import org.readium.adapter.pdfium.navigator.PdfiumEngineProvider
@@ -167,6 +176,15 @@ class ReaderActivity : AppCompatActivity() {
     internal var currentAppearance by mutableStateOf(ReaderAppearance())
         private set
 
+    /**
+     * Whether the top and bottom reader bars are showing.
+     *
+     * iOS has had this since the first reader (`EPUBReaderViewModel.controlsVisible`);
+     * Android pinned both bars permanently on screen because nothing ever
+     * reported a tap that hit no text, so there was no event to toggle on.
+     */
+    private var chromeVisible by mutableStateOf(true)
+
     private var bookmarks by mutableStateOf(emptyList<ReadingBookmarkEntity>())
     private var annotations by mutableStateOf(emptyList<ReadingAnnotationEntity>())
     private var currentProgress by mutableStateOf(0.0)
@@ -210,11 +228,6 @@ class ReaderActivity : AppCompatActivity() {
     private var pdfGeometryScrollListener: ViewTreeObserver.OnScrollChangedListener? = null
     private var pdfGeometryLayoutListener: View.OnLayoutChangeListener? = null
     private var pdfGeometryTouchListener: View.OnTouchListener? = null
-
-    private data class PopupShift(
-        val dx: Float,
-        val dy: Float
-    )
 
     private data class PendingAnnotation(
         val selectedText: String,
@@ -362,8 +375,9 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     private fun showRoot() {
-        val density = resources.displayMetrics.density
-        val root = FrameLayout(this).apply { setBackgroundColor(Color.WHITE) }
+        val root = FrameLayout(this).apply {
+            setBackgroundColor(currentAppearance.pageBackgroundArgb())
+        }
         // iOS lets the page run edge to edge and floats the controls above it.
         val readerContainer = FrameLayout(this).apply { id = R.id.reader_container }
         root.addView(
@@ -383,15 +397,20 @@ class ReaderActivity : AppCompatActivity() {
         )
 
         val topChrome = readerComposeView {
-            ReaderTopChrome(
-                chapterTitle = currentChapterName,
-                bookTitle = book?.title ?: "Jerreader",
-                isBookmarked = isCurrentPositionBookmarked,
-                onClose = onBackPressedDispatcher::onBackPressed,
-                onTableOfContents = ::showNavigationPanel,
-                onToggleBookmark = ::toggleBookmark,
-                onAppearance = ::showAppearance
-            )
+            // `AnimatedVisibility` rather than an alpha fade: a fully
+            // transparent bar still swallows every tap in its band, and this
+            // one sits over the first line of text.
+            ChromeVisibility(enter = slideInVertically { -it }) {
+                ReaderTopChrome(
+                    chapterTitle = currentChapterName,
+                    bookTitle = book?.title ?: "Jerreader",
+                    isBookmarked = isCurrentPositionBookmarked,
+                    onClose = onBackPressedDispatcher::onBackPressed,
+                    onTableOfContents = ::showNavigationPanel,
+                    onToggleBookmark = ::toggleBookmark,
+                    onAppearance = ::showAppearance
+                )
+            }
         }
         root.addView(
             topChrome,
@@ -405,6 +424,7 @@ class ReaderActivity : AppCompatActivity() {
         val bottomChrome = readerComposeView {
             val appPreferences by graph.appSettings.preferences.collectAsState()
             val translationPreferences by graph.translationSettings.preferences.collectAsState()
+            ChromeVisibility(enter = slideInVertically { it }) {
             ReaderBottomChrome(
                 chapterLabel = currentChapterName,
                 progress = currentProgress,
@@ -422,6 +442,7 @@ class ReaderActivity : AppCompatActivity() {
                     )
                 }
             )
+            }
         }
         root.addView(
             bottomChrome,
@@ -461,16 +482,21 @@ class ReaderActivity : AppCompatActivity() {
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             topChrome.updatePadding(top = bars.top)
             bottomChrome.updatePadding(bottom = bars.bottom)
-            // The page keeps clear of the floating cards so text is never hidden
-            // behind them, while the background still reaches the screen edges.
-            readerContainer.updatePadding(
-                top = bars.top + (CONTENT_TOP_INSET_DP * density).toInt(),
-                bottom = bars.bottom + (CONTENT_BOTTOM_INSET_DP * density).toInt()
-            )
-            // The floating layer already carries the status-bar padding, so the
-            // page offset used for highlights and anchors must exclude it or
-            // everything lands one inset too high.
-            readerContentTopPx = (CONTENT_TOP_INSET_DP * density).toInt()
+            // The page runs from the status bar to the navigation bar, and the
+            // chrome floats above it — the same shape as iOS, where the reader
+            // content is `.ignoresSafeArea()` and only the bars are inset.
+            //
+            // It used to reserve a further 74dp above and 156dp below so a
+            // floating card could never land on text. On a phone that is most
+            // of a page's worth of reading area given up permanently for two
+            // bars that are usually hidden, and because the window behind it
+            // was plain white the reserved strips read as the reader occupying
+            // a box in the middle of the screen rather than the screen.
+            readerContainer.updatePadding(top = bars.top, bottom = bars.bottom)
+            // Only a seed for the first frame; `updateReaderContentOffset()`
+            // measures the page for real once there is one, and Readium pads it
+            // further than this.
+            readerContentTopPx = 0
             highlightView.updatePadding(top = bars.top, bottom = bars.bottom)
             overlayView.updatePadding(top = bars.top, bottom = bars.bottom)
             insets
@@ -518,6 +544,7 @@ class ReaderActivity : AppCompatActivity() {
         )
         basePreferences = stored.epub
         currentAppearance = stored.appearance
+        applyReaderSurfaceColor()
 
         when {
             openedPublication.conformsTo(Publication.Profile.EPUB) -> {
@@ -531,7 +558,8 @@ class ReaderActivity : AppCompatActivity() {
                     onSelectionInvalidated = ::clearTransientCardPresentation,
                     shortTapEnabled = {
                         !graph.translationSettings.preferences.value.quickTranslationEnabled
-                    }
+                    },
+                    onContentTap = ::toggleReaderChrome
                 )
                 wordInteractionController = wordController
                 val tapController = ReaderTapTranslationController(
@@ -553,7 +581,9 @@ class ReaderActivity : AppCompatActivity() {
                     onHapticFeedback = ::performTranslationHaptic,
                     onHighlightChanged = ::updateSelectionAnchor,
                     onSelectionInvalidated = ::clearTransientCardPresentation,
-                    appearance = { currentAppearance }
+                    onWritingModeObserved = ::observePublicationWritingMode,
+                    appearance = { currentAppearance },
+                    onContentTap = ::toggleReaderChrome
                 )
                 tapTranslationController = tapController
                 val factory = EpubNavigatorFactory(openedPublication).createFragmentFactory(
@@ -624,7 +654,8 @@ class ReaderActivity : AppCompatActivity() {
             onPreviousPageRequested = ::goToPreviousPage,
             onNextPageRequested = ::goToNextPage,
             onHighlightChanged = ::updateSelectionHighlight,
-            onSelectionInvalidated = ::clearTransientCardPresentation
+            onSelectionInvalidated = ::clearTransientCardPresentation,
+            onContentTap = ::toggleReaderChrome
         )
         pdfTranslationController = controller
         controller.attach(fragment)
@@ -763,13 +794,11 @@ class ReaderActivity : AppCompatActivity() {
         navigator?.go(target, animated = false) ?: pdfNavigator?.go(target, animated = false)
     }
 
-    private fun bookmarkKey(locator: Locator): String = buildString {
-        append(book?.id.orEmpty())
-        append('|')
-        append(locator.href)
-        append('|')
-        append(((locator.locations.progression ?: 0.0) * 10_000).toInt())
-    }
+    private fun bookmarkKey(locator: Locator): String = AndroidReaderRecordKeys.bookmark(
+        bookId = book?.id.orEmpty(),
+        href = locator.href.toString(),
+        progression = locator.locations.progression ?: 0.0
+    )
 
     private fun refreshBookmarkState() {
         val locator = latestLocator
@@ -801,8 +830,13 @@ class ReaderActivity : AppCompatActivity() {
             ?: "阅读位置"
 
     internal fun applyAppearance(appearance: ReaderAppearance) {
+        // iOS brings the controls back after any settings change, so a reader
+        // who dismissed the bars and then reopened them via a panel is not left
+        // looking at a page with no visible way out.
+        showReaderChrome()
         val previousOrientation = currentAppearance.orientation
         currentAppearance = appearance
+        applyReaderSurfaceColor()
         val updated = appearance.toEpubPreferences(basePreferences)
         basePreferences = updated
         navigator?.submitPreferences(updated)
@@ -822,6 +856,18 @@ class ReaderActivity : AppCompatActivity() {
         graph.applicationScope.launch {
             graph.repository.updatePreferences(bookId, serialized)
         }
+    }
+
+    /**
+     * Paints the window behind the page in the page's own colour.
+     *
+     * The Readium fragment only covers the area between the system bars, and a
+     * PDF page is letterboxed inside even that. Without this the exposed window
+     * is whatever the Activity theme says — white — so a sepia or dark book was
+     * a coloured panel floating on a white sheet.
+     */
+    private fun applyReaderSurfaceColor() {
+        rootView?.setBackgroundColor(currentAppearance.pageBackgroundArgb())
     }
 
     private fun recreateNavigatorForOrientation(preferences: EpubPreferences) {
@@ -860,16 +906,38 @@ class ReaderActivity : AppCompatActivity() {
         writingModeJob?.cancel()
         writingModeJob = lifecycleScope.launch {
             val controller = tapTranslationController ?: return@launch
-            if (mode == null) {
-                publicationWritingModeIsVertical = controller.detectPublicationVertical()
-            } else {
-                publicationWritingModeIsVertical = mode == "vertical"
+            // One injection was not enough. Readium loads the resource into the
+            // web view asynchronously, and an orientation change rebuilds the
+            // navigator outright, so the single attempt regularly landed on the
+            // outgoing document or on no document at all. Nothing then re-ran
+            // it until the next locator change — which is exactly why 横排 only
+            // took effect after turning a page. Keep asking until the document
+            // reports back the mode that was asked for.
+            repeat(WRITING_MODE_ATTEMPTS) { attempt ->
+                if (attempt > 0) delay(WRITING_MODE_RETRY_DELAY_MILLIS)
+                val resolved = controller.applyWritingModeOverride(mode) ?: return@repeat
+                val vertical = resolved.startsWith("vertical") || resolved.startsWith("sideways")
+                publicationWritingModeIsVertical = if (mode == null) vertical else mode == "vertical"
+                // 原书 asks the page rather than telling it, so the first
+                // answer is the answer.
+                if (mode == null || vertical == (mode == "vertical")) return@launch
             }
-            controller.applyWritingModeOverride(mode)
         }
     }
 
+    /**
+     * A block the reader has just selected reported its own writing mode. Only
+     * a publication that is being left to decide its own orientation listens to
+     * it — an explicit reader setting stays authoritative.
+     */
+    private fun observePublicationWritingMode(vertical: Boolean) {
+        if (currentAppearance.orientation != ReaderTextOrientation.PUBLICATION) return
+        if (publicationWritingModeIsVertical == vertical) return
+        publicationWritingModeIsVertical = vertical
+    }
+
     private fun showNavigationPanel() {
+        showReaderChrome()
         showComposeDialog { dialog ->
             ReaderNavigationPanel(
                 chapters = tableOfContents,
@@ -1010,11 +1078,20 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     private fun showAppearance() {
+        showReaderChrome()
         showComposeDialog {
+            // Colour sets are global, so the reader reads them from app
+            // settings rather than from this book's own appearance.
+            val appPreferences by graph.appSettings.preferences.collectAsState()
             ReaderAppearancePanel(
                 appearance = currentAppearance,
                 onChange = ::applyAppearance,
-                isPdf = pdfNavigator != null
+                isPdf = pdfNavigator != null,
+                colorPresets = appPreferences.colorPresets,
+                onSaveColorPreset = { name ->
+                    graph.appSettings.saveColorPreset(name, currentAppearance)
+                },
+                onDeleteColorPreset = graph.appSettings::removeColorPreset
             )
         }
     }
@@ -1200,156 +1277,160 @@ class ReaderActivity : AppCompatActivity() {
         val lookup = currentWordLookupState
         val translationPreferences by graph.translationSettings.preferences.collectAsState()
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val available = maxHeight
             val density = LocalDensity.current
-            val rawAnchorTop = with(density) { anchorTopPx.toDp() }
-                .coerceIn(0.dp, available)
-            val rawAnchorBottom = with(density) { anchorBottomPx.toDp() }
-                .coerceIn(0.dp, available)
-            // Reserve the same visual regions as the reader content. The old
-            // solver compared against the full window and could therefore put
-            // a result card on top of the bottom page controls (or directly on
-            // top of the selected sentence when both regions were small).
-            val safeTop = 12.dp.coerceAtLeast(CONTENT_TOP_INSET_DP.dp)
-                .coerceAtMost(available)
-            val safeBottom = (available - CONTENT_BOTTOM_INSET_DP.dp)
-                .coerceAtLeast(safeTop)
-            val selectionTop = rawAnchorTop.coerceIn(safeTop, safeBottom)
-            val selectionBottom = rawAnchorBottom.coerceIn(selectionTop, safeBottom)
-            val roomBelow = (safeBottom - selectionBottom - GAP).coerceAtLeast(0.dp)
-            val roomAbove = (selectionTop - safeTop - GAP).coerceAtLeast(0.dp)
-            val minimumCardHeight = minOf(108.dp, (safeBottom - safeTop).coerceAtLeast(1.dp))
-            val preferredCardHeight = minOf(
-                (available * 0.30f).coerceAtLeast(166.dp),
-                (safeBottom - safeTop).coerceAtLeast(1.dp)
-            )
-            val aboveFits = roomAbove >= minimumCardHeight
-            val belowFits = roomBelow >= minimumCardHeight
-            // Prefer the larger side, but use the side that can actually hold a
-            // compact card whenever only one side can do so.
-            val placeBelow = when {
-                aboveFits && belowFits -> roomBelow > roomAbove
-                belowFits -> true
-                aboveFits -> false
-                else -> roomBelow > roomAbove
+            val viewport = with(density) {
+                ReaderSize(
+                    width = constraints.maxWidth.toDp().value.toDouble(),
+                    height = constraints.maxHeight.toDp().value.toDouble()
+                )
             }
-            val availableCardRoom = if (placeBelow) roomBelow else roomAbove
-            val cardHeight = minOf(
-                preferredCardHeight,
-                availableCardRoom.coerceAtLeast(1.dp)
+            // Keep clear of the bars, but only while they are on screen. These
+            // were fixed at 74 and 156 regardless, which is what made a card
+            // near the foot of a page collapse to the 108dp minimum and clip
+            // its own text: the solver was told 156dp of empty page was
+            // occupied. This layer is already padded by the system bars, so
+            // these are measured from inside them, as on iOS.
+            val topInset = if (chromeVisible) CHROME_TOP_INSET_DP else IDLE_INSET_DP
+            val bottomInset = if (chromeVisible) CHROME_BOTTOM_INSET_DP else IDLE_INSET_DP
+            val anchorLeft = with(density) { minOf(anchorLeftPx, anchorRightPx).toDp().value.toDouble() }
+            val anchorTop = with(density) { minOf(anchorTopPx, anchorBottomPx).toDp().value.toDouble() }
+            val anchorRight = with(density) { maxOf(anchorLeftPx, anchorRightPx).toDp().value.toDouble() }
+            val anchorBottom = with(density) { maxOf(anchorTopPx, anchorBottomPx).toDp().value.toDouble() }
+            val hasAnchor = hasSelectionAnchor ||
+                anchorRight > anchorLeft || anchorBottom > anchorTop
+            // A quick tap anchors on a point rather than a run of text, and the
+            // solver discards a degenerate rectangle — which would drop the card
+            // to the top banner instead of next to the word that was tapped.
+            val selectionAnchor = if (!hasAnchor) null else ReaderRect.fromEdges(
+                left = anchorLeft,
+                top = anchorTop,
+                right = maxOf(anchorRight, anchorLeft + 1.0),
+                bottom = maxOf(anchorBottom, anchorTop + 1.0)
             )
-            // A vertical Japanese page reads in columns, so iOS puts the card
-            // beside the tapped column instead of above or below it.
-            val isVertical = currentAppearance.orientation == ReaderTextOrientation.VERTICAL ||
-                (currentAppearance.orientation == ReaderTextOrientation.PUBLICATION &&
-                    publicationWritingModeIsVertical)
-            val widthPx = constraints.maxWidth
-            val availableWidth = with(density) { widthPx.toDp() }
-            val anchorLeft = with(density) { anchorLeftPx.toDp() }.coerceIn(0.dp, availableWidth)
-            val anchorRight = with(density) { anchorRightPx.toDp() }
-                .coerceIn(anchorLeft, availableWidth)
-            val safeHorizontalInset = 12.dp
-            val roomLeft = (anchorLeft - safeHorizontalInset - GAP).coerceAtLeast(0.dp)
-            val roomRight = (availableWidth - safeHorizontalInset - anchorRight - GAP)
-                .coerceAtLeast(0.dp)
-            val placeLeft = roomLeft >= roomRight
-            val sideWidth = (if (placeLeft) roomLeft else roomRight)
-                .coerceAtMost(300.dp)
-            val verticalCardHeight = minOf(
-                preferredCardHeight,
-                (safeBottom - safeTop).coerceAtLeast(1.dp)
-            )
-            val verticalCardTop = (
-                (selectionTop + selectionBottom) / 2 - verticalCardHeight / 2
-            ).coerceIn(
-                safeTop,
-                (safeBottom - verticalCardHeight).coerceAtLeast(safeTop)
-            )
-            val topBannerHeight = minOf(preferredCardHeight, available * 0.30f)
-            val topBannerCollides = rawAnchorTop < safeTop + topBannerHeight + GAP &&
-                rawAnchorBottom > safeTop - GAP
-            val useTopBanner = translationPreferences.displayMode == TranslationDisplayMode.TOP_BANNER &&
-                !topBannerCollides
 
-            // The initial solver above only knows the requested card height.
-            // Compose can measure a different height after text wrapping,
-            // font scaling, or a loading/result state change.  Correct the
-            // *actual* measured bounds here so the card never remains over the
-            // selected text just because the first estimate was optimistic.
-            val safeLeftPx = with(density) { safeHorizontalInset.toPx() }
-            val safeRightPx = with(density) { availableWidth.toPx() } - safeLeftPx
-            val safeTopPx = with(density) { safeTop.toPx() }
-            val safeBottomPx = with(density) { safeBottom.toPx() }
-            val gapPx = with(density) { GAP.toPx() }
-            val selectionLeftPx = minOf(anchorLeftPx, anchorRightPx).toFloat()
-            val selectionRightPx = maxOf(anchorLeftPx, anchorRightPx).toFloat()
-            val selectionTopPx = minOf(anchorTopPx, anchorBottomPx).toFloat()
-            val selectionBottomPx = maxOf(anchorTopPx, anchorBottomPx).toFloat()
-            val expandedSelectionLeft = selectionLeftPx - gapPx
-            val expandedSelectionRight = selectionRightPx + gapPx
-            val expandedSelectionTop = selectionTopPx - gapPx
-            val expandedSelectionBottom = selectionBottomPx + gapPx
+            val isParagraph = translationPreferences.quickTranslationUnit ==
+                QuickTranslationUnit.PARAGRAPH
+            val success = translation as? TranslationCardState.Success
+            val usesSideAvoidance = ReaderTranslationLayoutPolicy.usesVerticalSideAvoidance(
+                isReflowable = pdfNavigator == null,
+                preservesPublicationOrientation =
+                    currentAppearance.orientation == ReaderTextOrientation.PUBLICATION,
+                publicationIsVertical = publicationWritingModeIsVertical,
+                selectionFrame = selectionAnchor
+            )
+            val prefersExpanded = ReaderTranslationLayoutPolicy.prefersExpandedMaximumHeight(
+                sourceCharacterCount = translation?.sourceText?.length
+                    ?: lookup?.analysis?.surfaceForm?.length ?: 0,
+                translatedCharacterCount = success?.result?.translatedText?.length ?: 0,
+                isParagraph = isParagraph
+            )
+            val cardWidth = ReaderTranslationLayoutPolicy.preferredCardWidth(
+                viewportWidth = viewport.width,
+                translatedCharacterCount = success?.result?.translatedText?.length ?: 0,
+                isLoading = translation is TranslationCardState.Loading ||
+                    lookup is WordLookupCardState.Loading,
+                isFailure = translation is TranslationCardState.Failure ||
+                    lookup is WordLookupCardState.Failure,
+                usesVerticalSideAvoidance = usesSideAvoidance
+            )
+            val maximumHeight = ReaderTranslationLayoutPolicy.preferredMaximumCardHeight(
+                viewportSize = viewport,
+                prefersExpanded = prefersExpanded
+            )
+            val gap = ReaderTranslationLayoutPolicy.selectionGap(
+                isParagraph = isParagraph,
+                usesVerticalSideAvoidance = usesSideAvoidance
+            )
+            val horizontalInset = ReaderTranslationLayoutPolicy.horizontalInset(usesSideAvoidance)
 
+            // The solver picks its region from the free space *around* the
+            // selection rather than from the card's own height, so the measured
+            // height only resizes the card in place — it can no longer flip the
+            // card to the other side when a result replaces the spinner.
+            var measuredHeight by androidx.compose.runtime.remember(selectionAnchor) {
+                mutableStateOf(ReaderTranslationLayoutPolicy.MINIMUM_CARD_HEIGHT)
+            }
+
+            val layout = ReaderOverlayPlacement.solve(
+                ReaderOverlayRequest(
+                    selectionFrame = selectionAnchor,
+                    viewportSize = viewport,
+                    cardSize = ReaderSize(
+                        width = cardWidth,
+                        height = measuredHeight
+                            .coerceAtLeast(ReaderTranslationLayoutPolicy.MINIMUM_CARD_HEIGHT)
+                    ),
+                    topInset = topInset,
+                    bottomInset = bottomInset,
+                    horizontalInset = horizontalInset,
+                    gap = gap,
+                    minimumCardHeight = ReaderTranslationLayoutPolicy.MINIMUM_CARD_HEIGHT,
+                    preferredMaximumCardHeight = maximumHeight,
+                    prefersTop = translationPreferences.displayMode ==
+                        TranslationDisplayMode.TOP_BANNER && !usesSideAvoidance,
+                    // A long horizontal result squeezed between the sentence and
+                    // the page edge used to be placed anyway and covered the
+                    // lines underneath. Given the choice it goes beside the
+                    // sentence instead, which is what iOS already did.
+                    prefersHorizontalAvoidance = usesSideAvoidance || prefersExpanded,
+                    minimumHorizontalCardWidth =
+                        ReaderTranslationLayoutPolicy.minimumHorizontalCardWidth(usesSideAvoidance)
+                )
+            )
+
+            val safeBounds = ReaderRect.fromEdges(
+                left = horizontalInset,
+                top = topInset,
+                right = viewport.width - horizontalInset,
+                bottom = viewport.height - bottomInset
+            )
+
+            // The solve above only knows the requested card height. Compose can
+            // measure a different one after text wrapping, font scaling, or a
+            // loading/result swap, so the *measured* frame is corrected here.
+            // The correction is recomputed from the solved position each pass
+            // rather than accumulated, so a card cannot walk across the page.
             val popupCollisionModifier = Modifier.onGloballyPositioned { coordinates ->
                 val bounds = coordinates.boundsInParent()
-                val hasAnchor = hasSelectionAnchor ||
-                    selectionRightPx > selectionLeftPx ||
-                    selectionBottomPx > selectionTopPx
-                if (!hasAnchor) return@onGloballyPositioned
+                val height = with(density) { bounds.height.toDp().value.toDouble() }
+                if (abs(height - measuredHeight) > 0.5) measuredHeight = height
 
-                fun isClear(shift: PopupShift): Boolean {
-                    val left = bounds.left + shift.dx
-                    val top = bounds.top + shift.dy
-                    val right = bounds.right + shift.dx
-                    val bottom = bounds.bottom + shift.dy
-                    val withinSafeBounds = left >= safeLeftPx - 1f &&
-                        right <= safeRightPx + 1f &&
-                        top >= safeTopPx - 1f &&
-                        bottom <= safeBottomPx + 1f
-                    val intersectsSelection = left < expandedSelectionRight &&
-                        right > expandedSelectionLeft &&
-                        top < expandedSelectionBottom &&
-                        bottom > expandedSelectionTop
-                    return withinSafeBounds && !intersectsSelection
+                // Where the reader has put the card is not a collision to solve.
+                // The solver runs on every layout pass and its own correction
+                // moves the card, which triggers the next pass — so while a drag
+                // was in progress it kept shoving the card back off the
+                // selection, one measured frame behind the finger. That is the
+                // shake, and when the two happened to pull the same distance in
+                // opposite directions it was a card that would not move at all.
+                // The avoidance already applied stays where it is, so taking
+                // hold of the card does not make it jump.
+                if (cardDragX != 0f || cardDragY != 0f) return@onGloballyPositioned
+                if (selectionAnchor == null) return@onGloballyPositioned
+
+                val measuredFrame = with(density) {
+                    ReaderRect.fromEdges(
+                        left = bounds.left.toDp().value.toDouble(),
+                        top = bounds.top.toDp().value.toDouble(),
+                        right = bounds.right.toDp().value.toDouble(),
+                        bottom = bounds.bottom.toDp().value.toDouble()
+                    )
                 }
-
-                fun collisionScore(shift: PopupShift): Float {
-                    val left = bounds.left + shift.dx
-                    val top = bounds.top + shift.dy
-                    val right = bounds.right + shift.dx
-                    val bottom = bounds.bottom + shift.dy
-                    val overlapWidth = (minOf(right, expandedSelectionRight) -
-                        maxOf(left, expandedSelectionLeft)).coerceAtLeast(0f)
-                    val overlapHeight = (minOf(bottom, expandedSelectionBottom) -
-                        maxOf(top, expandedSelectionTop)).coerceAtLeast(0f)
-                    val overlapArea = overlapWidth * overlapHeight
-                    val overflow = (safeLeftPx - left).coerceAtLeast(0f) +
-                        (right - safeRightPx).coerceAtLeast(0f) +
-                        (safeTopPx - top).coerceAtLeast(0f) +
-                        (bottom - safeBottomPx).coerceAtLeast(0f)
-                    // Clearing the selection is more important than making a
-                    // very large card perfectly fit in an unusually small
-                    // window, but both penalties are deterministic.
-                    return overlapArea * 1000f + overflow * 100f +
-                        abs(shift.dx) + abs(shift.dy)
+                // Undo the correction already applied so every pass scores the
+                // *solved* frame and converges on one answer.
+                val applied = with(density) {
+                    ReaderPoint(
+                        x = popupAvoidanceX.toDp().value.toDouble(),
+                        y = popupAvoidanceY.toDp().value.toDouble()
+                    )
                 }
-
-                val current = PopupShift(0f, 0f)
-                if (isClear(current)) return@onGloballyPositioned
-
-                val candidates = listOf(
-                    PopupShift(0f, expandedSelectionBottom - bounds.top),
-                    PopupShift(0f, expandedSelectionTop - bounds.bottom),
-                    PopupShift(expandedSelectionLeft - bounds.right, 0f),
-                    PopupShift(expandedSelectionRight - bounds.left, 0f)
+                val shift = ReaderOverlayPlacement.correct(
+                    measuredFrame = measuredFrame.offset(-applied.x, -applied.y),
+                    selectionFrame = selectionAnchor,
+                    safeBounds = safeBounds,
+                    gap = gap
                 )
-                val shift = candidates
-                    .filter(::isClear)
-                    .minByOrNull { abs(it.dx) + abs(it.dy) }
-                    ?: candidates.minByOrNull(::collisionScore)
-                    ?: current
-                val nextX = popupAvoidanceX + shift.dx
-                val nextY = popupAvoidanceY + shift.dy
+                val nextX = with(density) { shift.dx.dp.toPx() }
+                val nextY = with(density) { shift.dy.dp.toPx() }
                 if (abs(nextX - popupAvoidanceX) > 0.5f ||
                     abs(nextY - popupAvoidanceY) > 0.5f
                 ) {
@@ -1357,60 +1438,22 @@ class ReaderActivity : AppCompatActivity() {
                     popupAvoidanceY = nextY
                 }
             }
-            val cardModifier = when {
-                useTopBanner ->
-                    Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(start = 12.dp, top = safeTop, end = 12.dp, bottom = 0.dp)
-                        .widthIn(max = 420.dp)
-                        .fillMaxWidth()
-                        .heightIn(max = topBannerHeight)
-                        .offset {
-                            IntOffset(
-                                (cardDragX + popupAvoidanceX).toInt(),
-                                (cardDragY + popupAvoidanceY).toInt()
-                            )
-                        }
-                        .then(popupCollisionModifier)
-
-                isVertical && sideWidth >= 160.dp -> {
-                    Modifier
-                        .align(if (placeLeft) Alignment.TopStart else Alignment.TopEnd)
-                        .padding(top = verticalCardTop)
-                        .padding(horizontal = GAP)
-                        .widthIn(max = sideWidth)
-                        .heightIn(max = verticalCardHeight)
-                        .offset {
-                            IntOffset(
-                                (cardDragX + popupAvoidanceX).toInt(),
-                                (cardDragY + popupAvoidanceY).toInt()
-                            )
-                        }
-                        .then(popupCollisionModifier)
-                }
-                else -> {
-                    Modifier
-                        .align(if (placeBelow) Alignment.TopStart else Alignment.BottomStart)
-                        .padding(
-                            top = if (placeBelow) selectionBottom + GAP else 0.dp,
-                            bottom = if (placeBelow) 0.dp else (available - selectionTop + GAP)
-                                .coerceAtLeast(0.dp)
+            val cardModifier = Modifier
+                .widthIn(max = layout.cardWidth.dp)
+                .heightIn(max = layout.maximumCardHeight.dp)
+                .offset {
+                    // Compose offsets from the top-left; the solver answers in
+                    // centres, so half the card comes back off here.
+                    with(density) {
+                        IntOffset(
+                            x = ((layout.position.x - layout.cardWidth / 2.0).dp.toPx() +
+                                popupAvoidanceX + cardDragX).roundToInt(),
+                            y = ((layout.position.y - measuredHeight / 2.0).dp.toPx() +
+                                popupAvoidanceY + cardDragY).roundToInt()
                         )
-                        .padding(horizontal = 12.dp)
-                        // iOS keeps the overlay narrow so the page stays readable
-                        // beside it instead of spanning the full width.
-                        .widthIn(max = 320.dp)
-                        .fillMaxWidth()
-                        .heightIn(max = cardHeight)
-                        .offset {
-                            IntOffset(
-                                (cardDragX + popupAvoidanceX).toInt(),
-                                (cardDragY + popupAvoidanceY).toInt()
-                            )
-                        }
-                        .then(popupCollisionModifier)
+                    }
                 }
-            }
+                .then(popupCollisionModifier)
 
             if (translation != null) {
                 FloatingSurface(cardModifier) {
@@ -1480,34 +1523,35 @@ class ReaderActivity : AppCompatActivity() {
             val rect = navigator?.currentSelection()?.rect
             val density = resources.displayMetrics.density
             if (rect != null) {
-                anchorTopPx = (readerContentTopPx + rect.top).toInt()
-                anchorBottomPx = (readerContentTopPx + rect.bottom).toInt()
-                anchorLeftPx = rect.left.toInt()
-                anchorRightPx = rect.right.toInt()
+                // Readium has already folded the page fragment's own padding
+                // into this rect, so it is measured from `publicationView` and
+                // not from the WebView that `readerContentTopPx` tracks.
+                // Adding that padding a second time drops the anchor a text
+                // line too low.
+                val offset = overlayOffsetOf(navigator?.publicationView)
+                anchorTopPx = (offset.y + rect.top).toInt()
+                anchorBottomPx = (offset.y + rect.bottom).toInt()
+                anchorLeftPx = (offset.x + rect.left).toInt()
+                anchorRightPx = (offset.x + rect.right).toInt()
                 return@launch
             }
             val epubPoint = tapTranslationController?.focusPoint()
             val pdfPoint = pdfTranslationController?.focusPoint()
             if (epubPoint != null) {
-                val navigatorView = navigator?.publicationView ?: pdfNavigator?.publicationView
-                val viewLocation = IntArray(2)
-                val overlayLocation = IntArray(2)
-                navigatorView?.getLocationInWindow(viewLocation)
-                floatingLayer?.getLocationInWindow(overlayLocation)
-                val x = epubPoint.x * density + viewLocation[0] - overlayLocation[0]
-                val y = epubPoint.y * density + viewLocation[1] - overlayLocation[1]
+                // CSS pixels inside the WebView, so they are measured from the
+                // page rather than from the pager that carries it.
+                val page = navigator?.publicationView?.let { visiblePageView(it) }
+                val offset = overlayOffsetOf(page)
+                val x = epubPoint.x * density + offset.x
+                val y = epubPoint.y * density + offset.y
                 anchorLeftPx = x.toInt()
                 anchorRightPx = x.toInt()
                 anchorTopPx = (y - 12 * density).toInt()
                 anchorBottomPx = (y + 12 * density).toInt()
             } else if (pdfPoint != null) {
-                val navigatorView = pdfNavigator?.publicationView
-                val viewLocation = IntArray(2)
-                val overlayLocation = IntArray(2)
-                navigatorView?.getLocationInWindow(viewLocation)
-                floatingLayer?.getLocationInWindow(overlayLocation)
-                val x = pdfPoint.x + viewLocation[0] - overlayLocation[0]
-                val y = pdfPoint.y + viewLocation[1] - overlayLocation[1]
+                val offset = overlayOffsetOf(pdfNavigator?.publicationView)
+                val x = pdfPoint.x + offset.x
+                val y = pdfPoint.y + offset.y
                 anchorLeftPx = x.toInt()
                 anchorRightPx = x.toInt()
                 anchorTopPx = (y - 12 * density).toInt()
@@ -1575,6 +1619,10 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     private fun showTranslation(state: TranslationCardState) {
+        // The card and the bars compete for the same edges of the screen.
+        // iOS clears the bars when a translation starts; mirroring that keeps
+        // the card's placement solver working with the room it expects.
+        chromeVisible = false
         cardDragX = 0f
         cardDragY = 0f
         popupAvoidanceX = 0f
@@ -1625,59 +1673,127 @@ class ReaderActivity : AppCompatActivity() {
 
     private fun updateReaderContentOffset() {
         val publicationView = navigator?.publicationView ?: pdfNavigator?.publicationView
-        val location = IntArray(2)
-        val overlayLocation = IntArray(2)
-        publicationView?.getLocationInWindow(location)
-        val highlight = highlightLayer ?: floatingLayer
-        highlight?.getLocationInWindow(overlayLocation)
-        val overlayPadTop = highlight?.paddingTop ?: 0
-        readerContentLeftPx = location[0] - overlayLocation[0]
-        readerContentTopPx = (location[1] - overlayLocation[1] - overlayPadTop).coerceAtLeast(0)
+        val offset = overlayOffsetOf(publicationView?.let { visiblePageView(it) })
+        readerContentLeftPx = offset.x
+        readerContentTopPx = offset.y
     }
 
+    /**
+     * Where [view] sits inside the overlay's *content* box. The overlay carries
+     * the system-bar padding and Compose lays out inside it, so an offset that
+     * kept the padding placed every anchor one status bar too low.
+     */
+    private fun overlayOffsetOf(view: View?): android.graphics.Point {
+        val location = IntArray(2)
+        val overlayLocation = IntArray(2)
+        view?.getLocationInWindow(location)
+        val overlay = highlightLayer ?: floatingLayer
+        overlay?.getLocationInWindow(overlayLocation)
+        val overlayPadTop = overlay?.paddingTop ?: 0
+        return android.graphics.Point(
+            location[0] - overlayLocation[0],
+            (location[1] - overlayLocation[1] - overlayPadTop).coerceAtLeast(0)
+        )
+    }
+
+    /**
+     * EPUB selection rects come from `getClientRects()`, so they are measured
+     * from the WebView's own top-left. `publicationView` is only the pager that
+     * carries the WebView, and Readium pads the page inside it — about 39 dp
+     * here, one whole text line. Anchoring on the pager put the card that much
+     * too high, so a card placed below a sentence landed on its last line.
+     *
+     * PDF has no WebView and its controller already reports rects relative to
+     * `publicationView`, so that path falls through to the pager unchanged.
+     */
+    private fun visiblePageView(root: View): View {
+        var best: View? = null
+        var bestArea = 0
+        val bounds = Rect()
+        fun walk(view: View) {
+            if (view is android.webkit.WebView) {
+                if (view.isShown && view.getGlobalVisibleRect(bounds)) {
+                    val area = bounds.width() * bounds.height()
+                    if (area > bestArea) {
+                        bestArea = area
+                        best = view
+                    }
+                }
+                return
+            }
+            if (view is ViewGroup) {
+                for (index in 0 until view.childCount) walk(view.getChildAt(index))
+            }
+        }
+        walk(root)
+        return best ?: root
+    }
+
+    /**
+     * Shows or hides a reader bar, matching iOS's fade-and-settle.
+     *
+     * The content is removed from composition while hidden, not just made
+     * transparent, so a dismissed bar stops taking taps over the text it
+     * covers — the whole point of being able to dismiss it.
+     */
+    @androidx.compose.runtime.Composable
+    private fun ChromeVisibility(
+        enter: EnterTransition,
+        content: @androidx.compose.runtime.Composable () -> Unit
+    ) {
+        AnimatedVisibility(
+            visible = chromeVisible,
+            enter = enter + fadeIn(),
+            exit = fadeOut()
+        ) {
+            content()
+        }
+    }
+
+    /** A tap that hit no text: show the bars if hidden, hide them if shown. */
+    private fun toggleReaderChrome() {
+        chromeVisible = !chromeVisible
+    }
+
+    /**
+     * Brings the bars back. Called wherever iOS sets `controlsVisible = true`:
+     * after a settings change, and whenever a panel is opened, so the reader
+     * can never end up in a state with no way back to the controls.
+     */
+    private fun showReaderChrome() {
+        chromeVisible = true
+    }
+
+    /**
+     * Draws the PDF selection through the same Compose layer iOS uses.
+     *
+     * This used to be a hand-rolled `Canvas` with a flat 4px corner and a 1px
+     * outline, while the shared layer paints iOS's tuned 3px-max proportional
+     * corner and 0.75px stroke with a half-point outset. Same selection, two
+     * different shapes — the exact class of drift `:ui` exists to end.
+     */
     @androidx.compose.runtime.Composable
     private fun SelectionHighlightLayer() {
         val rects = selectionRects
         val persistedRects = pdfAnnotationRects
         if (rects.isEmpty() && persistedRects.isEmpty()) return
-        val selectionPalette = ReaderSelectionVisualStyle.palette(currentAppearance)
-        val tint = selectionPalette.fillArgb.toComposeColor()
-        val stroke = selectionPalette.strokeArgb.toComposeColor()
-        val persistedTint = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.16f)
-        val top = readerContentTopPx.toFloat()
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            persistedRects.forEach { rect ->
-                drawRoundRect(
-                    color = persistedTint,
-                    topLeft = Offset(rect.left + readerContentLeftPx, rect.top + top),
-                    size = Size(rect.width(), rect.height()),
-                    cornerRadius = CornerRadius(4f, 4f)
-                )
-            }
-            rects.forEach { rect ->
-                drawRoundRect(
-                    color = tint,
-                    topLeft = Offset(rect.left + readerContentLeftPx, rect.top + top),
-                    size = Size(rect.width(), rect.height()),
-                    cornerRadius = CornerRadius(4f, 4f)
-                )
-                drawRoundRect(
-                    color = stroke,
-                    topLeft = Offset(rect.left + readerContentLeftPx, rect.top + top),
-                    size = Size(rect.width(), rect.height()),
-                    cornerRadius = CornerRadius(4f, 4f),
-                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1f)
-                )
-            }
-        }
-    }
-
-    private fun Long.toComposeColor(): androidx.compose.ui.graphics.Color {
-        return androidx.compose.ui.graphics.Color(
-            red = ((this shr 16) and 0xFF).toInt() / 255f,
-            green = ((this shr 8) and 0xFF).toInt() / 255f,
-            blue = (this and 0xFF).toInt() / 255f,
-            alpha = ((this shr 24) and 0xFF).toInt() / 255f
+        val left = readerContentLeftPx.toDouble()
+        val top = readerContentTopPx.toDouble()
+        fun RectF.toOverlayRect(): ReaderRect = ReaderRect(
+            x = this.left + left,
+            y = this.top + top,
+            width = width().toDouble(),
+            height = height().toDouble()
+        )
+        ReaderSelectionHighlightLayer(
+            tiles = rects.map { it.toOverlayRect() },
+            palette = ReaderSelectionVisualStyle.palette(currentAppearance),
+            modifier = Modifier.fillMaxSize(),
+            writingMode = ReaderWritingMode.of(
+                currentAppearance.orientation == ReaderTextOrientation.VERTICAL
+            ),
+            persistedTiles = persistedRects.map { it.toOverlayRect() },
+            persistedColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.16f)
         )
     }
 
@@ -1852,11 +1968,15 @@ class ReaderActivity : AppCompatActivity() {
     internal suspend fun lookupAtForTesting(point: PointF): WordLookupCardState? =
         wordInteractionController?.lookupAt(point)
 
+    /** Feeds the pixel space produced by Readium's JavaScript through the real lookup path. */
+    internal suspend fun lookupAtDevicePointForTesting(point: PointF): WordLookupCardState? =
+        wordInteractionController?.lookupAt(point, pointIsReadiumPixels = true)
+
     internal suspend fun translateAtForTesting(point: PointF): TranslationCardState? =
         tapTranslationController?.translateAt(point)
             ?: pdfTranslationController?.translateAt(point)
 
-    /** Feeds a navigator-pixel point through the real Readium tap conversion. */
+    /** Feeds Readium's JavaScript pixel point through the real tap conversion. */
     internal suspend fun translateAtDevicePointForTesting(point: PointF): TranslationCardState? =
         tapTranslationController?.translateAtDevicePoint(point)
 
@@ -2012,15 +2132,18 @@ class ReaderActivity : AppCompatActivity() {
         const val EXTRA_EXPECTED_LAST_MODIFIED = "com.jerreader.reader.EXPECTED_LAST_MODIFIED"
         const val EXTRA_SOURCE_FORMAT = "com.jerreader.reader.SOURCE_FORMAT"
 
-        // Enough clearance that the card never sits on the descenders of
-        // the line it was anchored to.
         // EPUB draws the highlight inside the WebView, where CSS client rects
         // and the page share one coordinate space. PDF still uses the Compose
         // layer for OCR selections and persisted page rectangles.
         private const val DRAW_OWN_SELECTION_HIGHLIGHT = false
-        private val GAP = 18.dp
-        private const val CONTENT_TOP_INSET_DP = 74
-        private const val CONTENT_BOTTOM_INSET_DP = 156
+        /**
+         * How much of the page a floating card stays off, in dp, measured from
+         * inside the system bars. iOS uses the same three numbers
+         * (`EPUBReaderView.topInset` / `bottomInset`).
+         */
+        private const val CHROME_TOP_INSET_DP = 70.0
+        private const val CHROME_BOTTOM_INSET_DP = 94.0
+        private const val IDLE_INSET_DP = 12.0
         private const val ANNOTATION_DECORATION_GROUP = "jerreader-reading-annotations"
         private const val NAVIGATOR_TAG = "JerreaderNavigator"
         private const val INTEGRITY_TAG = "JerreaderIntegrity"
@@ -2028,6 +2151,15 @@ class ReaderActivity : AppCompatActivity() {
         private const val MINIMUM_RECORDED_READING_SECONDS = 3.0
         private const val READER_OPEN_TIMEOUT_MILLIS = 25_000L
         private const val PDF_GEOMETRY_REFRESH_DELAY_MILLIS = 80L
+
+        /**
+         * Enough attempts to outlast a navigator rebuild. 12 × 120ms is about
+         * 1.4 seconds, comfortably longer than Readium takes to load a resource
+         * on the slowest device this ships to, and the loop exits the moment the
+         * page confirms the mode, so the usual cost is one call.
+         */
+        private const val WRITING_MODE_ATTEMPTS = 12
+        private const val WRITING_MODE_RETRY_DELAY_MILLIS = 120L
         private const val SEARCH_RESULT_LIMIT = 80
         private const val SEARCH_PAGE_LIMIT = 6
     }

@@ -1,9 +1,10 @@
 package com.jerreader.android.reader
 
-import com.jerreader.shared.library.ReaderAppearance
-import com.jerreader.shared.library.ReaderFontOption
-import com.jerreader.shared.library.ReaderTextOrientation
-import com.jerreader.shared.library.ReaderThemeOption
+import com.jerreader.unified.library.ReaderAppearance
+import com.jerreader.unified.library.ReaderFontOption
+import com.jerreader.unified.library.ReaderPageBackground
+import com.jerreader.unified.library.ReaderTextOrientation
+import com.jerreader.unified.library.ReaderThemeOption
 import org.readium.r2.navigator.epub.EpubPreferences
 import org.readium.r2.navigator.preferences.FontFamily
 import org.readium.r2.navigator.preferences.Theme
@@ -64,9 +65,13 @@ fun EpubPreferences.toReaderAppearance(): ReaderAppearance = ReaderAppearance(
         false -> ReaderTextOrientation.HORIZONTAL
         null -> ReaderTextOrientation.PUBLICATION
     },
+    // A stored background that is one of the theme colours came from the theme,
+    // not from the colour picker. Reading it back as a custom colour is what
+    // made a book reopen with 「自定义」 selected and the theme row blank.
     customBackgroundHex = backgroundColor?.int
-        ?.takeUnless { it == COOL_GRAY_ARGB }
-        ?.toRgbHex()
+        ?.let { it.toLong() and 0xFFFFFFFFL }
+        ?.takeIf { ReaderPageBackground.themeFor(it) == null }
+        ?.let(ReaderPageBackground::toRgbHex)
         .orEmpty()
 )
 
@@ -77,17 +82,17 @@ private fun ReaderThemeOption.toReadiumTheme(): Theme = when (this) {
     ReaderThemeOption.DARK -> Theme.DARK
 }
 
-private fun ReaderAppearance.appearanceBackgroundColor(): ReadiumColor? {
-    parseRgbHex(customBackgroundHex)?.let { return ReadiumColor(it) }
-    return if (theme == ReaderThemeOption.COOL_GRAY) ReadiumColor(COOL_GRAY_ARGB) else null
-}
+/**
+ * The colour the page is painted with, as an Android ARGB int.
+ *
+ * The reader also paints the area *around* the Readium page with this, so it
+ * cannot be left to Readium's own theme defaults for some themes and set by us
+ * for others: an unset value and our own value only have to differ by one shade
+ * for a seam to show along the top and bottom of every page.
+ */
+fun ReaderAppearance.pageBackgroundArgb(): Int = ReaderPageBackground.argb(this).toInt()
 
-private fun parseRgbHex(value: String): Int? {
-    val digits = value.trim().removePrefix("#")
-    if (digits.length != 6 || digits.any { it !in "0123456789abcdefABCDEF" }) return null
-    return (0xFF000000L or (digits.toLongOrNull(16) ?: return null)).toInt()
-}
+private fun ReaderAppearance.appearanceBackgroundColor(): ReadiumColor =
+    ReadiumColor(pageBackgroundArgb())
 
-private fun Int.toRgbHex(): String = "#%06X".format(this and 0x00FFFFFF)
-
-private val COOL_GRAY_ARGB: Int = 0xFFEEF3F6.toInt()
+private val COOL_GRAY_ARGB: Int = ReaderPageBackground.COOL_GRAY_ARGB.toInt()

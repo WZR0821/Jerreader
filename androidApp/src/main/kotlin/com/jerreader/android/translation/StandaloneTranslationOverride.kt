@@ -1,6 +1,6 @@
 package com.jerreader.android.translation
 
-import com.jerreader.shared.translation.TranslationProviderMode
+import com.jerreader.unified.translation.TranslationProviderMode
 
 /**
  * A provider and prompt chosen on the "学习 → 翻译" page for one request. It is

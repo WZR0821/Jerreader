@@ -4,20 +4,23 @@ import android.graphics.PointF
 import android.view.ActionMode
 import android.view.Menu
 import android.view.MenuItem
-import com.jerreader.shared.domain.LanguageCode
-import com.jerreader.shared.lexical.LexicalLookupFailure
-import com.jerreader.shared.lexical.LexicalLookupService
-import com.jerreader.shared.lexical.WordAnalysis
-import com.jerreader.shared.lexical.WordAnalysisRequest
-import com.jerreader.shared.lexical.WordMorphologyAnalyzer
-import com.jerreader.shared.lexical.WordSelectionSource
-import com.jerreader.shared.ui.WordLookupCardState
+import com.jerreader.unified.domain.LanguageCode
+import com.jerreader.unified.lexical.LexicalLookupFailure
+import com.jerreader.unified.lexical.LexicalLookupService
+import com.jerreader.unified.lexical.WordAnalysis
+import com.jerreader.unified.lexical.WordAnalysisRequest
+import com.jerreader.unified.lexical.WordMorphologyAnalyzer
+import com.jerreader.unified.lexical.WordSelectionSource
+import com.jerreader.unified.reader.selection.ReaderSelectionScripts
+import com.jerreader.unified.ui.WordLookupCardState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import org.json.JSONObject
+import org.json.JSONTokener
 import org.readium.r2.navigator.Selection
 import org.readium.r2.navigator.epub.EpubNavigatorFragment
 import org.readium.r2.navigator.input.InputListener
@@ -32,7 +35,9 @@ class ReaderWordInteractionController(
     private val languageHint: () -> LanguageCode?,
     private val onStateChanged: (WordLookupCardState) -> Unit,
     private val shortTapEnabled: () -> Boolean = { true },
-    private val onSelectionInvalidated: (() -> Unit)? = null
+    private val onSelectionInvalidated: (() -> Unit)? = null,
+    /** A tap that landed on no word: the reader chrome toggles instead. */
+    private val onContentTap: (() -> Unit)? = null
 ) {
     private val analyzer = WordMorphologyAnalyzer(AndroidWordBoundaryTokenizer())
     private var navigator: EpubNavigatorFragment? = null
@@ -63,7 +68,13 @@ class ReaderWordInteractionController(
             if (!shortTapEnabled()) return false
             invalidateForNewLookup()
             lookupJob?.cancel()
-            lookupJob = scope.launch { lookupAt(toCssPoint(event.point)) }
+            lookupJob = scope.launch {
+                lookupAt(
+                    event.point,
+                    onNoWordAtPoint = { onContentTap?.invoke() },
+                    pointIsReadiumPixels = true
+                )
+            }
             // Readium filters links and other interactive elements before this
             // callback. Consuming a plain tap gives it one meaning: word lookup.
             return true
@@ -110,33 +121,58 @@ class ReaderWordInteractionController(
         startLookup(analysis)
     }
 
-    /**
-     * Readium reports taps in navigator view pixels; `caretRangeFromPoint`
-     * expects CSS pixels, which equal dp on a `width=device-width` page.
-     */
-    private fun toCssPoint(point: PointF): PointF {
-        val density = navigator?.publicationView?.resources?.displayMetrics?.density ?: 0f
-        if (density <= 0f) return PointF(point.x, point.y)
-        return PointF(point.x / density, point.y / density)
-    }
-
     fun lookupSelectionFromMenu() {
         invalidateForNewLookup()
         lookupJob?.cancel()
         lookupJob = scope.launch { lookupCurrentSelection() }
     }
 
-    internal suspend fun lookupAt(point: PointF): WordLookupCardState? {
+    internal suspend fun lookupAt(
+        point: PointF,
+        /** The tap landed on no selectable word. See `onContentTap`. */
+        onNoWordAtPoint: (() -> Unit)? = null,
+        pointIsReadiumPixels: Boolean = false
+    ): WordLookupCardState? {
         val navigator = navigator ?: return null
-        val selected = navigator.evaluateJavascript(shortTapSelectionScript(point))
-        if (selected != "true") {
+        val selected = navigator.evaluateJavascript(
+            shortTapSelectionScript(point, pointIsReadiumPixels)
+        )?.let(::decodeSelectedWord)
+        if (selected == null) {
             navigator.clearSelection()
+            onNoWordAtPoint?.invoke()
             return null
         }
-        val selection = navigator.currentSelection() ?: return null
-        val analysis = analyzeSelection(selection, WordSelectionSource.SHORT_TAP)
+        // The DOM selection and Readium's native Selection flow do not update
+        // atomically. Reading currentSelection() here could therefore return
+        // null or, worse, the previous tapped word. The same script which hit
+        // tests the glyph already knows the exact word and neighbouring text,
+        // so use that payload as the authoritative short-tap input.
+        val analysis = analyzer.analyze(
+            WordAnalysisRequest(
+                text = selected.highlight,
+                languageHint = languageHint(),
+                source = WordSelectionSource.SHORT_TAP
+            )
+        )?.copy(sentenceContext = selected.context)
             ?: return null
         return lookupNow(analysis)
+    }
+
+    private fun decodeSelectedWord(raw: String): SelectedWord? {
+        if (raw == "null" || raw == "false") return null
+        val objectValue = when (val decoded = runCatching { JSONTokener(raw).nextValue() }.getOrNull()) {
+            is JSONObject -> decoded
+            is String -> runCatching { JSONObject(decoded) }.getOrNull()
+            else -> null
+        } ?: return null
+        val highlight = objectValue.optString("highlight").trim()
+        if (highlight.isEmpty()) return null
+        val context = buildString {
+            append(objectValue.optString("before"))
+            append(highlight)
+            append(objectValue.optString("after"))
+        }.trim().takeIf(String::isNotBlank)
+        return SelectedWord(highlight = highlight, context = context)
     }
 
     internal fun analyzeSelectedTextForTesting(
@@ -220,10 +256,20 @@ class ReaderWordInteractionController(
         }
     }
 
-    private fun shortTapSelectionScript(point: PointF): String = """
+    private fun shortTapSelectionScript(point: PointF, pointIsReadiumPixels: Boolean): String {
+        val scale = if (pointIsReadiumPixels) {
+            "Math.max(Number(window.devicePixelRatio) || 1, 0.0001)"
+        } else {
+            "1"
+        }
+        return """
         (() => {
-          const x = ${point.x};
-          const y = ${point.y};
+          // Readium emits clientX/Y multiplied by this WebView's DPR. Undo it
+          // here, in the document which supplied it, rather than with the
+          // Android display density (the two can diverge on scaled WebViews).
+          const jerreaderPointScale = $scale;
+          const x = ${point.x} / jerreaderPointScale;
+          const y = ${point.y} / jerreaderPointScale;
           let range = null;
           if (document.caretRangeFromPoint) {
             range = document.caretRangeFromPoint(x, y);
@@ -236,15 +282,34 @@ class ReaderWordInteractionController(
             }
           }
           if (!range || !range.startContainer || range.startContainer.nodeType !== Node.TEXT_NODE) {
-            return false;
+            return null;
           }
           const node = range.startContainer;
           const parent = node.parentElement;
           if (!parent || parent.closest('a,button,input,textarea,select,option,video,audio,rt,rp')) {
-            return false;
+            return null;
           }
+          if (!node.data || !node.data.length) return null;
+          // The tap has to be *on* a glyph, not merely nearest to one.
+          // `caretRangeFromPoint` never misses — it reaches across the margin,
+          // the short tail of a line, the blank end of a chapter — so without
+          // this gate a tap on empty page silently looked up whichever word
+          // happened to be closest. Same rule and same 28px as
+          // `ReaderSelectionScripts.blockAt`, which gates the translate path.
+          const hitOffset = Math.max(0, Math.min(range.startOffset, node.data.length - 1));
+          const hitProbe = document.createRange();
+          hitProbe.setStart(node, hitOffset);
+          hitProbe.setEnd(node, Math.min(hitOffset + 1, node.data.length));
+          let hitDistance = Number.POSITIVE_INFINITY;
+          for (const rect of hitProbe.getClientRects()) {
+            if (rect.width <= 0.5 && rect.height <= 0.5) continue;
+            const dx = Math.max(rect.left - x, 0, x - rect.right);
+            const dy = Math.max(rect.top - y, 0, y - rect.bottom);
+            hitDistance = Math.min(hitDistance, dx * dx + dy * dy);
+          }
+          if (!(hitDistance <= ${ReaderSelectionScripts.TAP_PROXIMITY_SQUARED})) return null;
           const selection = window.getSelection();
-          if (!selection || typeof selection.modify !== 'function') return false;
+          if (!selection || typeof selection.modify !== 'function') return null;
           const caretOffset = range.startOffset;
           const probe = node.data.charAt(Math.max(0, Math.min(caretOffset, node.data.length - 1)));
           const japaneseTap = /[\u3040-\u30FF\u3400-\u9FFF]/.test(probe);
@@ -293,12 +358,12 @@ class ReaderWordInteractionController(
             selection.modify('move', 'backward', 'word');
             selection.modify('extend', 'forward', 'word');
           }
-          if (!selection.rangeCount) return false;
+          if (!selection.rangeCount) return null;
           let selectedRange = selection.getRangeAt(0);
           let selectedText = selection.toString();
           if (!/[A-Za-z\u00C0-\u024F\u3040-\u30FF\u3400-\u9FFF]/.test(selectedText)) {
             selection.removeAllRanges();
-            return false;
+            return null;
           }
 
           // Chromium can split Japanese auxiliaries from the lexical stem.
@@ -314,9 +379,34 @@ class ReaderWordInteractionController(
               selectedText = selection.toString();
             }
           }
-          return selectedText.trim().length > 0;
+          // Programmatic selection changes are observable asynchronously in
+          // WebView. Dispatching the standard event makes Readium refresh its
+          // native Selection bridge immediately on WebView versions that do
+          // not emit it for `addRange()` alone.
+          document.dispatchEvent(new Event('selectionchange'));
+          if (!selectedText.trim().length) return null;
+          selectedRange = selection.getRangeAt(0);
+          let before = '';
+          let after = '';
+          if (selectedRange.startContainer === node && selectedRange.endContainer === node) {
+            before = node.data.substring(
+              Math.max(0, selectedRange.startOffset - ${CONTEXT_SIDE_LIMIT}),
+              selectedRange.startOffset
+            );
+            after = node.data.substring(
+              selectedRange.endOffset,
+              Math.min(node.data.length, selectedRange.endOffset + ${CONTEXT_SIDE_LIMIT})
+            );
+          }
+          return JSON.stringify({highlight: selectedText, before, after});
         })()
-    """.trimIndent()
+        """.trimIndent()
+    }
+
+    private data class SelectedWord(
+        val highlight: String,
+        val context: String?
+    )
 
     private companion object {
         const val LOOKUP_MENU_ITEM_ID = 0x4A455257

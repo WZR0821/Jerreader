@@ -4,10 +4,10 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.jerreader.android.data.JerreaderDatabase
-import com.jerreader.shared.domain.LanguageCode
-import com.jerreader.shared.translation.TranslationRequest
-import com.jerreader.shared.translation.TranslationResult
-import com.jerreader.shared.translation.TranslationService
+import com.jerreader.unified.domain.LanguageCode
+import com.jerreader.unified.translation.TranslationRequest
+import com.jerreader.unified.translation.TranslationResult
+import com.jerreader.unified.translation.TranslationService
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

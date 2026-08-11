@@ -12,8 +12,8 @@ import com.jerreader.android.data.TranslationFavoriteEntity
 import com.jerreader.android.data.WordLookupEntity
 import com.jerreader.android.reader.ReadiumEnvironment
 import com.jerreader.android.test.createSyntheticEpub
-import com.jerreader.shared.library.LibraryBook
-import com.jerreader.shared.library.LibraryImportOutcome
+import com.jerreader.unified.library.LibraryBook
+import com.jerreader.unified.library.LibraryImportOutcome
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.flow.first

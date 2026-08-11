@@ -6,20 +6,24 @@ import android.view.ActionMode
 import android.view.Menu
 import android.view.MenuItem
 import com.jerreader.android.translation.AndroidTranslationSettingsStore
-import com.jerreader.shared.domain.LanguageCode
-import com.jerreader.shared.library.ReaderAppearance
-import com.jerreader.shared.library.ReaderSelectionRect
-import com.jerreader.shared.library.ReaderSelectionRectMerger
-import com.jerreader.shared.library.ReaderSelectionVisualStyle
-import com.jerreader.shared.library.ReaderTextOrientation
-import com.jerreader.shared.translation.QuickTranslationUnit
-import com.jerreader.shared.translation.ReaderSentenceSegmenter
-import com.jerreader.shared.translation.ReaderTextNormalizer
-import com.jerreader.shared.translation.TranslationFailure
-import com.jerreader.shared.translation.TranslationInputPolicy
-import com.jerreader.shared.translation.TranslationRequest
-import com.jerreader.shared.translation.TranslationService
-import com.jerreader.shared.ui.TranslationCardState
+import com.jerreader.unified.domain.LanguageCode
+import com.jerreader.unified.library.ReaderAppearance
+import com.jerreader.unified.reader.geometry.ReaderRect
+import com.jerreader.unified.reader.json.ReaderJson
+import com.jerreader.unified.reader.selection.ReaderSelectionDecoder
+import com.jerreader.unified.reader.selection.ReaderSelectionHighlightMetrics
+import com.jerreader.unified.reader.selection.ReaderSelectionRectMerger
+import com.jerreader.unified.reader.selection.ReaderSelectionScripts
+import com.jerreader.unified.reader.selection.ReaderSelectionVisualStyle
+import com.jerreader.unified.library.ReaderTextOrientation
+import com.jerreader.unified.translation.QuickTranslationUnit
+import com.jerreader.unified.translation.ReaderSentenceSegmenter
+import com.jerreader.unified.translation.ReaderTextNormalizer
+import com.jerreader.unified.translation.TranslationFailure
+import com.jerreader.unified.translation.TranslationInputPolicy
+import com.jerreader.unified.translation.TranslationRequest
+import com.jerreader.unified.translation.TranslationService
+import com.jerreader.unified.ui.TranslationCardState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -52,7 +56,15 @@ class ReaderTapTranslationController(
     private val onHapticFeedback: (() -> Unit)? = null,
     private val onHighlightChanged: ((List<RectF>) -> Unit)? = null,
     private val onSelectionInvalidated: (() -> Unit)? = null,
+    private val onWritingModeObserved: ((Boolean) -> Unit)? = null,
     private val appearance: () -> ReaderAppearance = { ReaderAppearance() },
+    /**
+     * A tap that resolved to no text. iOS has always ended this path in
+     * `onContentTap` — that is what shows and hides the reader chrome — while
+     * Android consumed every tap for translation and never reported the miss,
+     * so the top and bottom bars could not be dismissed at all.
+     */
+    private val onContentTap: (() -> Unit)? = null,
     private val timeSource: () -> Long = System::currentTimeMillis
 ) {
     private var navigator: EpubNavigatorFragment? = null
@@ -126,12 +138,16 @@ class ReaderTapTranslationController(
                     return true
                 }
             }
-            val cssPoint = toCssPoint(event.point)
             invalidateForNewTap()
-            lastTapPoint = cssPoint
             translationJob?.cancel()
             translationJob = scope.launch {
-                translateAt(cssPoint, preferences.quickTranslationUnit)
+                // Only a *hit-test* miss toggles the chrome. `translateAt` also
+                // returns null when the sentence turned out to be a single word
+                // and the lookup card took it, and when translation itself
+                // failed — neither of those is a tap on blank page.
+                translateAtDevicePoint(event.point, preferences.quickTranslationUnit) {
+                    onContentTap?.invoke()
+                }
             }
             // A plain body tap is reserved for quick translation. Links and
             // controls are filtered by Readium before reaching this listener.
@@ -218,19 +234,23 @@ class ReaderTapTranslationController(
      * that declares Japanese vertical text it keeps rendering vertically even
      * after `verticalText = false` is submitted. This injects a stylesheet into
      * the rendered document only; the EPUB file itself is never touched.
+     *
+     * Returns the writing mode the document resolved to *after* the injection,
+     * or `null` when there was no document to inject into. Readium swaps the
+     * rendered resource asynchronously, so an injection can land on the page
+     * being navigated away from — or, right after the navigator is rebuilt for
+     * an orientation change, on no document at all. Reporting what the page
+     * actually resolved to is what lets the caller tell a real failure from a
+     * page that simply was not ready, instead of assuming 横排 took and leaving
+     * the reader on a vertical page until they turn one.
      */
-    suspend fun applyWritingModeOverride(mode: String?) {
-        val navigator = navigator ?: return
-        navigator.evaluateJavascript(writingModeScript(mode))
-    }
-
-    /** Reads the publication's actual DOM writing mode when the user chose 原书. */
-    suspend fun detectPublicationVertical(): Boolean {
-        val raw = navigator?.evaluateJavascript(
-            """getComputedStyle(document.body || document.documentElement).writingMode"""
-        ) ?: return false
-        val value = raw.trim().trim('"').lowercase()
-        return value == "vertical-rl" || value == "vertical-lr" || value.startsWith("sideways")
+    suspend fun applyWritingModeOverride(mode: String?): String? {
+        val navigator = navigator ?: return null
+        val raw = navigator.evaluateJavascript(writingModeScript(mode))
+        return ReaderJson.parse(raw)
+            ?.string("mode")
+            ?.lowercase()
+            ?.takeIf { it.isNotBlank() }
     }
 
     private fun writingModeScript(mode: String?): String {
@@ -253,12 +273,17 @@ class ReaderTapTranslationController(
               const previous = document.getElementById(id);
               if (previous) previous.remove();
               const css = $encoded;
-              if (!css) return true;
-              const style = document.createElement('style');
-              style.id = id;
-              style.textContent = css;
-              (document.head || document.documentElement).appendChild(style);
-              return true;
+              if (css) {
+                const style = document.createElement('style');
+                style.id = id;
+                style.textContent = css;
+                (document.head || document.documentElement).appendChild(style);
+              }
+              const target = document.body || document.documentElement;
+              if (!target) return JSON.stringify({mode: null});
+              return JSON.stringify({
+                mode: getComputedStyle(target).writingMode || null
+              });
             })()
         """.trimIndent()
     }
@@ -270,17 +295,6 @@ class ReaderTapTranslationController(
     fun focusPoint(): PointF? = lastTapPoint?.let { PointF(it.x, it.y) }
 
     /**
-     * Readium reports taps in navigator view pixels, while the injected script
-     * resolves a caret with `caretRangeFromPoint`, which is CSS pixels. Reflowable
-     * EPUB pages use `width=device-width`, so one CSS pixel is one dp.
-     */
-    private fun toCssPoint(point: PointF): PointF {
-        val density = navigator?.publicationView?.resources?.displayMetrics?.density ?: 0f
-        if (density <= 0f) return PointF(point.x, point.y)
-        return PointF(point.x / density, point.y / density)
-    }
-
-    /**
      * Tap selection now runs in three steps instead of duplicating sentence
      * rules in JavaScript: the page returns the tapped block's text and caret
      * offset, `ReaderSentenceSegmenter` decides the range with the same rules
@@ -290,49 +304,84 @@ class ReaderTapTranslationController(
      */
     internal suspend fun translateAt(
         point: PointF,
-        unit: QuickTranslationUnit = settings.preferences.value.quickTranslationUnit
+        unit: QuickTranslationUnit = settings.preferences.value.quickTranslationUnit,
+        /**
+         * Invoked when the tap resolved to no readable text at all — the page
+         * margin, the blank tail of a chapter, a figure. Deliberately *not*
+         * invoked once a sentence has been found, so a translation that then
+         * fails, or one handed off to the word-lookup card, does not read as a
+         * tap on empty space.
+         */
+        onNoTextAtPoint: (() -> Unit)? = null,
+        pointIsReadiumPixels: Boolean = false
     ): TranslationCardState? {
         val navigator = navigator ?: return null
-        lastTapPoint = PointF(point.x, point.y)
         // Drop the previous tiles here, in the same awaited sequence that draws
         // the new ones, so a tap that resolves to nothing cannot leave the old
         // sentence highlighted underneath.
         navigator.evaluateJavascript(clearHighlightScript())
-        val raw = navigator.evaluateJavascript(blockTextScript(point)) ?: return null
-        val block = decodeJson(raw) ?: return null
+        fun missed(): TranslationCardState? {
+            onNoTextAtPoint?.invoke()
+            return null
+        }
+        val raw = navigator.evaluateJavascript(
+            blockTextScript(point, pointIsReadiumPixels = pointIsReadiumPixels)
+        ) ?: return missed()
+        val block = decodeJson(raw) ?: return missed()
         val text = block.optString("text")
-        if (text.isBlank()) return null
+        if (text.isBlank()) return missed()
+        // Readium's JavaScript multiplies client coordinates by this document's
+        // own devicePixelRatio before crossing into Kotlin. Resolve the exact
+        // inverse in that same document instead of assuming Android's display
+        // density is identical to WebView's current ratio.
+        val resolvedPoint = PointF(
+            block.optDouble("x", point.x.toDouble()).toFloat(),
+            block.optDouble("y", point.y.toDouble()).toFloat()
+        )
+        lastTapPoint = resolvedPoint
         val caret = block.optInt("offset").coerceIn(0, (text.length - 1).coerceAtLeast(0))
 
         val range = if (unit == QuickTranslationUnit.PARAGRAPH) {
             text.indices
         } else {
-            ReaderSentenceSegmenter.sentenceRange(text, caret, bookLanguageHint()) ?: return null
+            ReaderSentenceSegmenter.sentenceRange(text, caret, bookLanguageHint()) ?: return missed()
         }
         var start = range.first
         var end = range.last + 1
         while (start < end && text[start].isWhitespace()) start++
         while (end > start && text[end - 1].isWhitespace()) end--
-        if (end <= start) return null
+        if (end <= start) return missed()
 
-        val selectedRaw = navigator.evaluateJavascript(selectRangeScript(point, start, end)) ?: return null
-        val selected = decodeJson(selectedRaw) ?: return null
-        if (!selected.optBoolean("ok")) return null
+        val selectedRaw = navigator.evaluateJavascript(selectRangeScript(resolvedPoint, start, end))
+            ?: return missed()
+        val selected = decodeJson(selectedRaw) ?: return missed()
+        if (!selected.optBoolean("ok")) return missed()
 
         // The page paints the tiles itself; these are the same tiles, only so
         // the card can be anchored clear of the selected text. They go through
         // the merger a second time because the page probes its writing mode
         // from CSS, which some WebView builds report as horizontal for
         // `-epub-writing-mode` — here the reader knows what it configured.
+        val vertical = selected.optBoolean("vertical") ||
+            appearance().orientation == ReaderTextOrientation.VERTICAL
+        // The block the reader just selected knows its own writing mode, and it
+        // is a better witness than the body probe run at load time: a WebView
+        // that reports `-epub-writing-mode` as horizontal on `body` still lays
+        // this block out in columns. Without this the card is placed above or
+        // below a column that runs the height of the page, and there is no room
+        // left for it there.
+        onWritingModeObserved?.invoke(vertical)
         val merged = ReaderSelectionRectMerger.merge(
             parseSelectionRects(selected.optJSONArray("rects")),
-            vertical = selected.optBoolean("vertical") ||
-                appearance().orientation == ReaderTextOrientation.VERTICAL
+            vertical = vertical
         )
         onHighlightChanged?.invoke(merged.map(::toDeviceRect))
 
         val selection = navigator.currentSelection() ?: return null
-        return translateSelection(selection)
+        // The range the page just selected is the one the segmenter chose out
+        // of ruby-free text, so that substring — not what the DOM range reads
+        // back as — is the sentence to translate.
+        return translateSelection(selection, text.substring(start, end))
     }
 
     private fun decodeJson(raw: String): JSONObject? {
@@ -346,11 +395,11 @@ class ReaderTapTranslationController(
         }.getOrNull()
     }
 
-    private fun parseSelectionRects(array: org.json.JSONArray?): List<ReaderSelectionRect> {
+    private fun parseSelectionRects(array: org.json.JSONArray?): List<ReaderRect> {
         if (array == null) return emptyList()
         return (0 until array.length()).mapNotNull { index ->
             val item = array.optJSONObject(index) ?: return@mapNotNull null
-            ReaderSelectionRect(
+            ReaderRect(
                 x = item.optDouble("x"),
                 y = item.optDouble("y"),
                 width = item.optDouble("w"),
@@ -360,7 +409,7 @@ class ReaderTapTranslationController(
     }
 
     /** CSS pixels to device pixels, for anchoring views outside the WebView. */
-    private fun toDeviceRect(rect: ReaderSelectionRect): RectF {
+    private fun toDeviceRect(rect: ReaderRect): RectF {
         val density = navigator?.publicationView?.resources?.displayMetrics?.density ?: 1f
         return RectF(
             (rect.x * density).toFloat(),
@@ -370,112 +419,27 @@ class ReaderTapTranslationController(
         )
     }
 
-    /** Reads the tapped block's text and caret offset, excluding ruby. */
-    private fun blockTextScript(point: PointF): String = """
+    /**
+     * Reads the tapped block's text and caret offset, excluding ruby.
+     *
+     * The DOM helpers are the shared ones. This used to inline its own verbatim
+     * copy of them, which is precisely how Android missed the tap-proximity
+     * gate that iOS has had all along — every tap on a margin resolved to the
+     * nearest caret and translated a sentence nobody pointed at.
+     */
+    private fun blockTextScript(point: PointF, pointIsReadiumPixels: Boolean): String {
+        val scale = if (pointIsReadiumPixels) {
+            "Math.max(Number(window.devicePixelRatio) || 1, 0.0001)"
+        } else {
+            "1"
+        }
+        return """
         (() => {
-              const textNodes = (root) => {
-                const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-                  acceptNode(node) {
-                    const parent = node.parentElement;
-                    if (!parent || parent.closest('rt,rp,script,style,noscript')) {
-                      return NodeFilter.FILTER_REJECT;
-                    }
-                    return NodeFilter.FILTER_ACCEPT;
-                  }
-                });
-                const list = [];
-                let node = walker.nextNode();
-                while (node) { list.push(node); node = walker.nextNode(); }
-                return list;
-              };
-              const rubyBaseNodes = (ruby) => {
-                if (!ruby) return [];
-                const walker = document.createTreeWalker(ruby, NodeFilter.SHOW_TEXT, {
-                  acceptNode(node) {
-                    return node.parentElement?.closest?.('rt,rp')
-                      ? NodeFilter.FILTER_REJECT
-                      : NodeFilter.FILTER_ACCEPT;
-                  }
-                });
-                const list = [];
-                let node = walker.nextNode();
-                while (node) {
-                  if (node.data?.length) list.push(node);
-                  node = walker.nextNode();
-                }
-                return list;
-              };
-              const pointDistance = (rect, x, y) => {
-                const dx = Math.max(rect.left - x, 0, x - rect.right);
-                const dy = Math.max(rect.top - y, 0, y - rect.bottom);
-                return dx * dx + dy * dy;
-              };
-              const rubyAnnotationAtPoint = (x, y) => {
-                let best = null;
-                let bestDistance = Number.POSITIVE_INFINITY;
-                document.querySelectorAll('rt,rp').forEach((annotation) => {
-                  Array.from(annotation.getClientRects()).forEach((rect) => {
-                    const distance = pointDistance(rect, x, y);
-                    if (distance <= 400 && distance < bestDistance) {
-                      best = annotation;
-                      bestDistance = distance;
-                    }
-                  });
-                });
-                return best;
-              };
-              const caretForRuby = (ruby, x, y) => {
-                const candidates = rubyBaseNodes(ruby);
-                let bestNode = null;
-                let bestDistance = Number.POSITIVE_INFINITY;
-                candidates.forEach((node) => {
-                  const range = document.createRange();
-                  range.selectNodeContents(node);
-                  Array.from(range.getClientRects()).forEach((rect) => {
-                    const distance = pointDistance(rect, x, y);
-                    if (distance < bestDistance) {
-                      bestNode = node;
-                      bestDistance = distance;
-                    }
-                  });
-                });
-                const node = bestNode || candidates[0];
-                if (!node) return null;
-                const resolved = document.createRange();
-                resolved.setStart(node, Math.floor(node.data.length / 2));
-                resolved.collapse(true);
-                return resolved;
-              };
-              const blockAt = (x, y) => {
-                let caret = null;
-                if (document.caretRangeFromPoint) {
-                  caret = document.caretRangeFromPoint(x, y);
-                } else if (document.caretPositionFromPoint) {
-                  const position = document.caretPositionFromPoint(x, y);
-                  if (position) {
-                    caret = document.createRange();
-                    caret.setStart(position.offsetNode, position.offset);
-                    caret.collapse(true);
-                  }
-                }
-                if (!caret || !caret.startContainer ||
-                    caret.startContainer.nodeType !== Node.TEXT_NODE) return null;
-                const element = caret.startContainer.parentElement;
-                const annotation = element?.closest?.('rt,rp') || rubyAnnotationAtPoint(x, y);
-                const ruby = annotation?.closest?.('ruby') || element?.closest?.('ruby');
-                if (annotation && ruby) {
-                  caret = caretForRuby(ruby, x, y) || caret;
-                }
-                const resolvedElement = caret.startContainer.parentElement;
-                if (!resolvedElement || resolvedElement.closest(
-                      'a,button,input,textarea,select,option,video,audio,canvas,svg,rt,rp,script,style'
-                    )) return null;
-                const block = resolvedElement.closest(
-                  'p,li,blockquote,dd,dt,figcaption,h1,h2,h3,h4,h5,h6,td,th,pre'
-                ) || resolvedElement;
-                return {block: block, caret: caret};
-              };
-          const hit = blockAt(${point.x}, ${point.y});
+          ${ReaderSelectionScripts.helpers}
+          const jerreaderPointScale = $scale;
+          const x = ${point.x} / jerreaderPointScale;
+          const y = ${point.y} / jerreaderPointScale;
+          const hit = blockAt(x, y);
           if (!hit) return null;
           const nodes = textNodes(hit.block);
           if (!nodes.length || nodes.indexOf(hit.caret.startContainer) < 0) return null;
@@ -488,9 +452,10 @@ class ReaderTapTranslationController(
             }
             text += node.data;
           }
-          return JSON.stringify({text: text, offset: offset});
+          return JSON.stringify({text: text, offset: offset, x: x, y: y});
         })()
-    """.trimIndent()
+        """.trimIndent()
+    }
 
     /**
      * Selects the resolved range, paints the highlight and returns the tiles it
@@ -507,108 +472,7 @@ class ReaderTapTranslationController(
         val stroke = palette.strokeCss
         return """
         (() => {
-              const textNodes = (root) => {
-                const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-                  acceptNode(node) {
-                    const parent = node.parentElement;
-                    if (!parent || parent.closest('rt,rp,script,style,noscript')) {
-                      return NodeFilter.FILTER_REJECT;
-                    }
-                    return NodeFilter.FILTER_ACCEPT;
-                  }
-                });
-                const list = [];
-                let node = walker.nextNode();
-                while (node) { list.push(node); node = walker.nextNode(); }
-                return list;
-              };
-              const rubyBaseNodes = (ruby) => {
-                if (!ruby) return [];
-                const walker = document.createTreeWalker(ruby, NodeFilter.SHOW_TEXT, {
-                  acceptNode(node) {
-                    return node.parentElement?.closest?.('rt,rp')
-                      ? NodeFilter.FILTER_REJECT
-                      : NodeFilter.FILTER_ACCEPT;
-                  }
-                });
-                const list = [];
-                let node = walker.nextNode();
-                while (node) {
-                  if (node.data?.length) list.push(node);
-                  node = walker.nextNode();
-                }
-                return list;
-              };
-              const pointDistance = (rect, x, y) => {
-                const dx = Math.max(rect.left - x, 0, x - rect.right);
-                const dy = Math.max(rect.top - y, 0, y - rect.bottom);
-                return dx * dx + dy * dy;
-              };
-              const rubyAnnotationAtPoint = (x, y) => {
-                let best = null;
-                let bestDistance = Number.POSITIVE_INFINITY;
-                document.querySelectorAll('rt,rp').forEach((annotation) => {
-                  Array.from(annotation.getClientRects()).forEach((rect) => {
-                    const distance = pointDistance(rect, x, y);
-                    if (distance <= 400 && distance < bestDistance) {
-                      best = annotation;
-                      bestDistance = distance;
-                    }
-                  });
-                });
-                return best;
-              };
-              const caretForRuby = (ruby, x, y) => {
-                const candidates = rubyBaseNodes(ruby);
-                let bestNode = null;
-                let bestDistance = Number.POSITIVE_INFINITY;
-                candidates.forEach((node) => {
-                  const range = document.createRange();
-                  range.selectNodeContents(node);
-                  Array.from(range.getClientRects()).forEach((rect) => {
-                    const distance = pointDistance(rect, x, y);
-                    if (distance < bestDistance) {
-                      bestNode = node;
-                      bestDistance = distance;
-                    }
-                  });
-                });
-                const node = bestNode || candidates[0];
-                if (!node) return null;
-                const resolved = document.createRange();
-                resolved.setStart(node, Math.floor(node.data.length / 2));
-                resolved.collapse(true);
-                return resolved;
-              };
-              const blockAt = (x, y) => {
-                let caret = null;
-                if (document.caretRangeFromPoint) {
-                  caret = document.caretRangeFromPoint(x, y);
-                } else if (document.caretPositionFromPoint) {
-                  const position = document.caretPositionFromPoint(x, y);
-                  if (position) {
-                    caret = document.createRange();
-                    caret.setStart(position.offsetNode, position.offset);
-                    caret.collapse(true);
-                  }
-                }
-                if (!caret || !caret.startContainer ||
-                    caret.startContainer.nodeType !== Node.TEXT_NODE) return null;
-                const element = caret.startContainer.parentElement;
-                const annotation = element?.closest?.('rt,rp') || rubyAnnotationAtPoint(x, y);
-                const ruby = annotation?.closest?.('ruby') || element?.closest?.('ruby');
-                if (annotation && ruby) {
-                  caret = caretForRuby(ruby, x, y) || caret;
-                }
-                const resolvedElement = caret.startContainer.parentElement;
-                if (!resolvedElement || resolvedElement.closest(
-                      'a,button,input,textarea,select,option,video,audio,canvas,svg,rt,rp,script,style'
-                    )) return null;
-                const block = resolvedElement.closest(
-                  'p,li,blockquote,dd,dt,figcaption,h1,h2,h3,h4,h5,h6,td,th,pre'
-                ) || resolvedElement;
-                return {block: block, caret: caret};
-              };
+          ${ReaderSelectionScripts.helpers}
           const hit = blockAt(${point.x}, ${point.y});
           if (!hit) return JSON.stringify({ok: false});
           const nodes = textNodes(hit.block);
@@ -647,31 +511,10 @@ class ReaderTapTranslationController(
           // the fill and the outline over every annotated word.
           const rects = [];
           const rubyAnnotations = new Set();
-          const pairedRubyAnnotation = (node) => {
-            const parent = node?.nodeType === Node.TEXT_NODE
-              ? node.parentElement
-              : node;
-            const ruby = parent?.closest?.('ruby');
-            if (!ruby) return null;
-            let top = node;
-            while (top && top.parentNode && top.parentNode !== ruby) {
-              top = top.parentNode;
-            }
-            let sibling = top?.nextSibling;
-            while (sibling) {
-              if (sibling.nodeType === Node.ELEMENT_NODE) {
-                if (sibling.matches('rt')) return sibling;
-                if (sibling.matches('rp')) {
-                  sibling = sibling.nextSibling;
-                  continue;
-                }
-                break;
-              }
-              if (sibling.nodeType === Node.TEXT_NODE && sibling.data?.trim()) break;
-              sibling = sibling.nextSibling;
-            }
-            return ruby.querySelector('rt');
-          };
+          // `pairedRubyAnnotation` and `collectRects` come from the shared
+          // helpers spliced in above — redeclaring them here would be a `const`
+          // redeclaration in the same scope, i.e. a SyntaxError that takes the
+          // whole script down.
           let consumed = 0;
           for (const node of nodes) {
             const nodeStart = consumed;
@@ -682,11 +525,7 @@ class ReaderTapTranslationController(
             const piece = document.createRange();
             piece.setStart(node, from - nodeStart);
             piece.setEnd(node, to - nodeStart);
-            for (const rect of piece.getClientRects()) {
-              if (rect.width > 0.5 && rect.height > 0.5) {
-                rects.push({x: rect.left, y: rect.top, w: rect.width, h: rect.height});
-              }
-            }
+            collectRects(piece, rects);
             // A ruby reading is deliberately not part of the selectable text,
             // but iOS paints the selected kanji and its furigana as one visual
             // unit. Return the annotation's rect too so Android's transparent
@@ -702,8 +541,7 @@ class ReaderTapTranslationController(
             }
           }
 
-          const mode = (getComputedStyle(hit.block).writingMode || '').toString();
-          const vertical = mode.indexOf('vertical') === 0 || mode === 'tb' || mode === 'tb-rl';
+          const vertical = isVerticalBlock(hit.block);
 
           // Mirror of `ReaderSelectionRectMerger` in the shared module, which
           // owns the algorithm and its tests: one tile per contiguous run per
@@ -805,12 +643,30 @@ class ReaderTapTranslationController(
               'pointer-events:none;z-index:2147483645;';
             (document.body || document.documentElement)?.appendChild(overlay);
             const origin = overlay.getBoundingClientRect();
+            // `!important` on the fill and the outline is load-bearing, not
+            // decoration. ReadiumCSS ships these, and every theme except the
+            // light one turns one of them on:
+            //   :root[style*=readium-night-on] :not(a) {
+            //     background-color: transparent !important;
+            //     border-color: currentColor !important; }
+            //   :root[style*=readium-sepia-on] :not(a) {
+            //     background-color: transparent !important; }
+            //   :root[style*="--USER__backgroundColor"] * {
+            //     background-color: transparent !important; }
+            // A tile is a <span> inside <body>, so all three match it and erase
+            // the fill the palette just computed. Without this the selection
+            // reads as outline-only on sepia, cool grey, dark and every custom
+            // background, while looking perfect on light — which is exactly how
+            // the Android fill went missing after iOS was fixed. An important
+            // declaration in a style attribute outranks one in a stylesheet.
+            // Mirrored in `ReaderSelectionScripts.painter`.
             tiles.forEach((tile) => {
               const marker = document.createElement('span');
               marker.style.cssText =
-                'position:absolute;pointer-events:none;border-radius:3px;' +
-                'box-sizing:border-box;border:0.75px solid $stroke;' +
-                'background:$tint;' +
+                'position:absolute;pointer-events:none;box-sizing:border-box;' +
+                'border-radius:' + ${ReaderSelectionHighlightMetrics.cssCornerRadiusExpression("tile.h")} + 'px;' +
+                'border:${ReaderSelectionHighlightMetrics.STROKE_WIDTH}px solid $stroke !important;' +
+                'background:$tint !important;' +
                 'left:' + (tile.x - origin.left) + 'px;' +
                 'top:' + (tile.y - origin.top) + 'px;' +
                 'width:' + tile.w + 'px;height:' + tile.h + 'px;';
@@ -1062,12 +918,16 @@ class ReaderTapTranslationController(
             }
             overlay.replaceChildren();
             const origin = overlay.getBoundingClientRect();
+            // See the quick-tap painter above: without `!important` ReadiumCSS
+            // erases `background` on every theme but light, so the drag-handle
+            // selection came out as an empty outline.
             rects.forEach((rect) => {
               const marker = document.createElement('span');
               marker.style.cssText =
-                'position:absolute;pointer-events:none;border-radius:3px;' +
-                'box-sizing:border-box;border:0.75px solid $stroke;' +
-                'background:$fill;' +
+                'position:absolute;pointer-events:none;box-sizing:border-box;' +
+                'border-radius:' + ${ReaderSelectionHighlightMetrics.cssCornerRadiusExpression("rect.height")} + 'px;' +
+                'border:${ReaderSelectionHighlightMetrics.STROKE_WIDTH}px solid $stroke !important;' +
+                'background:$fill !important;' +
                 'left:' + (rect.left - origin.left) + 'px;' +
                 'top:' + (rect.top - origin.top) + 'px;' +
                 'width:' + rect.width + 'px;height:' + rect.height + 'px;';
@@ -1127,22 +987,48 @@ class ReaderTapTranslationController(
         return context.takeIf { it.length > source.length && it.contains(source) }
     }
 
-    /** Same entry point as a real Readium tap, including the pixel conversion. */
+    /** Same entry point as a real Readium tap, including WebView's own pixel conversion. */
     internal suspend fun translateAtDevicePoint(
         point: PointF,
-        unit: QuickTranslationUnit = settings.preferences.value.quickTranslationUnit
-    ): TranslationCardState? = translateAt(toCssPoint(point), unit)
+        unit: QuickTranslationUnit = settings.preferences.value.quickTranslationUnit,
+        onNoTextAtPoint: (() -> Unit)? = null
+    ): TranslationCardState? = translateAt(
+        point = point,
+        unit = unit,
+        onNoTextAtPoint = onNoTextAtPoint,
+        pointIsReadiumPixels = true
+    )
 
     internal fun tapSelectionScriptForTesting(point: PointF, unit: QuickTranslationUnit): String =
         tapSelectionScript(point, unit)
 
     private suspend fun translateCurrentSelection(): TranslationCardState? {
         val selection = navigator?.currentSelection() ?: return null
-        return translateSelection(selection)
+        return translateSelection(selection, rubyFreeSelectionText())
     }
 
-    private suspend fun translateSelection(selection: Selection): TranslationCardState? {
-        val sourceText = selection.locator.text.highlight ?: return null
+    /**
+     * The selected text without its ruby readings.
+     *
+     * Readium reports a selection as the DOM range's own text, and that splices
+     * every `rt` in beside the characters it annotates: 敦也 with its reading
+     * reaches the translator as 敦也あつや, which reads as the name said twice
+     * and comes back as "Atsuya Atsuya". The page can hand back the base text
+     * instead; if it cannot, the caller keeps what Readium gave it.
+     */
+    private suspend fun rubyFreeSelectionText(): String? {
+        val navigator = navigator ?: return null
+        val raw = navigator.evaluateJavascript(ReaderSelectionScripts.currentSelectionScript())
+        return ReaderSelectionDecoder.decodeSnapshot(raw)?.baseText?.takeIf { it.isNotBlank() }
+    }
+
+    private suspend fun translateSelection(
+        selection: Selection,
+        baseText: String? = null
+    ): TranslationCardState? {
+        val sourceText = baseText?.takeIf { it.isNotBlank() }
+            ?: selection.locator.text.highlight
+            ?: return null
         if (onShortTapWordRequested != null && isSingleWord(sourceText)) {
             // The word lookup card takes over this selection. Invalidate any
             // previous translation identity so a late retry cannot resurrect

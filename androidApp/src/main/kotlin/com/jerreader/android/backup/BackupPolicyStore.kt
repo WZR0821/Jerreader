@@ -1,9 +1,9 @@
 package com.jerreader.android.backup
 
 import android.content.Context
-import com.jerreader.shared.library.LibraryBackupPolicy
-import com.jerreader.shared.library.LibraryBackupProfile
-import com.jerreader.shared.library.LibraryBackupScope
+import com.jerreader.unified.library.LibraryBackupPolicy
+import com.jerreader.unified.library.LibraryBackupProfile
+import com.jerreader.unified.library.LibraryBackupScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow

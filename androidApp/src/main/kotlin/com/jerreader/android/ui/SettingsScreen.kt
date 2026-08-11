@@ -1,5 +1,7 @@
 package com.jerreader.android.ui
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -38,39 +40,44 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
-import com.jerreader.shared.domain.LanguageCode
-import com.jerreader.shared.translation.DirectAIProvider
-import com.jerreader.shared.translation.QuickTranslationUnit
-import com.jerreader.shared.translation.TranslationPreferences
-import com.jerreader.shared.translation.TranslationProviderMode
-import com.jerreader.shared.translation.TranslationFallbackMode
-import com.jerreader.shared.translation.TranslationDisplayMode
-import com.jerreader.shared.translation.TranslationSourceChoice
+import com.jerreader.unified.design.JerreaderCopy
+import com.jerreader.unified.design.JerreaderAppearanceMode
+import com.jerreader.unified.domain.LanguageCode
+import com.jerreader.unified.translation.DirectAIProvider
+import com.jerreader.unified.translation.QuickTranslationUnit
+import com.jerreader.unified.translation.TranslationPreferences
+import com.jerreader.unified.translation.TranslationProviderMode
+import com.jerreader.unified.translation.TranslationFallbackMode
+import com.jerreader.unified.translation.TranslationDisplayMode
+import com.jerreader.unified.translation.TranslationSourceChoice
 import com.jerreader.android.settings.AndroidAppPreferences
 import com.jerreader.android.settings.AppThemeChoice
-import com.jerreader.shared.ui.AppGuideScreen
-import com.jerreader.shared.ui.JerreaderIcon
-import com.jerreader.shared.ui.JerreaderRow
-import com.jerreader.shared.ui.SettingsActionRow
-import com.jerreader.shared.ui.SettingsDisclosureGroup
-import com.jerreader.shared.ui.SettingsFootnote
-import com.jerreader.shared.ui.SettingsGroup
-import com.jerreader.shared.ui.SettingsInsetRow
-import com.jerreader.shared.ui.SettingsLabelRow
-import com.jerreader.shared.ui.SettingsMenuRow
-import com.jerreader.shared.ui.SettingsNavigationRow
-import com.jerreader.shared.ui.SettingsPage
-import com.jerreader.shared.ui.SettingsSegmentedRow
-import com.jerreader.shared.ui.SettingsSliderRow
-import com.jerreader.shared.ui.SettingsSwatchRow
-import com.jerreader.shared.ui.SettingsToggleRow
-import com.jerreader.shared.ui.SettingsValueRow
-import com.jerreader.shared.ui.SettingsWarningNote
-import com.jerreader.shared.ui.jerreaderColors
-import com.jerreader.shared.library.ReaderAppearance
-import com.jerreader.shared.library.ReaderFontOption
-import com.jerreader.shared.library.ReaderTextOrientation
-import com.jerreader.shared.library.ReaderThemeOption
+import com.jerreader.unified.ui.AppGuideScreen
+import com.jerreader.unified.ui.JerreaderIcon
+import com.jerreader.unified.ui.JerreaderRow
+import com.jerreader.unified.ui.ReaderColorPresetEditor
+import com.jerreader.unified.ui.SettingsActionRow
+import com.jerreader.unified.ui.SettingsDisclosureGroup
+import com.jerreader.unified.ui.SettingsFootnote
+import com.jerreader.unified.ui.SettingsGroup
+import com.jerreader.unified.ui.SettingsInsetRow
+import com.jerreader.unified.ui.SettingsLabelRow
+import com.jerreader.unified.ui.SettingsMenuRow
+import com.jerreader.unified.ui.SettingsNavigationRow
+import com.jerreader.unified.ui.SettingsPage
+import com.jerreader.unified.ui.SettingsSegmentedRow
+import com.jerreader.unified.ui.SettingsSliderRow
+import com.jerreader.unified.ui.SettingsSwatchRow
+import com.jerreader.unified.ui.SettingsToggleRow
+import com.jerreader.unified.ui.SettingsValueRow
+import com.jerreader.unified.ui.SettingsWarningNote
+import com.jerreader.unified.ui.jerreaderColors
+import com.jerreader.unified.library.ReaderAppearance
+import com.jerreader.unified.library.ReaderColorPreset
+import com.jerreader.unified.library.ReaderColorPresetStore
+import com.jerreader.unified.library.ReaderFontOption
+import com.jerreader.unified.library.ReaderTextOrientation
+import com.jerreader.unified.library.ReaderThemeOption
 import kotlinx.coroutines.launch
 
 data class TranslationSettingsActions(
@@ -91,6 +98,7 @@ data class TranslationSettingsActions(
     val updateTranslationHaptics: (Boolean) -> Unit,
     val updateAutomaticRetry: (Boolean) -> Unit,
     val updateFallbackMode: (TranslationFallbackMode) -> Unit,
+    val updatePreferAIWhenConfigured: (Boolean) -> Unit,
     val updatePrompt: (String) -> Unit,
     val updateGrammarPrompt: (String) -> Unit
 )
@@ -106,7 +114,8 @@ enum class SettingsRoute {
     /** The backup centre reached from an empty shelf: opens the picker itself. */
     BACKUP_IMPORT,
     GUIDE,
-    PRIVACY
+    PRIVACY,
+    DICTIONARY_SOURCES
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -117,8 +126,10 @@ fun SettingsScreen(
     route: SettingsRoute,
     onRouteChanged: (SettingsRoute) -> Unit,
     onThemeChanged: (AppThemeChoice) -> Unit,
+    onAppearanceModeChanged: (JerreaderAppearanceMode) -> Unit,
     onDefaultReaderChanged: (ReaderAppearance) -> Unit,
     onShowProgressChanged: (Boolean) -> Unit,
+    onLearningModuleVisibleChanged: (Boolean) -> Unit,
     onApplyDefaultsAutomaticallyChanged: (Boolean) -> Unit,
     onApplyDefaultsToExistingBooks: () -> Unit,
     preferences: TranslationPreferences,
@@ -137,8 +148,19 @@ fun SettingsScreen(
     val back = { onRouteChanged(SettingsRoute.ROOT) }
 
     when (route) {
-        SettingsRoute.ROOT -> SettingsPage(title = "设置", bottomBar = bottomBar) {
+        SettingsRoute.ROOT -> SettingsPage(title = JerreaderCopy.settingsTitle, bottomBar = bottomBar) {
             SettingsGroup("偏好", icon = JerreaderIcon.SLIDERS) {
+                SettingsToggleRow(
+                    title = "显示学习模块",
+                    checked = appPreferences.learningModuleVisible,
+                    onCheckedChange = onLearningModuleVisibleChanged,
+                    detail = if (appPreferences.learningModuleVisible) {
+                        "主导航显示学习；生词可进入日语复习闭环"
+                    } else {
+                        "学习入口已隐藏，已有数据仍保留"
+                    },
+                    icon = JerreaderIcon.CHECKLIST
+                )
                 SettingsNavigationRow(
                     title = "界面主题",
                     detail = "选择 App 界面的整体色系",
@@ -160,12 +182,8 @@ fun SettingsScreen(
                 )
             }
             SettingsGroup("支持", icon = JerreaderIcon.INFO) {
-                SettingsNavigationRow(
-                    title = "备份与恢复",
-                    detail = "自选文件夹，备份书库、进度、生词与批注",
-                    icon = JerreaderIcon.SHIELD,
-                    onClick = { onRouteChanged(SettingsRoute.BACKUP) }
-                )
+                // Row order follows iOS: 操作指南 first, because it is what a new
+                // installation needs and 备份与恢复 is what an old one does.
                 SettingsNavigationRow(
                     title = "操作指南",
                     detail = "导入、阅读、PDF/文字识别与 API 配置",
@@ -173,8 +191,14 @@ fun SettingsScreen(
                     onClick = { onRouteChanged(SettingsRoute.GUIDE) }
                 )
                 SettingsNavigationRow(
+                    title = "备份与恢复",
+                    detail = "自选文件夹，备份书架、进度、生词与批注",
+                    icon = JerreaderIcon.SHIELD,
+                    onClick = { onRouteChanged(SettingsRoute.BACKUP) }
+                )
+                SettingsNavigationRow(
                     title = "数据与隐私",
-                    detail = "本机数据、在线请求与密钥存储",
+                    detail = "本机数据、在线请求、密钥与词典来源",
                     icon = JerreaderIcon.SHIELD,
                     onClick = { onRouteChanged(SettingsRoute.PRIVACY) },
                     showDivider = false
@@ -188,11 +212,34 @@ fun SettingsScreen(
         }
 
         SettingsRoute.THEME -> SettingsPage(title = "界面主题", onBack = back) {
-            val dark = isSystemInDarkTheme()
+            val systemIsDark = isSystemInDarkTheme()
+            val dark = appPreferences.appearanceMode.isDark(systemIsDark)
+            SettingsGroup(
+                title = "明暗模式",
+                icon = JerreaderIcon.PALETTE,
+                footer = "只影响 App 界面，不会改动手机的系统设置。" +
+                    "阅读页的深浅仍由「默认阅读排版」里的纸张主题决定。"
+            ) {
+                JerreaderAppearanceMode.entries.forEach { mode ->
+                    val swatchDark = when (mode) {
+                        JerreaderAppearanceMode.SYSTEM -> systemIsDark
+                        JerreaderAppearanceMode.LIGHT -> false
+                        JerreaderAppearanceMode.DARK -> true
+                    }
+                    SettingsSwatchRow(
+                        title = mode.title,
+                        detail = mode.detail,
+                        swatch = jerreaderColors(appPreferences.theme, swatchDark).paper,
+                        selected = appPreferences.appearanceMode == mode,
+                        onClick = { onAppearanceModeChanged(mode) },
+                        showDivider = mode != JerreaderAppearanceMode.entries.last()
+                    )
+                }
+            }
             SettingsGroup(
                 title = "主题色系",
                 icon = JerreaderIcon.PALETTE,
-                footer = "色系会同时调整强调色、按钮、卡片与背景，并自动适配系统深色/浅色外观。" +
+                footer = "色系会同时调整强调色、按钮、卡片与背景，并跟着上面的明暗模式走。" +
                     "阅读页的纸张主题仍在「默认阅读排版」中单独设置。"
             ) {
                 AppThemeChoice.entries.forEach { choice ->
@@ -240,7 +287,15 @@ fun SettingsScreen(
                 appearance = appPreferences.defaultReaderAppearance,
                 onChange = onDefaultReaderChanged,
                 showsProgress = appPreferences.showReadingProgress,
-                onShowProgressChanged = onShowProgressChanged
+                onShowProgressChanged = onShowProgressChanged,
+                colorPresets = appPreferences.colorPresets,
+                onSaveColorPreset = { name ->
+                    graph.appSettings.saveColorPreset(
+                        name,
+                        appPreferences.defaultReaderAppearance
+                    )
+                },
+                onDeleteColorPreset = graph.appSettings::removeColorPreset
             )
         }
 
@@ -281,7 +336,7 @@ fun SettingsScreen(
                 )
                 SettingsLabelRow(
                     "在线 AI 只接收你主动点按或框选的文字",
-                    JerreaderIcon.SHIELD
+                    JerreaderIcon.CHECK_CIRCLE
                 )
                 SettingsLabelRow(
                     "导入的书籍是只读输入，阅读与翻译不会改写它",
@@ -296,11 +351,72 @@ fun SettingsScreen(
             SettingsGroup(
                 title = "写出副本",
                 icon = JerreaderIcon.DOWNLOAD,
-                footer = "只有你在「备份与恢复」中选择文件夹后，才会把书库与学习记录写到本机以外的位置。"
+                footer = "只有你在「备份与恢复」中选择文件夹后，才会把书架与学习记录写到本机以外的位置。"
             ) {
                 SettingsLabelRow(
                     "备份需要你先授权一个文件夹",
                     JerreaderIcon.DOWNLOAD,
+                    showDivider = false
+                )
+            }
+            SettingsGroup(
+                title = "词典",
+                icon = JerreaderIcon.DICTIONARY,
+                footer = "可查看离线数据版本、许可和联网词典的隐私边界。"
+            ) {
+                SettingsNavigationRow(
+                    title = "词典来源",
+                    detail = "离线 JMdict 数据、联网词典与许可",
+                    icon = JerreaderIcon.DICTIONARY,
+                    onClick = { onRouteChanged(SettingsRoute.DICTIONARY_SOURCES) },
+                    showDivider = false
+                )
+            }
+        }
+
+        SettingsRoute.DICTIONARY_SOURCES -> SettingsPage(title = "词典来源", onBack = back) {
+            SettingsGroup(
+                title = "离线日语词典",
+                icon = JerreaderIcon.DICTIONARY,
+                footer = "离线词条由 EDRDG 的 JMdict 数据生成，提供日语读音、词性和英文释义；" +
+                    "联网时仍优先查询中文维基词典。"
+            ) {
+                SettingsValueRow("数据", "JMdict 常用词")
+                SettingsValueRow("词典日期", "2026-07-20")
+                SettingsValueRow("许可", "CC BY-SA 4.0")
+                SettingsNavigationRow(
+                    title = "JMdict / EDICT Dictionary Project",
+                    detail = "打开 EDRDG 项目页",
+                    icon = JerreaderIcon.DICTIONARY,
+                    onClick = {
+                        runCatching {
+                            context.startActivity(
+                                Intent(
+                                    Intent.ACTION_VIEW,
+                                    Uri.parse("https://www.edrdg.org/wiki/JMdict-EDICT_Dictionary_Project.html")
+                                )
+                            )
+                        }
+                    },
+                    showDivider = false
+                )
+            }
+            SettingsGroup(
+                title = "联网词典",
+                icon = JerreaderIcon.DICTIONARY,
+                footer = "联网查询只发送用户主动查询的词语及必要语境。"
+            ) {
+                SettingsNavigationRow(
+                    title = "中文维基词典",
+                    detail = "打开词典网站",
+                    icon = JerreaderIcon.DICTIONARY,
+                    onClick = {
+                        runCatching {
+                            context.startActivity(
+                                Intent(Intent.ACTION_VIEW, Uri.parse("https://zh.wiktionary.org/"))
+                            )
+                        }
+                    },
                     showDivider = false
                 )
             }
@@ -319,7 +435,10 @@ private fun ReaderDefaultsSections(
     appearance: ReaderAppearance,
     onChange: (ReaderAppearance) -> Unit,
     showsProgress: Boolean,
-    onShowProgressChanged: (Boolean) -> Unit
+    onShowProgressChanged: (Boolean) -> Unit,
+    colorPresets: List<ReaderColorPreset> = emptyList(),
+    onSaveColorPreset: ((String) -> Unit)? = null,
+    onDeleteColorPreset: ((String) -> Unit)? = null
 ) {
     SettingsGroup(
         title = "翻页与导航",
@@ -411,7 +530,17 @@ private fun ReaderDefaultsSections(
                 ReaderThemeOption.DARK to "深色"
             ),
             selected = appearance.theme,
-            onSelect = { onChange(appearance.copy(theme = it)) }
+            onSelect = {
+                // Same rule as the reader's own panel: a leftover custom
+                // background would keep winning and make the choice look inert.
+                onChange(
+                    appearance.copy(
+                        theme = it,
+                        customBackgroundHex = "",
+                        customSelectionColorHex = ""
+                    )
+                )
+            }
         )
         SettingsInsetRow {
             OutlinedTextField(
@@ -424,7 +553,7 @@ private fun ReaderDefaultsSections(
                 singleLine = true
             )
         }
-        SettingsInsetRow(showDivider = false) {
+        SettingsInsetRow(showDivider = onSaveColorPreset != null || colorPresets.isNotEmpty()) {
             OutlinedTextField(
                 value = appearance.customSelectionColorHex,
                 onValueChange = {
@@ -435,15 +564,26 @@ private fun ReaderDefaultsSections(
                 singleLine = true
             )
         }
+        if (onSaveColorPreset != null || colorPresets.isNotEmpty()) {
+            SettingsInsetRow(showDivider = false) {
+                ReaderColorPresetEditor(
+                    presets = colorPresets,
+                    appearance = appearance,
+                    onApply = { onChange(ReaderColorPresetStore.applied(appearance, it)) },
+                    onSave = onSaveColorPreset,
+                    onDelete = onDeleteColorPreset
+                )
+            }
+        }
     }
 
     SettingsGroup(title = "日文原版排版", icon = JerreaderIcon.TEXT_FORMAT) {
         SettingsSegmentedRow(
             title = "默认版式",
+            // See the reader's own 文字方向 row: 竖排 is not offered any more.
             options = listOf(
                 ReaderTextOrientation.PUBLICATION to "原书",
-                ReaderTextOrientation.HORIZONTAL to "横排",
-                ReaderTextOrientation.VERTICAL to "竖排"
+                ReaderTextOrientation.HORIZONTAL to "横排"
             ),
             selected = appearance.orientation,
             onSelect = { onChange(appearance.copy(orientation = it)) }
@@ -579,6 +719,21 @@ private fun TranslationSettings(
             preferences.automaticRetryEnabled,
             actions.updateAutomaticRetry
         )
+        if (preferences.providerMode == TranslationProviderMode.ON_DEVICE) {
+            SettingsToggleRow(
+                "配好 AI 后优先用 AI 翻译",
+                preferences.preferAIWhenConfigured,
+                actions.updatePreferAIWhenConfigured
+            )
+            SettingsFootnote(
+                if (preferences.preferAIWhenConfigured) {
+                    "填好 API Key 或代理地址后，书里轻点翻译会直接用 AI；本机模型退为离线时的备用，" +
+                        "断网也能继续读。AI 请求会消耗你自己的额度。"
+                } else {
+                    "书里轻点翻译只用本机模型。本机模型胜在离线，长句的译文会比 AI 生硬不少。"
+                }
+            )
+        }
         SettingsMenuRow(
             title = "备用翻译服务",
             options = TranslationFallbackMode.entries
