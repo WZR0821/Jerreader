@@ -14,7 +14,7 @@ object TranslationInputPolicy {
         if (!isVisiblyNonEmpty(normalized)) {
             throw TranslationFailure.EmptyInput
         }
-        if (normalized.length > MAXIMUM_TEXT_LENGTH) {
+        if (textCharacterCount(normalized) > MAXIMUM_TEXT_LENGTH) {
             throw TranslationFailure.TextTooLong
         }
         return normalized

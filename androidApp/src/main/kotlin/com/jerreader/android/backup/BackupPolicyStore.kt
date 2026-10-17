@@ -1,5 +1,6 @@
 package com.jerreader.android.backup
 
+import androidx.core.content.edit
 import android.content.Context
 import com.jerreader.shared.library.LibraryBackupPolicy
 import com.jerreader.shared.library.LibraryBackupProfile
@@ -17,16 +18,18 @@ class BackupPolicyStore(context: Context) {
 
     fun update(transform: (LibraryBackupPolicy) -> LibraryBackupPolicy) {
         val updated = normalize(transform(mutablePolicy.value))
-        storage.edit()
-            .putBoolean(KEY_ENABLED, updated.automaticEnabled)
-            .putInt(KEY_INTERVAL, updated.intervalDays)
-            .putInt(KEY_RETENTION, updated.retentionDays)
-            .putInt(KEY_COUNT, updated.maximumBackupCount)
-            .putLong(KEY_BYTES, updated.maximumTotalBytes)
-            .putStringSet(KEY_SCOPES, updated.automaticScopes.map { it.name }.toSet())
-            .apply()
-        updated.lastAutomaticBackupAtEpochMillis?.let {
-            storage.edit().putLong(KEY_LAST_RUN, it).apply()
+        storage.edit {
+            putBoolean(KEY_ENABLED, updated.automaticEnabled)
+            putInt(KEY_INTERVAL, updated.intervalDays)
+            putInt(KEY_RETENTION, updated.retentionDays)
+            putInt(KEY_COUNT, updated.maximumBackupCount)
+            putLong(KEY_BYTES, updated.maximumTotalBytes)
+            putStringSet(KEY_SCOPES, updated.automaticScopes.map { it.name }.toSet())
+        }
+        storage.edit {
+            val lastRun = updated.lastAutomaticBackupAtEpochMillis
+            if (lastRun != null) putLong(KEY_LAST_RUN, lastRun)
+            else remove(KEY_LAST_RUN)
         }
         mutablePolicy.value = updated
     }
@@ -48,7 +51,9 @@ class BackupPolicyStore(context: Context) {
     }
 
     fun recordAutomaticRun(atEpochMillis: Long) {
-        storage.edit().putLong(KEY_LAST_RUN, atEpochMillis).apply()
+        storage.edit {
+            putLong(KEY_LAST_RUN, atEpochMillis)
+        }
         mutablePolicy.value = mutablePolicy.value.copy(
             lastAutomaticBackupAtEpochMillis = atEpochMillis
         )

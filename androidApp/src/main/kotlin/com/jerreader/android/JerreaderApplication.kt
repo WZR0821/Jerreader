@@ -27,11 +27,18 @@ import com.jerreader.shared.translation.TranslationService
 
 class JerreaderApplication : Application() {
     val graph: AppGraph by lazy { AppGraph(this) }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            com.jerreader.android.library.BookCoverCache.clear()
+        }
+    }
 }
 
-class AppGraph(application: Application) {
-    val database = JerreaderDatabase.build(application)
-    val repository = RoomLibraryRepository(database.bookDao(), database)
+class AppGraph(application: Application, val database: JerreaderDatabase = JerreaderDatabase.build(application)) {
+    val appSettings = AndroidAppSettingsStore(application)
+    val repository = RoomLibraryRepository(database.bookDao(), database) { appSettings.preferences.value.growthEnabled }
     val publicationStore = ImmutablePublicationStore(application)
     val readium = ReadiumEnvironment(application)
     val importService = LibraryImportService(publicationStore, readium, repository)
@@ -39,8 +46,10 @@ class AppGraph(application: Application) {
     val learningRecords = LearningRecordRepository(database.learningDao())
     val readerRecords = ReaderRecordRepository(database.readerRecordDao())
     val translationSettings = AndroidTranslationSettingsStore(application)
-    val appSettings = AndroidAppSettingsStore(application)
-    private val configuredTranslationService = ConfiguredTranslationService(translationSettings)
+    val offlineDictionary = com.jerreader.android.lexical.OfflineDictionaryPackageStore(application)
+    val localTranslationService = com.jerreader.android.translation.OnDeviceTranslationService(
+        basicTranslation = com.jerreader.android.translation.BasicOfflineTranslation(offlineDictionary)::translate)
+    private val configuredTranslationService = ConfiguredTranslationService(translationSettings, localTranslationService)
     val translationCache = TranslationCacheRepository(database.translationCacheDao())
     /** Typed so the translate page can pass its own provider for one request. */
     val cachedTranslationService = CachedTranslationService(
@@ -50,7 +59,7 @@ class AppGraph(application: Application) {
     )
     var translationService: TranslationService = cachedTranslationService
     val lexicalLookupService = ResilientLexicalLookupService(
-        DefaultLexicalLookupService(),
+        DefaultLexicalLookupService(offline = offlineDictionary),
         translationService as com.jerreader.shared.translation.ContextExplanationService
     )
     val speechService = AndroidSpeechService(application)

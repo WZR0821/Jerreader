@@ -5,7 +5,9 @@ import android.net.Uri
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.jerreader.android.data.JerreaderDatabase
+import com.jerreader.android.data.BookEntity
 import com.jerreader.android.library.ImmutablePublicationStore
+import com.jerreader.android.library.PublicationIntegrity
 import com.jerreader.android.settings.AndroidAppSettingsStore
 import com.jerreader.android.translation.AndroidTranslationSettingsStore
 import com.jerreader.shared.library.LibraryBackupPolicy
@@ -18,6 +20,7 @@ import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -39,6 +42,8 @@ class BackupInheritanceTest {
     private lateinit var policyStore: BackupPolicyStore
     private lateinit var service: LibraryBackupService
     private lateinit var originalPolicy: LibraryBackupPolicy
+    private lateinit var publicationStore: ImmutablePublicationStore
+    private lateinit var publicationRoot: File
     private val archives = mutableListOf<File>()
 
     @Before
@@ -48,10 +53,12 @@ class BackupInheritanceTest {
             .build()
         policyStore = BackupPolicyStore(context)
         originalPolicy = policyStore.policy.value
+        publicationRoot = File(context.cacheDir, "backup-test-${System.nanoTime()}").apply { mkdirs() }
+        publicationStore = ImmutablePublicationStore(context, publicationRoot)
         service = LibraryBackupService(
             context = context,
             database = database,
-            publicationStore = ImmutablePublicationStore(context),
+            publicationStore = publicationStore,
             appSettings = AndroidAppSettingsStore(context),
             translationSettings = AndroidTranslationSettingsStore(context),
             directoryStore = BackupDirectoryStore(context),
@@ -66,6 +73,7 @@ class BackupInheritanceTest {
         policyStore.update { originalPolicy }
         database.close()
         archives.forEach { it.delete() }
+        publicationRoot.deleteRecursively()
     }
 
     @Test
@@ -159,6 +167,113 @@ class BackupInheritanceTest {
         assertEquals(5, policy.maximumBackupCount)
         assertEquals(2L * 1024 * 1024 * 1024, policy.maximumTotalBytes)
         assertEquals(LibraryBackupPolicy().automaticScopes, policy.automaticScopes)
+    }
+
+    @Test
+    fun invalidManifestAfterReadingPayloadDoesNotWriteBookmarks() = runBlocking {
+        val reading = JSONObject().put("bookmarks", org.json.JSONArray().put(
+            JSONObject().put("id", "must-not-be-inserted").put("bookmarkKey", "invalid-archive")
+        ))
+        val archive = writeEntries(listOf(
+            "reading/records.json" to reading.toString().toByteArray(),
+            "manifest.json" to JSONObject().put("format", "another-app").toString().toByteArray()
+        ))
+        var rejected = false
+        try { service.restore(Uri.fromFile(archive)) } catch (_: BackupFailure) { rejected = true }
+        assertTrue("An invalid archive must be rejected", rejected)
+        assertTrue("No payload may be written before validating the whole archive", database.readerRecordDao().allBookmarks().isEmpty())
+        assertEquals(originalPolicy, policyStore.policy.value)
+    }
+
+    @Test
+    fun restoringAnExistingBookPreservesItsBytesMtimeAndNewerProgress() = runBlocking {
+        val source = publicationStore.resolvePublication("existing.epub").apply {
+            parentFile!!.mkdirs(); writeText("immutable publication bytes"); setLastModified(1_700_000_000_000); setReadOnly()
+        }
+        val snapshot = PublicationIntegrity.capture(source)
+        val current = BookEntity(id = "existing", title = "Current", author = null, language = "ja",
+            publicationFileName = source.name, coverFileName = null, fingerprint = snapshot.sha256,
+            fileSize = source.length(), publicationLastModified = source.lastModified(), importedAtEpochMillis = 1,
+            lastOpenedAtEpochMillis = 20, locatorJson = "newer-locator", preferencesJson = null, lastReadProgress = 0.8)
+        database.bookDao().insertIgnoringExisting(listOf(current))
+        val old = JSONObject().put("id", current.id).put("title", "Old")
+            .put("publicationFileName", source.name).put("fingerprint", snapshot.sha256)
+            .put("sourceFingerprint", snapshot.sha256).put("publicationLastModified", 1L)
+            .put("locatorJson", "older-locator").put("lastReadProgress", 0.1)
+        val archive = writeEntries(listOf(
+            "manifest.json" to validManifest(100).toString().toByteArray(),
+            "library/books.json" to JSONObject().put("books", org.json.JSONArray().put(old)).toString().toByteArray(),
+            "library/publications/${source.name}" to source.readBytes()
+        ))
+        val result = service.restore(Uri.fromFile(archive))
+        assertEquals(0, result.books)
+        assertTrue(PublicationIntegrity.isUnchanged(snapshot))
+        val restored = database.bookDao().findByFingerprint(snapshot.sha256)!!
+        assertEquals("newer-locator", restored.locatorJson)
+        assertEquals(0.8, restored.lastReadProgress, 0.0)
+    }
+
+    @Test
+    fun backupListingUsesManifestTimeAfterAProviderChangesTheMtime() {
+        val archive = writeEntries(listOf("manifest.json" to validManifest(100).toString().toByteArray()))
+        val info = service.inspectBackupArchive(Uri.fromFile(archive), archive.name, 999, archive.length())
+        assertEquals(100L, info?.createdAtEpochMillis)
+    }
+
+    @Test
+    fun aZipWithABackupNameButAnUnrelatedManifestIsNotListed() {
+        val archive = writeEntries(listOf("manifest.json" to "{\"format\":\"unrelated\"}".toByteArray()))
+        assertNull(service.inspectBackupArchive(Uri.fromFile(archive), archive.name, 999, archive.length()))
+    }
+
+    @Test
+    fun clearedLastRunStaysClearedAfterReopeningThePolicyStore() {
+        policyStore.recordAutomaticRun(100)
+        policyStore.update { it.copy(lastAutomaticBackupAtEpochMillis = null) }
+        assertNull(BackupPolicyStore(context).policy.value.lastAutomaticBackupAtEpochMillis)
+    }
+
+    @Test
+    fun interfaceOptionsRestoreAndSurviveAnOlderSettingsPayload() = runBlocking {
+        val original = AndroidAppSettingsStore(context).preferences.value
+        try {
+            val settings = JSONObject().put("topBarTransparency", 0.35).put("bottomBarTransparency", 0.75)
+                .put("japaneseFuriganaEnabled", true).put("immersiveReading", false)
+            val archive = writeEntries(listOf("manifest.json" to validManifest(100).toString().toByteArray(),
+                "settings/preferences.json" to settings.toString().toByteArray()))
+            service.restore(Uri.fromFile(archive))
+            fun assertOptions() {
+                val loaded = AndroidAppSettingsStore(context).preferences.value
+                assertEquals(0.35f, loaded.topBarTransparency, 0.0001f)
+                assertEquals(0.75f, loaded.bottomBarTransparency, 0.0001f)
+                assertTrue(loaded.japaneseFuriganaEnabled)
+                assertEquals(false, loaded.immersiveReading)
+            }
+            assertOptions()
+            val old = writeEntries(listOf("manifest.json" to validManifest(200).toString().toByteArray(),
+                "settings/preferences.json" to "{}".toByteArray()))
+            service.restore(Uri.fromFile(old))
+            assertOptions()
+        } finally {
+            AndroidAppSettingsStore(context).apply {
+                updateTopBarTransparency(original.topBarTransparency)
+                updateBottomBarTransparency(original.bottomBarTransparency)
+                updateJapaneseFurigana(original.japaneseFuriganaEnabled)
+                updateImmersiveReading(original.immersiveReading)
+            }
+        }
+    }
+
+    private fun validManifest(createdAt: Long) = JSONObject().put("format", "jerreader.backup")
+        .put("formatVersion", 1).put("createdAt", createdAt)
+
+    private fun writeEntries(entries: List<Pair<String, ByteArray>>): File {
+        val file = File.createTempFile("backup-regression-", ".jerbackup.zip", context.cacheDir)
+        archives.add(file)
+        ZipOutputStream(file.outputStream().buffered()).use { zip ->
+            entries.forEach { (name, bytes) -> zip.putNextEntry(ZipEntry(name)); zip.write(bytes); zip.closeEntry() }
+        }
+        return file
     }
 
     /** A minimal but genuine archive: the manifest alone, as the service reads it. */

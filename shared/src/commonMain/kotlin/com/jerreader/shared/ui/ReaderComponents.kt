@@ -449,6 +449,7 @@ fun ReaderAppearancePanel(
     isPdf: Boolean = false,
     /** Set when the panel sits inside a page that already scrolls. */
     embedded: Boolean = false,
+    interfaceControls: @Composable () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -474,6 +475,7 @@ fun ReaderAppearancePanel(
                 .padding(bottom = if (embedded) 0.dp else 18.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            interfaceControls()
             if (isPdf) {
                 Text(
                     "PDF 保留原文件版式，字号、行距和字体由 PDF 页面决定。",

@@ -16,6 +16,8 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 
 /**
  * Compose port of the iOS `JerreaderTheme` tokens, kept in step with
@@ -70,14 +72,16 @@ fun jerreaderColors(accent: JerreaderAccent, dark: Boolean): JerreaderColors {
     }
     return JerreaderColors(
         accent = accentColor,
-        accentFill = accentColor.copy(alpha = if (dark) 0.22f else 0.12f).compositeOver(canvas),
+        // Keep alpha, as SwiftUI does: the same token is drawn on canvas, paper, or a card.
+        accentFill = accentColor.copy(alpha = if (dark) 0.22f else 0.12f),
         canvas = canvas,
         paper = surface(dark, level = 0),
         raisedPaper = surface(dark, level = 1),
         mutedSurface = surface(dark, level = -1),
-        line = accentColor.copy(alpha = if (dark) 0.28f else 0.18f).compositeOver(canvas),
+        line = accentColor.copy(alpha = if (dark) 0.28f else 0.18f),
         onAccent = if (dark) Color(0.025f, 0.04f, 0.05f) else Color.White,
-        secondaryText = if (dark) Color(0.72f, 0.75f, 0.79f) else Color(0.36f, 0.40f, 0.45f)
+        secondaryText = (if (dark) Color(0.922f, 0.922f, 0.961f) else Color(0.235f, 0.235f, 0.263f))
+            .copy(alpha = 0.60f)
     )
 }
 
@@ -95,15 +99,10 @@ private fun surface(dark: Boolean, level: Int): Color = if (dark) {
     }
 }
 
-private fun Color.compositeOver(background: Color): Color = Color(
-    red = red * alpha + background.red * (1 - alpha),
-    green = green * alpha + background.green * (1 - alpha),
-    blue = blue * alpha + background.blue * (1 - alpha)
-)
 
 fun jerreaderColorScheme(accent: JerreaderAccent, dark: Boolean): ColorScheme {
     val colors = jerreaderColors(accent, dark)
-    val onSurface = if (dark) Color(0.92f, 0.94f, 0.96f) else Color(0.10f, 0.12f, 0.14f)
+    val onSurface = if (dark) Color.White else Color.Black
     val base = if (dark) darkColorScheme() else lightColorScheme()
     return base.copy(
         primary = colors.accent,
@@ -147,16 +146,21 @@ fun jerreaderColorScheme(accent: JerreaderAccent, dark: Boolean): ColorScheme {
  * disorganised, so every size used by Jerreader screens is pinned here.
  */
 private val jerreaderTypography = Typography(
-    headlineSmall = TextStyle(fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.SemiBold),
-    titleLarge = TextStyle(fontSize = 18.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold),
-    titleMedium = TextStyle(fontSize = 15.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold),
-    titleSmall = TextStyle(fontSize = 14.sp, lineHeight = 19.sp, fontWeight = FontWeight.SemiBold),
-    bodyLarge = TextStyle(fontSize = 15.sp, lineHeight = 22.sp),
-    bodyMedium = TextStyle(fontSize = 14.sp, lineHeight = 20.sp),
-    bodySmall = TextStyle(fontSize = 13.sp, lineHeight = 18.sp),
-    labelLarge = TextStyle(fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium),
-    labelMedium = TextStyle(fontSize = 12.sp, lineHeight = 16.sp),
-    labelSmall = TextStyle(fontSize = 11.sp, lineHeight = 15.sp)
+    displayLarge = TextStyle(fontSize = 34.sp, lineHeight = 41.sp, fontWeight = FontWeight.Bold),
+    displayMedium = TextStyle(fontSize = 34.sp, lineHeight = 41.sp, fontWeight = FontWeight.Bold),
+    displaySmall = TextStyle(fontSize = 34.sp, lineHeight = 41.sp, fontWeight = FontWeight.Bold),
+    headlineLarge = TextStyle(fontSize = 28.sp, lineHeight = 34.sp, fontWeight = FontWeight.Bold),
+    headlineMedium = TextStyle(fontSize = 22.sp, lineHeight = 26.5.sp, letterSpacing = 0.sp, fontWeight = FontWeight.SemiBold),
+    headlineSmall = TextStyle(fontSize = 22.sp, lineHeight = 26.5.sp, letterSpacing = 0.sp, fontWeight = FontWeight.SemiBold),
+    titleLarge = TextStyle(fontSize = 20.sp, lineHeight = 24.sp, letterSpacing = 0.sp, fontWeight = FontWeight.SemiBold),
+    titleMedium = TextStyle(fontSize = 17.sp, lineHeight = 20.5.sp, letterSpacing = 0.sp, fontWeight = FontWeight.SemiBold),
+    titleSmall = TextStyle(fontSize = 15.sp, lineHeight = 18.sp, letterSpacing = 0.sp, fontWeight = FontWeight.SemiBold),
+    bodyLarge = TextStyle(fontSize = 17.sp, lineHeight = 20.5.sp, letterSpacing = 0.sp),
+    bodyMedium = TextStyle(fontSize = 15.sp, lineHeight = 18.sp, letterSpacing = 0.sp),
+    bodySmall = TextStyle(fontSize = 13.sp, lineHeight = 16.sp, letterSpacing = 0.sp),
+    labelLarge = TextStyle(fontSize = 15.sp, lineHeight = 18.sp, letterSpacing = 0.sp, fontWeight = FontWeight.Medium),
+    labelMedium = TextStyle(fontSize = 12.sp, lineHeight = 14.5.sp, letterSpacing = 0.sp),
+    labelSmall = TextStyle(fontSize = 11.sp, lineHeight = 13.sp)
 )
 
 /** Matches the iOS 16pt card radius used from 1.1.0. */
@@ -175,7 +179,12 @@ fun JerreaderTheme(
     content: @Composable () -> Unit
 ) {
     val colors = jerreaderColors(accent, dark)
-    CompositionLocalProvider(LocalJerreaderColors provides colors) {
+    // Match iOS's extra-large cap (body 17 -> 19 pt). Publication text keeps
+    // its own Readium font preference and is not limited by this UI policy.
+    val systemDensity = LocalDensity.current
+    val interfaceDensity = Density(systemDensity.density,
+        systemDensity.fontScale.coerceIn(0.5f, 19f / 17f))
+    CompositionLocalProvider(LocalJerreaderColors provides colors, LocalDensity provides interfaceDensity) {
         MaterialTheme(
             colorScheme = jerreaderColorScheme(accent, dark),
             shapes = jerreaderShapes,

@@ -1,5 +1,7 @@
 package com.jerreader.android.backup
 
+import androidx.core.net.toUri
+import androidx.core.content.edit
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -28,20 +30,23 @@ class BackupDirectoryStore(private val context: Context) {
      * longer uses.
      */
     fun select(treeUri: Uri): BackupFolder {
+        val document = DocumentFile.fromTreeUri(context, treeUri)
+        require(document?.isDirectory == true && document.canRead() && document.canWrite()) {
+            "所选文件夹不可读写，请重新授权。"
+        }
+        val previous = mutableFolder.value
         val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         context.contentResolver.takePersistableUriPermission(treeUri, flags)
-        mutableFolder.value?.takeIf { it.treeUri != treeUri }?.let { previous ->
-            runCatching {
-                context.contentResolver.releasePersistableUriPermission(previous.treeUri, flags)
-            }
-        }
         val name = DocumentFile.fromTreeUri(context, treeUri)?.name ?: "已选择的文件夹"
-        storage.edit()
-            .putString(KEY_TREE_URI, treeUri.toString())
-            .putString(KEY_DISPLAY_NAME, name)
-            .apply()
+        storage.edit {
+            putString(KEY_TREE_URI, treeUri.toString())
+            putString(KEY_DISPLAY_NAME, name)
+        }
         val folder = BackupFolder(treeUri, name)
         mutableFolder.value = folder
+        previous?.takeIf { it.treeUri != treeUri }?.let {
+            runCatching { context.contentResolver.releasePersistableUriPermission(it.treeUri, flags) }
+        }
         return folder
     }
 
@@ -56,7 +61,6 @@ class BackupDirectoryStore(private val context: Context) {
      * remembered tree so re-granting it is one confirmation.
      */
     fun adoptIfPermitted(treeUri: Uri): BackupFolder? {
-        if (mutableFolder.value?.treeUri == treeUri) return mutableFolder.value
         val held = context.contentResolver.persistedUriPermissions.any {
             it.uri == treeUri && it.isWritePermission && it.isReadPermission
         }
@@ -76,7 +80,10 @@ class BackupDirectoryStore(private val context: Context) {
                 )
             }
         }
-        storage.edit().remove(KEY_TREE_URI).remove(KEY_DISPLAY_NAME).apply()
+        storage.edit {
+            remove(KEY_TREE_URI)
+            remove(KEY_DISPLAY_NAME)
+        }
         mutableFolder.value = null
     }
 
@@ -92,7 +99,7 @@ class BackupDirectoryStore(private val context: Context) {
 
     private fun load(): BackupFolder? {
         val raw = storage.getString(KEY_TREE_URI, null) ?: return null
-        val uri = runCatching { Uri.parse(raw) }.getOrNull() ?: return null
+        val uri = runCatching { raw.toUri() }.getOrNull() ?: return null
         return BackupFolder(uri, storage.getString(KEY_DISPLAY_NAME, null) ?: "已选择的文件夹")
     }
 

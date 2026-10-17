@@ -104,10 +104,10 @@ fun JerreaderRow(
 }
 
 @Composable
-fun JerreaderDivider(modifier: Modifier = Modifier) {
+fun JerreaderDivider(modifier: Modifier = Modifier, color: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.outline) {
     HorizontalDivider(
         modifier = modifier,
-        color = MaterialTheme.colorScheme.outline
+        color = color, thickness = 0.5.dp
     )
 }
 
@@ -219,4 +219,11 @@ private fun StepperButton(symbol: String, enabled: Boolean, onClick: () -> Unit)
             }
         )
     }
+}
+
+/** SwiftUI Divider uses a neutral separator inside lists, distinct from the accent card outline. */
+@Composable
+fun JerreaderListDivider(modifier: Modifier = Modifier) {
+    val dark = MaterialTheme.colorScheme.onSurface != androidx.compose.ui.graphics.Color.Black
+    JerreaderDivider(modifier, MaterialTheme.colorScheme.onSurface.copy(alpha = if (dark) 0.18f else 0.14f))
 }

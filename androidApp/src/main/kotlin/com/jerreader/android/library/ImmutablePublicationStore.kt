@@ -33,7 +33,7 @@ class ImmutablePublicationStore(
     private val stagingDirectory = File(rootDirectory, "publication-staging")
     private val coversDirectory = File(rootDirectory, "covers")
 
-    fun copyToStaging(source: Uri): StagedPublication {
+    fun copyToStaging(source: Uri, checkCancelled: () -> Unit = {}): StagedPublication {
         var displayName = sourceDisplayName(source)
         if (BookFormat.fromFileName(displayName) == null) {
             val inferredExtension = when (context.contentResolver.getType(source)) {
@@ -61,18 +61,15 @@ class ImmutablePublicationStore(
             val input = checkNotNull(context.contentResolver.openInputStream(source)) {
                 "无法读取所选文件。"
             }
-            input.use { sourceStream ->
-                FileOutputStream(stagedFile).use { output ->
-                    sourceStream.copyTo(output)
-                    output.fd.sync()
-                }
+            val snapshot = input.use { sourceStream ->
+                PublicationIntegrity.copyAndCapture(sourceStream, stagedFile, checkCancelled)
             }
             check(stagedFile.setReadOnly()) { "无法将出版物验证副本设为只读。" }
 
             return StagedPublication(
                 displayName = displayName,
                 file = stagedFile,
-                snapshot = PublicationIntegrity.capture(stagedFile)
+                snapshot = snapshot
             )
         } catch (error: Throwable) {
             stagedFile.setWritable(true)
@@ -130,7 +127,8 @@ class ImmutablePublicationStore(
         }
         return StoredPublication(
             fileName = destination.name,
-            snapshot = PublicationIntegrity.capture(destination)
+            // Same-filesystem rename preserves the verified bytes and modification time.
+            snapshot = staged.snapshot.copy(path = destination.absolutePath)
         )
     }
 

@@ -8,6 +8,21 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface LearningDao {
+    @Query("SELECT * FROM grammar_notes ORDER BY updatedAt DESC")
+    fun observeGrammarNotes(): Flow<List<GrammarNoteEntity>>
+
+    @Query("SELECT * FROM grammar_notes")
+    suspend fun allGrammarNotes(): List<GrammarNoteEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertGrammarNote(note: GrammarNoteEntity)
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertGrammarNotesIgnoringExisting(notes: List<GrammarNoteEntity>): List<Long>
+
+    @Query("DELETE FROM grammar_notes WHERE id = :id")
+    suspend fun deleteGrammarNote(id: String)
+
     @Query("SELECT * FROM word_lookup_records ORDER BY lastLookedUpAtEpochMillis DESC")
     fun observeWords(): Flow<List<WordLookupEntity>>
 
@@ -18,10 +33,16 @@ interface LearningDao {
     suspend fun upsertWord(record: WordLookupEntity)
 
     @Query("UPDATE word_lookup_records SET isFavorite = :favorite WHERE lookupKey = :key")
-    suspend fun setWordFavorite(key: String, favorite: Boolean)
+    suspend fun setWordFavorite(key: String, favorite: Boolean): Int
+
+    @Query("UPDATE word_lookup_records SET reviewJson = :json WHERE lookupKey = :key AND isFavorite = 1")
+    suspend fun updateWordReview(key: String, json: String)
 
     @Query("UPDATE word_lookup_records SET aiAnalysis = :analysis, aiProviderIdentifier = :provider WHERE lookupKey = :key")
     suspend fun updateWordAnalysis(key: String, analysis: String, provider: String)
+
+    @Query("UPDATE word_lookup_records SET aiAnalysis = :analysis, aiProviderIdentifier = :provider WHERE lookupKey = :key AND surfaceForm = :surface AND sentenceContext IS :context AND sourceBookId IS :bookId AND lastLookedUpAtEpochMillis = :revision AND definitionsText = :definitions AND reading IS :reading AND partOfSpeech IS :partOfSpeech")
+    suspend fun updateContextualWordAnalysis(key: String, surface: String, context: String?, bookId: String?, revision: Long, definitions: String, reading: String?, partOfSpeech: String?, analysis: String, provider: String): Int
 
     @Query("UPDATE word_lookup_records SET isInHistory = 0 WHERE lookupKey = :key")
     suspend fun removeWordFromHistory(key: String)
@@ -43,6 +64,12 @@ interface LearningDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertTranslationFavorite(record: TranslationFavoriteEntity)
+
+    @Query("SELECT * FROM translation_favorites WHERE favoriteKey = :key LIMIT 1")
+    suspend fun translationFavorite(key: String): TranslationFavoriteEntity?
+
+    @Query("UPDATE translation_favorites SET practiceJson = :json WHERE favoriteKey = :key")
+    suspend fun updatePractice(key: String, json: String)
 
     @Query("DELETE FROM translation_favorites WHERE favoriteKey = :key")
     suspend fun deleteTranslationFavorite(key: String)

@@ -8,7 +8,8 @@ import androidx.room.withTransaction
 
 class RoomLibraryRepository(
     private val dao: BookDao,
-    private val database: JerreaderDatabase? = null
+    private val database: JerreaderDatabase? = null,
+    private val growthEnabled: () -> Boolean = { true }
 ) : LibraryRepository {
     override fun observeBooks(): Flow<List<LibraryBook>> =
         dao.observeAll().map { books -> books.map(BookEntity::toDomain) }
@@ -76,7 +77,32 @@ class RoomLibraryRepository(
     }
 
     override suspend fun addReadingTime(id: String, seconds: Double) {
-        dao.addReadingTime(id, seconds.coerceAtLeast(0.0))
+        if (!seconds.isFinite() || seconds <= 0) return
+        val bounded = seconds.coerceAtMost(21_600.0)
+        val update: suspend () -> Unit = {
+            dao.addReadingTime(id, bounded)
+            if (growthEnabled()) {
+                val book = dao.findById(id)
+                if (book != null) {
+                    val end = System.currentTimeMillis()
+                    val activity = com.jerreader.android.learning.ReadingActivity.decode(book.activityJson)
+                        .record(end - (bounded * 1000).toLong(), end)
+                    dao.updateActivity(id, activity.encode())
+                }
+            }
+        }
+        if (database == null) update() else database.withTransaction { update() }
+    }
+
+    suspend fun recordReadingQuery(id: String) {
+        if (!growthEnabled()) return
+        val update: suspend () -> Unit = {
+            val book = dao.findById(id)
+            if (book != null) dao.updateActivity(id,
+                com.jerreader.android.learning.ReadingActivity.decode(book.activityJson)
+                    .query(System.currentTimeMillis()).encode())
+        }
+        if (database == null) update() else database.withTransaction { update() }
     }
 
     override suspend fun updatePreferences(id: String, preferencesJson: String) {

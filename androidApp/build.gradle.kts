@@ -24,8 +24,8 @@ android {
         applicationId = "com.jerreader.android"
         minSdk = 23
         targetSdk = 36
-        versionCode = 56
-        versionName = "1.3.5"
+        versionCode = 60
+        versionName = "1.4.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -55,8 +55,12 @@ android {
     }
 
     buildFeatures {
+        buildConfig = true
         compose = true
     }
+
+    // Both native apps ship the same original Japanese–Chinese vocabulary.
+    sourceSets.getByName("main").assets.srcDir(rootProject.file("shared/dictionaries"))
 
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -109,7 +113,7 @@ dependencies {
     // The android.jar stub returns defaults for org.json, which makes a JSON
     // round trip untestable. A real implementation on the unit-test classpath
     // is what lets the manifest parsing be covered without an emulator.
-    testImplementation("org.json:json:20240303")
+    testImplementation(libs.json)
 
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.runner)

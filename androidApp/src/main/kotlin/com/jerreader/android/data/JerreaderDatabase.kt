@@ -11,12 +11,13 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     entities = [
         BookEntity::class,
         WordLookupEntity::class,
+        GrammarNoteEntity::class,
         TranslationFavoriteEntity::class,
         ReadingBookmarkEntity::class,
         ReadingAnnotationEntity::class,
         TranslationCacheEntity::class
     ],
-    version = 5,
+    version = 9,
     exportSchema = true
 )
 abstract class JerreaderDatabase : RoomDatabase() {
@@ -34,7 +35,11 @@ abstract class JerreaderDatabase : RoomDatabase() {
             MIGRATION_1_2,
             MIGRATION_2_3,
             MIGRATION_3_4,
-            MIGRATION_4_5
+            MIGRATION_4_5,
+            MIGRATION_5_6,
+            MIGRATION_6_7,
+            MIGRATION_7_8,
+            MIGRATION_8_9
         ).build()
 
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -158,6 +163,30 @@ abstract class JerreaderDatabase : RoomDatabase() {
                     "CREATE INDEX IF NOT EXISTS index_translation_favorites_bookId " +
                         "ON translation_favorites(bookId)"
                 )
+            }
+        }
+
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE books ADD COLUMN activityJson TEXT")
+            }
+        }
+
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS grammar_notes (id TEXT NOT NULL PRIMARY KEY, title TEXT NOT NULL, sentence TEXT NOT NULL, explanation TEXT NOT NULL, language TEXT NOT NULL, tags TEXT NOT NULL, bookId TEXT, bookTitle TEXT, locatorJson TEXT, updatedAt INTEGER NOT NULL)")
+            }
+        }
+
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE translation_favorites ADD COLUMN practiceJson TEXT")
+            }
+        }
+
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE word_lookup_records ADD COLUMN reviewJson TEXT")
             }
         }
 

@@ -92,6 +92,11 @@ class TranslationCacheRepository(
     private fun explanationRequest(request: ContextExplanationRequest): TranslationRequest =
         TranslationRequest(
             text = buildString {
+                if (request.isWordLookup) {
+                    append("word-lookup-v2\u001E")
+                    append(request.dictionaryEntry.orEmpty().take(1_000))
+                    append("\u001E")
+                }
                 append(request.focusedText.trim())
                 request.contextText?.trim()?.takeIf(String::isNotBlank)?.let {
                     append("\u001E")

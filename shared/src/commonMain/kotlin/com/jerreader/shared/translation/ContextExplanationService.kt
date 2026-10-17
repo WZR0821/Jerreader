@@ -5,7 +5,9 @@ import com.jerreader.shared.domain.LanguageCode
 data class ContextExplanationRequest(
     val focusedText: String,
     val contextText: String?,
-    val sourceLanguage: LanguageCode?
+    val sourceLanguage: LanguageCode?,
+    val isWordLookup: Boolean = false,
+    val dictionaryEntry: String? = null
 )
 
 data class ContextExplanationResult(

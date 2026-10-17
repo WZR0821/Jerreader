@@ -1116,6 +1116,14 @@ class ReaderTapTranslationController(
      * excluding ruby annotations, so a sentence cut by a screen boundary can be
      * completed locally before any translation request is made.
      */
+    /** Readium's selected-text snapshot; no DOM or publication edits. */
+    suspend fun lookupContext(sourceText: String): String? {
+        val text = navigator?.currentSelection()?.locator?.text ?: return null
+        val selected = text.highlight ?: return null
+        if (ReaderTextNormalizer.normalized(selected) != ReaderTextNormalizer.normalized(sourceText)) return null
+        return text.before.orEmpty().takeLast(240) + selected + text.after.orEmpty().take(240)
+    }
+
     suspend fun crossPageContext(sourceText: String): String? {
         val source = ReaderTextNormalizer.normalized(sourceText)
         if (source.isEmpty()) return null

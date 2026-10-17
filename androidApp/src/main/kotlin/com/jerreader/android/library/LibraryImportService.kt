@@ -10,6 +10,8 @@ import com.jerreader.shared.library.LibraryRepository
 import java.io.ByteArrayOutputStream
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.readium.r2.shared.publication.Publication
 import org.readium.r2.shared.publication.services.cover
@@ -26,7 +28,8 @@ class LibraryImportService(
     suspend fun importEpub(source: Uri): LibraryImportOutcome = importPublication(source)
 
     suspend fun importPublication(source: Uri): LibraryImportOutcome = withContext(Dispatchers.IO) {
-        var staged = store.copyToStaging(source)
+        val importContext = currentCoroutineContext()
+        var staged = store.copyToStaging(source) { importContext.ensureActive() }
         val sourceFormat = BookFormat.fromFileName(staged.displayName)
             ?: throw LibraryImportException.UnsupportedFormat
         val sourceFingerprint = staged.snapshot.sha256
@@ -60,6 +63,7 @@ class LibraryImportService(
                 throw LibraryImportException.InvalidEpub
             }
 
+            var publicationClosed = false
             try {
                 if (publication.isRestricted) throw LibraryImportException.RestrictedPublication
                 val expectedProfile = if (sourceFormat == BookFormat.PDF) {
@@ -75,9 +79,10 @@ class LibraryImportService(
                 val coverBytes = publication.cover()?.toPngBytes()
                 val metadata = publication.metadata
 
-                check(PublicationIntegrity.isUnchanged(staged.snapshot)) {
-                    "Readium 修改了待导入的 EPUB。"
-                }
+                // Close Readium before the single full integrity check in commit().
+                publication.close()
+                publicationClosed = true
+                importContext.ensureActive()
                 stored = store.commit(staged, id)
                 coverFileName = coverBytes?.let { bytes -> store.writeCover(id, bytes) }
 
@@ -107,7 +112,7 @@ class LibraryImportService(
                 repository.add(book)
                 LibraryImportOutcome.Imported(book)
             } finally {
-                publication.close()
+                if (!publicationClosed) publication.close()
             }
         } catch (error: Throwable) {
             if (stored == null) {

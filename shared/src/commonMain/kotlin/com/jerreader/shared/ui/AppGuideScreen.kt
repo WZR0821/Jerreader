@@ -1,27 +1,25 @@
 package com.jerreader.shared.ui
 
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -41,23 +39,21 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun AppGuideScreen(
     onBack: () -> Unit,
+    bottomBar: @Composable () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        topBar = {
-            TopAppBar(
-                title = { Text("操作指南") },
-                navigationIcon = { TextButton(onClick = onBack) { Text("返回") } }
-            )
-        }
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = { JerreaderNavigationBar("操作指南", "设置", onBack) },
+        bottomBar = bottomBar
     ) { padding ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+                .padding(horizontal = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(28.dp),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 16.dp)
         ) {
             item { QuickStartSection() }
@@ -75,10 +71,10 @@ fun AppGuideScreen(
 @Composable
 private fun QuickStartSection() {
     GuideSection("快速开始") {
-        GuideStepRow(1, "导入书籍", "在“书架”右上角点“导入电子书”，选择 EPUB、PDF、DOCX 或 TXT 文件；导入完成后会直接打开。")
+        GuideStepRow(1, "导入书籍", "在“书架”右上角点“＋”，先选 EPUB、PDF、DOCX 或 TXT 格式，再选文件；导入完成后会直接打开。")
         GuideStepRow(2, "打开阅读", "轻点封面进入阅读器；应用会自动保存每本书的阅读位置和排版偏好。")
         GuideStepRow(3, "选择翻译", "在设置的“翻译与 AI”中选择“句子”或“段落”，再轻点正文即可一次翻译一个句子或段落；长按会启用系统选区，并可从菜单选择翻译、查词或划线。")
-        GuideStepRow(4, "保存学习内容", "查词卡片可直接收藏进生词本，译文卡片可收藏译文；两者统一放在“学习”栏。")
+        GuideStepRow(4, "保存学习内容", "查词卡片可直接收藏进生词本，译文卡片可收藏译文；两者统一放在“学习”栏。", showDivider = false)
     }
 }
 
@@ -86,17 +82,15 @@ private fun QuickStartSection() {
 private fun ImportSection() {
     GuideSection("如何导入") {
         GuideItem(
-            "从系统文件导入",
-            "书架 → “导入电子书” → 在系统文件选择器中选择文件。导入后直接进入阅读，重复文件会打开书架中的现有副本。支持设备存储、下载目录、云盘和外接存储。"
+            "从“文件”导入",
+            "书架 → 右上角“＋” → 先选格式 → 选择文件。选 PDF 时系统文件列表只显示 PDF；导入后直接进入阅读，重复文件会打开书架中的现有副本。支持设备存储、下载目录、云盘和外接存储。"
         )
         GuideItem(
             "从其他 App 导入",
             "在文件管理器、浏览器、邮件或聊天应用中选择“用其他应用打开”，选择 Jerreader；应用会导入文档并进入阅读页。"
         )
-        GuideItem(
-            "隐私",
-            "导入时只把副本复制到应用私有目录，不会自动上传书籍。原文件的内容和修改时间都不会被改写。"
-        )
+        GuideItem("从电脑传输", "可通过 USB 文件传输把文件放入设备存储，再从系统“文件”中选择。")
+        GuideFootnote("导入时只复制到 App 的本地沙盒，不会自动上传书籍。")
     }
 }
 
@@ -136,7 +130,7 @@ private fun FeatureSection() {
             "每本书可独立保存字体、字号、背景、页边距、行距、段距、翻页模式和选区颜色。浅色、护眼、冷灰、深色会自动采用适配的选区色；自定义背景可另选选区色。设置 → 默认阅读排版可决定新书样式，并用开关持续同步或立即应用到现有全部书籍。"
         )
         GuideItem("目录、搜索、书签与批注", "阅读器的“导航”按钮集中提供章节目录、全文搜索、书签和划线批注；点正文上的高亮可直接编辑该条批注。")
-        GuideItem("查词与生词本", "“学习”栏包含翻译、生词本和历史三部分；词典查询合并在翻译的“词语”模式里，译出一个词的同时会补充词典形、读音、词性和释义。阅读时长按一个词，从菜单选“查词”也可直接加入生词本。")
+        GuideItem("查词与生词本", "“学习”栏包含翻译、生词本、练习与工具和历史四部分；词典查询合并在翻译的“词语”模式里，译出一个词的同时会补充词典形、读音、词性和释义。阅读时长按一个词，从菜单选“查词”也可直接加入生词本。")
         GuideItem("日语学习增强", "日语词条会显示词典形、假名、词性、常见活用和例句；配置 AI 后可结合书中原句继续分析词语的语法角色与语境义。")
         GuideItem("AI 句子结构分析", "译文卡片的“AI 解析”可分析句子主干、成分、从句或修饰关系，以及英语时态、日语助词和活用等语法点；需要先配置 AI API 或代理。")
         GuideItem("学习内容导出", "在“学习”页选择 CSV、Markdown 或 Anki TSV，分享导出到其他应用。")
@@ -160,7 +154,7 @@ private fun TranslationSection() {
     GuideSection("翻译 API 如何使用") {
         GuideDisclosure("方案一：本机翻译（默认，无需 API Key）") {
             GuideBody("在“设置 → 翻译与 AI”选择“本机翻译”即可，这是默认选项。")
-            GuideBody("首次使用某个语言组合时，系统需要下载语言模型，请保持网络连接。下载完成后即可离线翻译。")
+            GuideBody("在“设置 → 翻译与 AI → 离线资源”中点“准备中日翻译”。首次准备需要网络，完成后即可离线翻译。")
             GuideBody("本机模型适合快速理解句意；需要更高质量的文学翻译时，可改用下面的 AI 方案。")
         }
 
@@ -205,7 +199,7 @@ private fun BackupSection() {
     GuideSection("备份与恢复") {
         GuideItem(
             "选择备份文件夹",
-            "设置 → 备份与恢复 → 选择备份文件夹，可指定本机存储、SD 卡或已安装的云盘目录。自动备份与“立即备份到当前文件夹”都会写入这里，下方列表会直接显示其中可恢复的备份。"
+            "设置 → 备份与恢复 → 选择备份文件夹，可指定本机存储、SD 卡或已安装的云盘目录。自动备份与“立即备份”都会写入这里，下方列表会直接显示其中可恢复的备份。"
         )
         GuideItem(
             "自动备份",
@@ -213,11 +207,11 @@ private fun BackupSection() {
         )
         GuideItem(
             "手动备份",
-            "选择“书籍与封面”“进度、书签与批注”“生词与翻译收藏”“阅读与翻译偏好”中需要的范围后点“立即备份到当前文件夹”。包含书籍文件的备份明显更大，但重装后无需重新找书。"
+            "点“立即备份”直接保存到所选文件夹；首次使用会先让你选择目录。“更多备份选项”可调整范围、间隔和保留策略。包含书籍文件的备份明显更大，但重装后无需重新找书。"
         )
         GuideItem(
             "恢复",
-            "重装后重新选择原来的文件夹，备份会出现在列表中，点右侧“恢复”即可；也可用“选择备份文件”从其他位置恢复。恢复只做合并，已存在的书籍与记录不会产生重复。"
+            "重装后点“从备份文件夹恢复”，选择原来的目录，确认恢复最新有效备份。恢复成功后会继续使用这个目录；也可展开“更多备份选项”选择单个备份文件。恢复只做合并，较新的本机进度会保留。"
         )
         GuideItem(
             "不进入备份的内容",
@@ -229,81 +223,95 @@ private fun BackupSection() {
 @Composable
 private fun FormatSection() {
     GuideSection("格式说明") {
-        GuideItem("EPUB", "完整阅读与翻译")
-        GuideItem("PDF", "点句翻译＋本机文字识别")
-        GuideItem("DOCX", "转换正文后阅读")
-        GuideItem("TXT", "自动识别常用编码")
+        GuideValueRow("EPUB", "完整阅读与翻译")
+        GuideValueRow("PDF", "点句翻译＋本机文字识别")
+        GuideValueRow("DOCX", "转换正文后阅读")
+        GuideValueRow("TXT", "自动识别常用编码")
         GuideFootnote("DOCX 会提取正文、段落和基础元数据后转换为本地可重排电子书；复杂分页、批注、修订、宏和嵌入对象不会原样保留。旧式 .doc 请先另存为 .docx。扫描 PDF 的文字识别在本机按需执行；倾斜、低清、手写体或复杂多栏版面可能需要重新点击或长按框选。")
     }
 }
 
 @Composable
-private fun GuideSection(title: String, content: @Composable () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-    ) {
-        Column(
-            modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-            content()
+private fun GuideValueRow(title: String, detail: String) {
+    Column {
+        Row(Modifier.fillMaxWidth().heightIn(min = 44.dp).padding(horizontal = 20.dp, vertical = 11.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+            Text(detail, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        JerreaderListDivider(Modifier.padding(start = 20.dp))
     }
 }
 
 @Composable
-private fun GuideStepRow(number: Int, title: String, detail: String) {
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Surface(
-            modifier = Modifier.size(24.dp),
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.primary
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Text(
-                    number.toString(),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onPrimary
-                )
+private fun GuideSection(title: String, content: @Composable () -> Unit) {
+    SettingsGroup(title = title) {
+        Column { content() }
+    }
+}
+
+@Composable
+private fun GuideStepRow(number: Int, title: String, detail: String, showDivider: Boolean = true) {
+    Column {
+        Row(Modifier.padding(horizontal = 20.dp, vertical = 13.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Surface(modifier = Modifier.size(24.dp), shape = CircleShape, color = MaterialTheme.colorScheme.primary) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(number.toString(), style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary)
+                }
             }
+            GuideItemText(title, detail)
         }
-        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-            Text(
-                detail,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
+        if (showDivider) JerreaderListDivider(Modifier.padding(start = 28.dp))
     }
 }
 
 @Composable
 private fun GuideItem(title: String, detail: String) {
+    val icon = when (title) {
+        "从“文件”导入", "选择备份文件夹" -> JerreaderIcon.FOLDER
+        "从其他 App 导入" -> JerreaderIcon.DOWNLOAD
+        "从电脑传输" -> JerreaderIcon.EXTERNAL_DRIVE
+        "翻页", "跨页句段" -> JerreaderIcon.GRID
+        "点句或点段翻译", "独立翻译" -> JerreaderIcon.SPEECH_BUBBLE_FILLED
+        "精确框选" -> JerreaderIcon.HAND
+        "只读打开", "不进入备份的内容" -> JerreaderIcon.LOCK
+        "PDF 翻译" -> JerreaderIcon.NOTE
+        "界面主题" -> JerreaderIcon.PALETTE
+        "阅读设置与选区色", "横排", "竖排" -> JerreaderIcon.TEXT_FORMAT
+        "目录、搜索、书签与批注" -> JerreaderIcon.TABLE_OF_CONTENTS
+        "查词与生词本", "原版" -> JerreaderIcon.DICTIONARY
+        "日语学习增强" -> JerreaderIcon.BOOKS
+        "AI 句子结构分析" -> JerreaderIcon.SEARCH
+        "学习内容导出", "手动备份" -> JerreaderIcon.SHARE
+        "书籍管理与统计" -> JerreaderIcon.CHART
+        "离线能力" -> JerreaderIcon.EXTERNAL_DRIVE
+        "自动备份" -> JerreaderIcon.CLOCK
+        "恢复" -> JerreaderIcon.RESTORE
+        else -> JerreaderIcon.INFO
+    }
+    Column {
+        Row(Modifier.padding(horizontal = 20.dp, vertical = 13.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(28.dp), contentAlignment = Alignment.Center) {
+                JerreaderGlyph(icon, MaterialTheme.colorScheme.primary, Modifier.size(24.dp))
+            }
+            GuideItemText(title, detail)
+        }
+        JerreaderListDivider(Modifier.padding(start = 64.dp))
+    }
+}
+
+@Composable
+private fun GuideItemText(title: String, detail: String) {
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-        Text(
-            detail,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        Text(detail, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
 @Composable
 private fun GuideBody(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-}
-
-@Composable
-private fun GuideFootnote(text: String) {
     Text(
         text,
         style = MaterialTheme.typography.labelMedium,
@@ -312,25 +320,33 @@ private fun GuideFootnote(text: String) {
 }
 
 @Composable
+private fun GuideFootnote(text: String) {
+    Text(
+        text,
+        modifier = Modifier.padding(horizontal = 20.dp, vertical = 11.dp),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+}
+
+@Composable
 private fun GuideDisclosure(title: String, content: @Composable () -> Unit) {
     var expanded by remember { mutableStateOf(false) }
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        TextButton(
-            onClick = { expanded = !expanded },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(
-                text = (if (expanded) "▾  " else "▸  ") + title,
-                modifier = Modifier.fillMaxWidth(),
-                fontWeight = FontWeight.SemiBold
-            )
+    Column {
+        Row(Modifier.fillMaxWidth().clickable { expanded = !expanded }
+            .heightIn(min = 44.dp).padding(horizontal = 20.dp, vertical = 11.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+            JerreaderGlyph(if (expanded) JerreaderIcon.CHEVRON_DOWN else JerreaderIcon.CHEVRON_FORWARD,
+                MaterialTheme.colorScheme.primary, Modifier.size(14.dp))
         }
         if (expanded) {
             Column(
-                modifier = Modifier.padding(start = 8.dp),
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) { content() }
         }
+        JerreaderListDivider(Modifier.padding(start = 20.dp))
     }
 }
 
@@ -345,7 +361,7 @@ private fun GuideCodeBlock(text: String) {
             Text(
                 text,
                 modifier = Modifier.padding(12.dp),
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.bodyMedium,
                 fontFamily = FontFamily.Monospace
             )
         }

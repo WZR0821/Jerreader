@@ -48,6 +48,7 @@ fun WordLookupCard(
     onCopy: (String) -> Unit,
     onFavorite: ((WordExplanation) -> Unit)? = null,
     onSpeak: ((WordExplanation) -> Unit)? = null,
+    onLookup: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -86,6 +87,7 @@ fun WordLookupCard(
             TextButton(onClick = onDismiss) { Text("关闭") }
         }
 
+        onLookup?.let { lookup -> TextButton(onClick = lookup) { Text("语境查词 / 修改词语") } }
         when (state) {
             is WordLookupCardState.Loading -> Row(
                 verticalAlignment = Alignment.CenterVertically,

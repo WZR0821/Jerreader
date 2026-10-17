@@ -39,6 +39,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -46,6 +49,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.boundsInParent
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.material3.Text
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.ComposeView
@@ -156,12 +161,19 @@ class ReaderActivity : AppCompatActivity() {
     private val searchLocators = linkedMapOf<String, Locator>()
     private var pendingAnnotation: PendingAnnotation? = null
 
+    private var contextualLookupInput by mutableStateOf<com.jerreader.android.ui.ContextualLookupInput?>(null)
     internal var currentWordLookupState by mutableStateOf<WordLookupCardState?>(null)
         private set
 
     internal var currentTranslationState by mutableStateOf<TranslationCardState?>(null)
         private set
 
+    internal var translationCardFrameForTesting: RectF? = null
+        private set
+    internal var translationViewportForTesting: RectF? = null
+        private set
+    internal var translationSourceFrameForTesting: RectF? = null
+        private set
     private var currentTranslationLocatorJson: String? = null
 
     internal var currentAppearance by mutableStateOf(ReaderAppearance())
@@ -169,9 +181,9 @@ class ReaderActivity : AppCompatActivity() {
 
     private var bookmarks by mutableStateOf(emptyList<ReadingBookmarkEntity>())
     private var annotations by mutableStateOf(emptyList<ReadingAnnotationEntity>())
-    private var currentProgress by mutableStateOf(0.0)
+    private var currentProgress by mutableDoubleStateOf(0.0)
     private var isCurrentPositionBookmarked by mutableStateOf(false)
-    private var currentChapterIndex by mutableStateOf(-1)
+    private var currentChapterIndex by mutableIntStateOf(-1)
     private var currentChapterName by mutableStateOf("")
     private var searchQuery by mutableStateOf("")
     private var searchResults by mutableStateOf(emptyList<ReaderSearchResultItem>())
@@ -179,12 +191,12 @@ class ReaderActivity : AppCompatActivity() {
     private var searchMessage by mutableStateOf<String?>(null)
     private var crossPageMessage by mutableStateOf<String?>(null)
     private var isExpandingCrossPage by mutableStateOf(false)
-    private var anchorTopPx by mutableStateOf(0)
-    private var anchorBottomPx by mutableStateOf(0)
-    private var cardDragX by mutableStateOf(0f)
-    private var cardDragY by mutableStateOf(0f)
-    private var anchorLeftPx by mutableStateOf(0)
-    private var anchorRightPx by mutableStateOf(0)
+    private var anchorTopPx by mutableIntStateOf(0)
+    private var anchorBottomPx by mutableIntStateOf(0)
+    private var cardDragX by mutableFloatStateOf(0f)
+    private var cardDragY by mutableFloatStateOf(0f)
+    private var anchorLeftPx by mutableIntStateOf(0)
+    private var anchorRightPx by mutableIntStateOf(0)
     // Quick EPUB selections include the paired furigana rects. Keep that
     // merged geometry as the popup anchor instead of replacing it with
     // Readium's base-only selection bounds on the next coroutine turn.
@@ -192,8 +204,8 @@ class ReaderActivity : AppCompatActivity() {
     // A post-measure collision correction. The first placement is chosen from
     // the available room; this value handles real card height, padding and
     // font-scale differences that are not known during the initial measure.
-    private var popupAvoidanceX by mutableStateOf(0f)
-    private var popupAvoidanceY by mutableStateOf(0f)
+    private var popupAvoidanceX by mutableFloatStateOf(0f)
+    private var popupAvoidanceY by mutableFloatStateOf(0f)
     private var selectionRects by mutableStateOf(emptyList<RectF>())
     private var pdfAnnotationRects by mutableStateOf(emptyList<RectF>())
     private var floatingLayer: ComposeView? = null
@@ -283,8 +295,14 @@ class ReaderActivity : AppCompatActivity() {
         navigator = null
         pdfNavigator = null
 
-        if (::expectedSnapshot.isInitialized && !PublicationIntegrity.isUnchanged(expectedSnapshot)) {
-            Log.e(INTEGRITY_TAG, "Readium session changed immutable publication bytes or mtime")
+        if (::expectedSnapshot.isInitialized) {
+            val closedSnapshot = expectedSnapshot
+            // The application scope survives Activity destruction; never hash an entire book on UI.
+            graph.applicationScope.launch {
+                if (!PublicationIntegrity.isUnchanged(closedSnapshot)) {
+                    Log.e(INTEGRITY_TAG, "Readium session changed immutable publication bytes or mtime")
+                }
+            }
         }
         super.onDestroy()
     }
@@ -336,7 +354,7 @@ class ReaderActivity : AppCompatActivity() {
             return
         }
         expectedSnapshot = snapshot
-        if (!PublicationIntegrity.isUnchanged(snapshot)) {
+        if (!withContext(Dispatchers.IO) { PublicationIntegrity.isUnchanged(snapshot) }) {
             showError("出版物副本在打开前已发生变化。")
             return
         }
@@ -383,7 +401,9 @@ class ReaderActivity : AppCompatActivity() {
         )
 
         val topChrome = readerComposeView {
+            val appPreferences by graph.appSettings.preferences.collectAsState()
             ReaderTopChrome(
+                transparency = appPreferences.topBarTransparency,
                 chapterTitle = currentChapterName,
                 bookTitle = book?.title ?: "Jerreader",
                 isBookmarked = isCurrentPositionBookmarked,
@@ -406,6 +426,7 @@ class ReaderActivity : AppCompatActivity() {
             val appPreferences by graph.appSettings.preferences.collectAsState()
             val translationPreferences by graph.translationSettings.preferences.collectAsState()
             ReaderBottomChrome(
+                transparency = appPreferences.bottomBarTransparency,
                 chapterLabel = currentChapterName,
                 progress = currentProgress,
                 showProgress = appPreferences.showReadingProgress,
@@ -458,11 +479,11 @@ class ReaderActivity : AppCompatActivity() {
         floatingLayer = overlayView
 
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
             topChrome.updatePadding(top = bars.top)
             bottomChrome.updatePadding(bottom = bars.bottom)
-            // The page keeps clear of the floating cards so text is never hidden
-            // behind them, while the background still reaches the screen edges.
+            // Reserve a stable viewport for the edge-aligned control bars.
+            // Toggling their visibility must not reflow the current page.
             readerContainer.updatePadding(
                 top = bars.top + (CONTENT_TOP_INSET_DP * density).toInt(),
                 bottom = bars.bottom + (CONTENT_BOTTOM_INSET_DP * density).toInt()
@@ -477,6 +498,19 @@ class ReaderActivity : AppCompatActivity() {
         }
         rootView = root
         setContentView(root)
+        lifecycleScope.launch {
+            var lastImmersive: Boolean? = null
+            graph.appSettings.preferences.collectLatest { preferences ->
+                if (lastImmersive != preferences.immersiveReading) {
+                    lastImmersive = preferences.immersiveReading
+                    val controller = androidx.core.view.WindowCompat.getInsetsController(window, root)
+                    controller.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                    if (preferences.immersiveReading) controller.hide(WindowInsetsCompat.Type.statusBars())
+                    else controller.show(WindowInsetsCompat.Type.statusBars())
+                    ViewCompat.requestApplyInsets(root)
+                }
+            }
+        }
     }
 
     private fun readerComposeView(
@@ -510,7 +544,8 @@ class ReaderActivity : AppCompatActivity() {
             readingStartedAtMillis = System.currentTimeMillis()
         }
         readingOrder = openedPublication.readingOrder
-        positions = runCatching { openedPublication.positions() }.getOrDefault(emptyList())
+        // Readium indexes can touch chapter resources; keep this work off the UI thread.
+        positions = withContext(Dispatchers.IO) { openedPublication.positions() }
 
         val stored = decodeStoredReaderPreferences(
             json = libraryBook?.preferencesJson,
@@ -522,7 +557,7 @@ class ReaderActivity : AppCompatActivity() {
         when {
             openedPublication.conformsTo(Publication.Profile.EPUB) -> {
                 buildTableOfContents(openedPublication.tableOfContents)
-                val initialLocator = libraryBook?.locatorJson?.let(::parseLocator)
+                val initialLocator = (intent.getStringExtra(EXTRA_INITIAL_LOCATOR) ?: libraryBook?.locatorJson)?.let(::parseLocator)
                 val wordController = ReaderWordInteractionController(
                     scope = lifecycleScope,
                     lookupService = graph.lexicalLookupService,
@@ -568,7 +603,7 @@ class ReaderActivity : AppCompatActivity() {
 
             openedPublication.conformsTo(Publication.Profile.PDF) -> {
                 buildTableOfContents(openedPublication.tableOfContents)
-                val initialLocator = libraryBook?.locatorJson?.let(::parseLocator)
+                val initialLocator = (intent.getStringExtra(EXTRA_INITIAL_LOCATOR) ?: libraryBook?.locatorJson)?.let(::parseLocator)
                 val factory = PdfNavigatorFactory(
                     openedPublication,
                     PdfiumEngineProvider()
@@ -633,6 +668,9 @@ class ReaderActivity : AppCompatActivity() {
         observeLocator { fragment.currentLocator.collectLatest(it) }
     }
 
+    // This listener observes release/cancel only. It returns false so PDFView
+    // dispatches its own accessible click; calling performClick here would duplicate taps.
+    @android.annotation.SuppressLint("ClickableViewAccessibility")
     private fun installPdfGeometryListeners(view: View) {
         removePdfGeometryListeners()
         val scrollListener = ViewTreeObserver.OnScrollChangedListener {
@@ -1014,7 +1052,8 @@ class ReaderActivity : AppCompatActivity() {
             ReaderAppearancePanel(
                 appearance = currentAppearance,
                 onChange = ::applyAppearance,
-                isPdf = pdfNavigator != null
+                isPdf = pdfNavigator != null,
+                interfaceControls = { com.jerreader.android.ui.ReaderInterfaceControls(graph.appSettings) }
             )
         }
     }
@@ -1196,11 +1235,27 @@ class ReaderActivity : AppCompatActivity() {
      */
     @androidx.compose.runtime.Composable
     private fun ReaderFloatingLayer() {
+        var grammarDraft by androidx.compose.runtime.remember { mutableStateOf<com.jerreader.android.data.GrammarNoteEntity?>(null) }
+        grammarDraft?.let { draft ->
+            com.jerreader.android.ui.GrammarNoteEditor(draft, graph.learningRecords) { grammarDraft = null }
+        }
         val translation = currentTranslationState
         val lookup = currentWordLookupState
         val translationPreferences by graph.translationSettings.preferences.collectAsState()
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val interfacePreferences by graph.appSettings.preferences.collectAsState()
+        BoxWithConstraints(modifier = Modifier.fillMaxSize().onGloballyPositioned { coordinates ->
+            if (com.jerreader.android.BuildConfig.DEBUG) {
+                val origin = coordinates.positionInWindow()
+                translationViewportForTesting = RectF(origin.x, origin.y,
+                    origin.x + coordinates.size.width, origin.y + coordinates.size.height)
+            }
+        }) {
             val available = maxHeight
+            val isVertical = currentAppearance.orientation == ReaderTextOrientation.VERTICAL ||
+                (currentAppearance.orientation == ReaderTextOrientation.PUBLICATION &&
+                    publicationWritingModeIsVertical)
+            val selectionGap = if (isVertical) 12.dp
+                else if (translationPreferences.quickTranslationUnit == com.jerreader.shared.translation.QuickTranslationUnit.PARAGRAPH) 26.dp else 18.dp
             val density = LocalDensity.current
             val rawAnchorTop = with(density) { anchorTopPx.toDp() }
                 .coerceIn(0.dp, available)
@@ -1216,8 +1271,8 @@ class ReaderActivity : AppCompatActivity() {
                 .coerceAtLeast(safeTop)
             val selectionTop = rawAnchorTop.coerceIn(safeTop, safeBottom)
             val selectionBottom = rawAnchorBottom.coerceIn(selectionTop, safeBottom)
-            val roomBelow = (safeBottom - selectionBottom - GAP).coerceAtLeast(0.dp)
-            val roomAbove = (selectionTop - safeTop - GAP).coerceAtLeast(0.dp)
+            val roomBelow = (safeBottom - selectionBottom - selectionGap).coerceAtLeast(0.dp)
+            val roomAbove = (selectionTop - safeTop - selectionGap).coerceAtLeast(0.dp)
             val minimumCardHeight = minOf(108.dp, (safeBottom - safeTop).coerceAtLeast(1.dp))
             val preferredCardHeight = minOf(
                 (available * 0.30f).coerceAtLeast(166.dp),
@@ -1240,21 +1295,19 @@ class ReaderActivity : AppCompatActivity() {
             )
             // A vertical Japanese page reads in columns, so iOS puts the card
             // beside the tapped column instead of above or below it.
-            val isVertical = currentAppearance.orientation == ReaderTextOrientation.VERTICAL ||
-                (currentAppearance.orientation == ReaderTextOrientation.PUBLICATION &&
-                    publicationWritingModeIsVertical)
+
             val widthPx = constraints.maxWidth
             val availableWidth = with(density) { widthPx.toDp() }
             val anchorLeft = with(density) { anchorLeftPx.toDp() }.coerceIn(0.dp, availableWidth)
             val anchorRight = with(density) { anchorRightPx.toDp() }
                 .coerceIn(anchorLeft, availableWidth)
             val safeHorizontalInset = 12.dp
-            val roomLeft = (anchorLeft - safeHorizontalInset - GAP).coerceAtLeast(0.dp)
-            val roomRight = (availableWidth - safeHorizontalInset - anchorRight - GAP)
+            val roomLeft = (anchorLeft - safeHorizontalInset - selectionGap).coerceAtLeast(0.dp)
+            val roomRight = (availableWidth - safeHorizontalInset - anchorRight - selectionGap)
                 .coerceAtLeast(0.dp)
             val placeLeft = roomLeft >= roomRight
             val sideWidth = (if (placeLeft) roomLeft else roomRight)
-                .coerceAtMost(300.dp)
+                .coerceAtMost(if (availableWidth >= 700.dp) 320.dp else 220.dp)
             val verticalCardHeight = minOf(
                 preferredCardHeight,
                 (safeBottom - safeTop).coerceAtLeast(1.dp)
@@ -1266,10 +1319,10 @@ class ReaderActivity : AppCompatActivity() {
                 (safeBottom - verticalCardHeight).coerceAtLeast(safeTop)
             )
             val topBannerHeight = minOf(preferredCardHeight, available * 0.30f)
-            val topBannerCollides = rawAnchorTop < safeTop + topBannerHeight + GAP &&
-                rawAnchorBottom > safeTop - GAP
+            val topBannerCollides = rawAnchorTop < safeTop + topBannerHeight + selectionGap &&
+                rawAnchorBottom > safeTop - selectionGap
             val useTopBanner = translationPreferences.displayMode == TranslationDisplayMode.TOP_BANNER &&
-                !topBannerCollides
+                !isVertical && !topBannerCollides
 
             // The initial solver above only knows the requested card height.
             // Compose can measure a different height after text wrapping,
@@ -1280,7 +1333,7 @@ class ReaderActivity : AppCompatActivity() {
             val safeRightPx = with(density) { availableWidth.toPx() } - safeLeftPx
             val safeTopPx = with(density) { safeTop.toPx() }
             val safeBottomPx = with(density) { safeBottom.toPx() }
-            val gapPx = with(density) { GAP.toPx() }
+            val gapPx = with(density) { selectionGap.toPx() }
             val selectionLeftPx = minOf(anchorLeftPx, anchorRightPx).toFloat()
             val selectionRightPx = maxOf(anchorLeftPx, anchorRightPx).toFloat()
             val selectionTopPx = minOf(anchorTopPx, anchorBottomPx).toFloat()
@@ -1292,6 +1345,11 @@ class ReaderActivity : AppCompatActivity() {
 
             val popupCollisionModifier = Modifier.onGloballyPositioned { coordinates ->
                 val bounds = coordinates.boundsInParent()
+                if (com.jerreader.android.BuildConfig.DEBUG) {
+                    val origin = coordinates.positionInWindow()
+                    translationCardFrameForTesting = RectF(origin.x, origin.y,
+                        origin.x + coordinates.size.width, origin.y + coordinates.size.height)
+                }
                 val hasAnchor = hasSelectionAnchor ||
                     selectionRightPx > selectionLeftPx ||
                     selectionBottomPx > selectionTopPx
@@ -1373,11 +1431,11 @@ class ReaderActivity : AppCompatActivity() {
                         }
                         .then(popupCollisionModifier)
 
-                isVertical && sideWidth >= 160.dp -> {
+                isVertical && sideWidth >= 144.dp -> {
                     Modifier
                         .align(if (placeLeft) Alignment.TopStart else Alignment.TopEnd)
                         .padding(top = verticalCardTop)
-                        .padding(horizontal = GAP)
+                        .padding(horizontal = selectionGap)
                         .widthIn(max = sideWidth)
                         .heightIn(max = verticalCardHeight)
                         .offset {
@@ -1392,8 +1450,8 @@ class ReaderActivity : AppCompatActivity() {
                     Modifier
                         .align(if (placeBelow) Alignment.TopStart else Alignment.BottomStart)
                         .padding(
-                            top = if (placeBelow) selectionBottom + GAP else 0.dp,
-                            bottom = if (placeBelow) 0.dp else (available - selectionTop + GAP)
+                            top = if (placeBelow) selectionBottom + selectionGap else 0.dp,
+                            bottom = if (placeBelow) 0.dp else (available - selectionTop + selectionGap)
                                 .coerceAtLeast(0.dp)
                         )
                         .padding(horizontal = 12.dp)
@@ -1412,18 +1470,68 @@ class ReaderActivity : AppCompatActivity() {
                 }
             }
 
+            contextualLookupInput?.let { input ->
+                androidx.compose.runtime.key(input) {
+                com.jerreader.android.ui.ContextualLookupSheet(
+                    input = input, dictionary = { graph.offlineDictionary.japaneseChinese },
+                    lookup = androidx.compose.runtime.remember { com.jerreader.android.lexical.DefaultLexicalLookupService(offline = graph.offlineDictionary) },
+                    explanationService = (graph.translationService as? ContextExplanationService)
+                        .takeIf { graph.translationSettings.preferredAIProviderMode() != null },
+                    onRecord = { value -> graph.learningRecords.recordLookup(value, book?.id, book?.title) },
+                    onAnalysis = { snapshot, result -> graph.learningRecords.updateContextualAnalysis(snapshot, result) },
+                    onFavorite = { snapshot, favorite -> graph.learningRecords.setContextualFavorite(snapshot.lookupKey, favorite) },
+                    onDismiss = { contextualLookupInput = null })
+                }
+            }
             if (translation != null) {
                 FloatingSurface(cardModifier) {
                     TranslationCard(
                         state = translation,
+                        japaneseFuriganaEnabled = interfacePreferences.japaneseFuriganaEnabled,
+                        onToggleFurigana = if (translation is TranslationCardState.Success &&
+                            (translation.result.sourceLanguage == LanguageCode.JAPANESE || translation.result.targetLanguage == LanguageCode.JAPANESE)) {
+                            { graph.appSettings.updateJapaneseFurigana(!interfacePreferences.japaneseFuriganaEnabled) }
+                        } else null,
+                        translationContent = { success ->
+                            if (interfacePreferences.japaneseFuriganaEnabled && success.result.sourceLanguage == LanguageCode.JAPANESE) {
+                                Text("原文注音", style = androidx.compose.material3.MaterialTheme.typography.labelMedium)
+                                com.jerreader.android.ui.JapaneseFuriganaText(success.sourceText, graph.offlineDictionary, Modifier.fillMaxWidth())
+                            }
+                            if (interfacePreferences.japaneseFuriganaEnabled && success.result.targetLanguage == LanguageCode.JAPANESE)
+                                com.jerreader.android.ui.JapaneseFuriganaText(success.result.translatedText, graph.offlineDictionary, Modifier.fillMaxWidth())
+                            else Text(success.result.translatedText, style = androidx.compose.material3.MaterialTheme.typography.bodyLarge)
+                        },
                         onDismiss = ::dismissTranslation,
                         onRetry = ::retryTranslation,
                         onCopy = ::copyToClipboard,
                         onFavorite = { result -> favoriteTranslation(translation, result) },
                         onExplain = { explainTranslation(translation) },
+                        onSaveAnalysis = {
+                            val success = translation as? TranslationCardState.Success
+                            val analysis = success?.analysisText
+                            if (analysis != null) {
+                                grammarDraft = com.jerreader.android.data.GrammarNoteEntity(
+                                    title = com.jerreader.android.data.grammarNoteTitle(success.sourceText), sentence = success.sourceText,
+                                    explanation = analysis, language = success.result.sourceLanguage.tag,
+                                    bookId = book?.id, bookTitle = book?.title,
+                                    locatorJson = currentTranslationLocatorJson ?: latestLocatorJson)
+
+                            }
+                        },
                         onAnnotate = ::annotateTranslatedText,
                         onExpandCrossPage = { expandCrossPageSegment(translation) },
                         onAddToVocabulary = { addTranslatedWordToVocabulary(translation) },
+                        onLookup = { lifecycleScope.launch {
+                            val context = try {
+                                kotlinx.coroutines.withTimeoutOrNull(1_000) { tapTranslationController?.lookupContext(translation.sourceText) }
+                            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                            catch (_: Exception) { null } ?: translation.sourceText
+                            if (currentTranslationState == translation) {
+                                contextualLookupInput = com.jerreader.android.ui.ContextualLookupInput(
+                                    translation.sourceText, context,
+                                    translationSourceLanguage(translation) ?: LanguageCode.JAPANESE)
+                            }
+                        } },
                         crossPageMessage = crossPageMessage,
                         isExpandingCrossPage = isExpandingCrossPage,
                         onDrag = { dx, dy ->
@@ -1441,6 +1549,8 @@ class ReaderActivity : AppCompatActivity() {
                         state = lookup,
                         onDismiss = ::dismissWordLookup,
                         onRetry = { wordInteractionController?.retry() },
+                        onLookup = { contextualLookupInput = com.jerreader.android.ui.ContextualLookupInput(
+                            lookup.analysis.surfaceForm, lookup.analysis.sentenceContext, lookup.analysis.language) },
                         onCopy = ::copyToClipboard,
                         onFavorite = { explanation ->
                             lifecycleScope.launch {
@@ -1566,7 +1676,19 @@ class ReaderActivity : AppCompatActivity() {
         setFloatingLayerVisible(false)
     }
 
+    // The app uses the platform logger and does not ship a Timber dependency.
+    @android.annotation.SuppressLint("LogNotTimber")
+    private fun recordReadingQuery() {
+        val id = book?.id ?: return
+        lifecycleScope.launch {
+            try { graph.repository.recordReadingQuery(id) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (_: Exception) { android.util.Log.w("Jerreader", "Reading query statistics could not be saved") }
+        }
+    }
+
     private fun showWordLookup(state: WordLookupCardState) {
+        if (state is WordLookupCardState.Loading) recordReadingQuery()
         popupAvoidanceX = 0f
         popupAvoidanceY = 0f
         currentWordLookupState = state
@@ -1575,6 +1697,7 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     private fun showTranslation(state: TranslationCardState) {
+        if (state is TranslationCardState.Loading) recordReadingQuery()
         cardDragX = 0f
         cardDragY = 0f
         popupAvoidanceX = 0f
@@ -1849,6 +1972,26 @@ class ReaderActivity : AppCompatActivity() {
         crossPageMessage = "已复制到剪贴板。"
     }
 
+    internal fun showTranslationGeometryForTesting(selection: RectF, vertical: Boolean, state: TranslationCardState.Success) {
+        check(com.jerreader.android.BuildConfig.DEBUG)
+        val viewport = checkNotNull(translationViewportForTesting)
+        val density = resources.displayMetrics.density
+        anchorLeftPx = (selection.left * density).toInt()
+        anchorRightPx = (selection.right * density).toInt()
+        anchorTopPx = (selection.top * density).toInt()
+        anchorBottomPx = (selection.bottom * density).toInt()
+        hasSelectionAnchor = true
+        currentAppearance = currentAppearance.copy(orientation = if (vertical) ReaderTextOrientation.VERTICAL else ReaderTextOrientation.HORIZONTAL)
+        cardDragX = 0f; cardDragY = 0f; popupAvoidanceX = 0f; popupAvoidanceY = 0f
+        // Keep the last actual outer frame: changing bounded scroll content
+        // does not necessarily produce a new onGloballyPositioned callback.
+        translationSourceFrameForTesting = RectF(viewport.left + selection.left * density,
+            viewport.top + selection.top * density, viewport.left + selection.right * density,
+            viewport.top + selection.bottom * density)
+        currentTranslationState = state
+        setFloatingLayerVisible(true)
+    }
+
     internal suspend fun lookupAtForTesting(point: PointF): WordLookupCardState? =
         wordInteractionController?.lookupAt(point)
 
@@ -2006,6 +2149,7 @@ class ReaderActivity : AppCompatActivity() {
         (state as? TranslationCardState.Success)?.result?.sourceLanguage ?: currentBookLanguage()
 
     companion object {
+        const val EXTRA_INITIAL_LOCATOR = "com.jerreader.reader.INITIAL_LOCATOR"
         const val EXTRA_BOOK_ID = "com.jerreader.reader.BOOK_ID"
         const val EXTRA_PUBLICATION_PATH = "com.jerreader.reader.PUBLICATION_PATH"
         const val EXTRA_EXPECTED_SHA256 = "com.jerreader.reader.EXPECTED_SHA256"
@@ -2019,8 +2163,8 @@ class ReaderActivity : AppCompatActivity() {
         // layer for OCR selections and persisted page rectangles.
         private const val DRAW_OWN_SELECTION_HIGHLIGHT = false
         private val GAP = 18.dp
-        private const val CONTENT_TOP_INSET_DP = 74
-        private const val CONTENT_BOTTOM_INSET_DP = 156
+        private const val CONTENT_TOP_INSET_DP = 52
+        private const val CONTENT_BOTTOM_INSET_DP = 128
         private const val ANNOTATION_DECORATION_GROUP = "jerreader-reading-annotations"
         private const val NAVIGATOR_TAG = "JerreaderNavigator"
         private const val INTEGRITY_TAG = "JerreaderIntegrity"

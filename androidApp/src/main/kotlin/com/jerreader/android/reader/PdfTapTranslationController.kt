@@ -1,5 +1,6 @@
 package com.jerreader.android.reader
 
+import androidx.core.graphics.createBitmap
 import android.graphics.Bitmap
 import android.graphics.PointF
 import android.graphics.RectF
@@ -308,7 +309,7 @@ class PdfTapTranslationController(
                     ).coerceAtLeast(0.25f)
                     val width = (page.width * scale).toInt().coerceAtLeast(1)
                     val height = (page.height * scale).toInt().coerceAtLeast(1)
-                    Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { bitmap ->
+                    createBitmap(width, height, Bitmap.Config.ARGB_8888).also { bitmap ->
                         page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                     }
                 }

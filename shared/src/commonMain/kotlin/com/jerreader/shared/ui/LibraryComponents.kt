@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -19,17 +20,22 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 /**
  * Library building blocks copied from the iOS `LibraryView`: the reading
  * overview card, the section titles with their accent chip, and the recently
- * viewed row. Geometry follows the Swift source (21dp overview radius, 18dp
+ * viewed row. Geometry follows the Swift source (14dp overview radius, 18dp
  * card radius, 72x108 thumbnail, 42dp accent chip).
  */
 @Composable
@@ -41,37 +47,19 @@ fun LibraryReadingOverview(
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-        shadowElevation = 4.dp
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outline)
     ) {
         Column(
-            modifier = Modifier.padding(17.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("阅读概览", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        if (startedCount == 0) "从一本喜欢的书开始" else "每一次打开，都在向前一点",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .size(42.dp)
-                        .clip(RoundedCornerShape(13.dp))
-                        .background(MaterialTheme.colorScheme.secondaryContainer),
-                    contentAlignment = Alignment.Center
-                ) {
-                    JerreaderGlyph(
-                        icon = JerreaderIcon.TREND,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
+                Text("阅读统计", style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                Text(if (startedCount == 0) "从一本喜欢的书开始" else "只记录本机阅读进度",
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 OverviewMetric(
@@ -80,20 +68,20 @@ fun LibraryReadingOverview(
                     } else {
                         "$totalMinutes 分钟"
                     },
-                    label = "累计阅读"
+                    label = "累计阅读", icon = JerreaderIcon.CLOCK
                 )
                 VerticalDivider(
-                    modifier = Modifier.height(38.dp),
-                    color = MaterialTheme.colorScheme.outline
+                    modifier = Modifier.height(30.dp), thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.14f)
                 )
-                OverviewMetric(value = startedCount.toString(), label = "已开始")
+                OverviewMetric(value = startedCount.toString(), label = "已开始", icon = JerreaderIcon.BOOKS)
                 VerticalDivider(
-                    modifier = Modifier.height(38.dp),
-                    color = MaterialTheme.colorScheme.outline
+                    modifier = Modifier.height(30.dp), thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.14f)
                 )
                 OverviewMetric(
-                    value = "${(averageProgress * 100).toInt()}%",
-                    label = "平均进度"
+                    value = "${kotlin.math.round(averageProgress * 100).toInt()}%",
+                    label = "平均进度", icon = JerreaderIcon.TREND
                 )
             }
         }
@@ -101,18 +89,21 @@ fun LibraryReadingOverview(
 }
 
 @Composable
-private fun RowScope.OverviewMetric(value: String, label: String) {
+private fun RowScope.OverviewMetric(value: String, label: String, icon: JerreaderIcon) {
     Column(
         modifier = Modifier.weight(1f),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(5.dp)
     ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            JerreaderGlyph(icon, MaterialTheme.colorScheme.primary, Modifier.size(14.dp))
         Text(
             value,
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.primary,
             maxLines = 1
         )
+        }
         Text(
             label,
             style = MaterialTheme.typography.labelSmall,
@@ -121,7 +112,7 @@ private fun RowScope.OverviewMetric(value: String, label: String) {
     }
 }
 
-/** `JerreaderSectionTitle`: accent chip, bold title, trailing detail. */
+/** `JerreaderSectionTitle`: shared outline icon, title and trailing detail. */
 @Composable
 fun LibrarySectionTitle(
     title: String,
@@ -135,19 +126,16 @@ fun LibrarySectionTitle(
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Box(
-            modifier = Modifier
-                .size(28.dp)
-                .clip(RoundedCornerShape(9.dp))
-                .background(MaterialTheme.colorScheme.secondaryContainer),
+            modifier = Modifier.size(22.dp),
             contentAlignment = Alignment.Center
         ) {
             JerreaderGlyph(
                 icon = icon,
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(15.dp)
+                modifier = Modifier.size(20.dp)
             )
         }
-        Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+        Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
         detail?.let {
             Text(
                 it,
@@ -190,17 +178,19 @@ fun LibraryRecentlyViewedRow(
             ) { cover() }
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(5.dp)
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text(
                     title,
-                    style = MaterialTheme.typography.titleSmall,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontFamily = FontFamily.Serif,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
                     author,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1
                 )
@@ -252,7 +242,7 @@ fun LibraryToolbarButton(
 ) {
     Box(
         modifier = modifier
-            .size(40.dp)
+            .size(44.dp)
             .clip(RoundedCornerShape(12.dp))
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center
@@ -283,15 +273,17 @@ fun <T> JerreaderSegmentedNav(
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(15.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outline)
     ) {
-        Row(modifier = Modifier.padding(5.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(modifier = Modifier.selectableGroup().padding(4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             options.forEach { (value, title, icon) ->
                 val isSelected = value == selected
-                Row(
+                Column(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(11.dp))
+                        .heightIn(min = 48.dp)
+                        .clip(RoundedCornerShape(13.dp))
                         .background(
                             if (isSelected) {
                                 MaterialTheme.colorScheme.primary
@@ -299,10 +291,10 @@ fun <T> JerreaderSegmentedNav(
                                 androidx.compose.ui.graphics.Color.Transparent
                             }
                         )
-                        .clickable { onSelect(value) }
-                        .padding(vertical = 9.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
+                        .selectable(selected = isSelected, role = androidx.compose.ui.semantics.Role.Tab) { onSelect(value) }
+                        .padding(vertical = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(3.dp, Alignment.CenterVertically)
                 ) {
                     JerreaderGlyph(
                         icon = icon,
@@ -311,12 +303,14 @@ fun <T> JerreaderSegmentedNav(
                         } else {
                             MaterialTheme.colorScheme.primary
                         },
-                        modifier = Modifier.size(15.dp)
+                        modifier = Modifier.size(16.dp)
                     )
+                    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 2.dp), contentAlignment = Alignment.Center) {
+                        val labelSize = with(androidx.compose.ui.platform.LocalDensity.current) { 13.dp.toSp() }
                     Text(
                         text = title,
-                        modifier = Modifier.padding(start = 5.dp),
-                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier,
+                        style = MaterialTheme.typography.labelLarge.copy(fontSize = labelSize, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold),
                         maxLines = 1,
                         color = if (isSelected) {
                             MaterialTheme.colorScheme.onPrimary
@@ -324,6 +318,7 @@ fun <T> JerreaderSegmentedNav(
                             MaterialTheme.colorScheme.primary
                         }
                     )
+                    }
                 }
             }
         }

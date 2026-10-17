@@ -31,7 +31,8 @@ data class WordLookupEntity(
     val createdAtEpochMillis: Long,
     val lastLookedUpAtEpochMillis: Long,
     val isFavorite: Boolean,
-    val isInHistory: Boolean
+    val isInHistory: Boolean,
+    val reviewJson: String? = null
 )
 
 @Entity(
@@ -52,5 +53,6 @@ data class TranslationFavoriteEntity(
     val bookTitle: String?,
     val locatorJson: String?,
     val createdAtEpochMillis: Long,
-    val updatedAtEpochMillis: Long
+    val updatedAtEpochMillis: Long,
+    val practiceJson: String? = null
 )

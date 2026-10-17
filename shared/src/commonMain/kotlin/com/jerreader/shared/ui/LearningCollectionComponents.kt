@@ -1,8 +1,13 @@
 package com.jerreader.shared.ui
 
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,7 +17,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -35,6 +40,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 /**
  * The vocabulary and history collections, ported from the iOS `VocabularyView`
@@ -53,13 +59,13 @@ fun JerreaderSearchField(
     modifier: Modifier = Modifier
 ) {
     Surface(
-        modifier = modifier.height(42.dp),
+        modifier = modifier.heightIn(min = 48.dp),
         shape = RoundedCornerShape(13.dp),
         color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+        border = BorderStroke(.75.dp, MaterialTheme.colorScheme.outline)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
@@ -72,8 +78,8 @@ fun JerreaderSearchField(
                 if (value.isEmpty()) {
                     Text(
                         text = placeholder,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 17.sp, lineHeight = 22.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -81,11 +87,11 @@ fun JerreaderSearchField(
                 BasicTextField(
                     value = value,
                     onValueChange = onValueChange,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = placeholder },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     textStyle = LocalTextStyle.current.merge(
-                        MaterialTheme.typography.bodyMedium
+                        MaterialTheme.typography.bodyMedium.copy(fontSize = 17.sp, lineHeight = 22.sp)
                     ).copy(color = MaterialTheme.colorScheme.onSurface),
                     cursorBrush = SolidColor(LocalJerreaderColors.current.accent)
                 )
@@ -95,7 +101,8 @@ fun JerreaderSearchField(
                     modifier = Modifier
                         .size(20.dp)
                         .clip(CircleShape)
-                        .clickable { onValueChange("") },
+                        .semantics { contentDescription = "清除搜索" }
+                        .clickable(role = Role.Button) { onValueChange("") },
                     contentAlignment = Alignment.Center
                 ) {
                     JerreaderGlyph(
@@ -113,12 +120,12 @@ fun JerreaderSearchField(
 @Composable
 fun JerreaderCountBadge(count: Int, modifier: Modifier = Modifier) {
     Surface(
-        modifier = modifier.defaultMinSize(minWidth = 30.dp, minHeight = 30.dp),
+        modifier = modifier.defaultMinSize(minWidth = 36.dp, minHeight = 30.dp),
         shape = CircleShape,
         color = LocalJerreaderColors.current.accentFill
     ) {
         Box(
-            modifier = Modifier.padding(horizontal = 6.dp),
+            modifier = Modifier.padding(horizontal = 3.dp),
             contentAlignment = Alignment.Center
         ) {
             Text(
@@ -136,6 +143,7 @@ fun JerreaderCountBadge(count: Int, modifier: Modifier = Modifier) {
 @Composable
 fun JerreaderToolbarIconButton(
     icon: JerreaderIcon,
+    label: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true
@@ -145,10 +153,11 @@ fun JerreaderToolbarIconButton(
         modifier = modifier.size(42.dp),
         shape = RoundedCornerShape(13.dp),
         color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+        border = BorderStroke(.75.dp, MaterialTheme.colorScheme.outline)
     ) {
         Box(
-            modifier = Modifier.clickable(enabled = enabled, onClick = onClick),
+            modifier = Modifier.semantics { contentDescription = label }
+                .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
             contentAlignment = Alignment.Center
         ) {
             JerreaderGlyph(
@@ -161,8 +170,7 @@ fun JerreaderToolbarIconButton(
 }
 
 /**
- * The tinted strip the search field sits in, closed by a hairline. iOS uses
- * `.ultraThinMaterial` over the page; `mutedSurface` is the flat equivalent.
+ * Both native collections use a fixed, opaque strip closed by a hairline.
  */
 @Composable
 fun JerreaderCollectionControls(
@@ -174,7 +182,7 @@ fun JerreaderCollectionControls(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(LocalJerreaderColors.current.mutedSurface)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+                .padding(horizontal = 20.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
             content = content
@@ -191,37 +199,41 @@ fun JerreaderCollectionSectionHeader(
     modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = modifier.fillMaxWidth().padding(horizontal = 20.dp),
+        modifier = modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(top = 16.dp, bottom = 4.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         Text(
             text = title,
             style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Text(
             text = detail,
             style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .5f)
         )
     }
 }
 
 /** One record in a collection list: paper, hairline border, 18dp corners. */
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 fun JerreaderRecordCard(
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
     Surface(
         modifier = modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+        border = BorderStroke(.75.dp, MaterialTheme.colorScheme.outline)
     ) {
         Column(
-            modifier = if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier,
+            modifier = if (onLongClick != null) Modifier.combinedClickable(onClick = onClick ?: {}, onLongClick = onLongClick, onLongClickLabel = "更多操作")
+                else if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier,
         ) {
             Column(modifier = Modifier.padding(16.dp), content = content)
         }
@@ -245,7 +257,7 @@ fun JerreaderWordRecordRow(
     trailing: @Composable RowScope.() -> Unit = {}
 ) {
     Column(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().padding(vertical = 2.dp),
         verticalArrangement = Arrangement.spacedBy(9.dp)
     ) {
         Row(
@@ -256,7 +268,7 @@ fun JerreaderWordRecordRow(
             Text(
                 text = surfaceForm,
                 style = MaterialTheme.typography.titleLarge,
-                fontFamily = FontFamily.Serif,
+                fontFamily = if (surfaceForm.any { it in '\u2E80'..'\u9FFF' }) FontFamily.SansSerif else FontFamily.Serif,
                 fontWeight = FontWeight.SemiBold
             )
             if (!lemma.isNullOrEmpty() && lemma != surfaceForm) {
@@ -309,13 +321,13 @@ fun JerreaderWordRecordRow(
 }
 
 /**
- * Borderless glyph button sized for a record card's header. iOS puts these
- * actions behind swipe gestures, which Android users have no way to discover,
- * so the same actions sit in the row itself.
+ * Borderless glyph button for optional record actions. The learning lists
+ * expose their actions in a long-press menu and keep the card itself navigable.
  */
 @Composable
 fun JerreaderRowIconButton(
     icon: JerreaderIcon,
+    label: String,
     tint: androidx.compose.ui.graphics.Color,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -324,7 +336,8 @@ fun JerreaderRowIconButton(
         modifier = modifier
             .size(32.dp)
             .clip(CircleShape)
-            .clickable(onClick = onClick),
+            .semantics { contentDescription = label }
+            .clickable(role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         JerreaderGlyph(icon = icon, tint = tint, modifier = Modifier.size(17.dp))
@@ -344,7 +357,7 @@ fun JerreaderTagCapsule(text: String, modifier: Modifier = Modifier) {
             text = text,
             modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
             style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
+            fontWeight = FontWeight.Normal,
             color = colors.accent
         )
     }
@@ -374,7 +387,7 @@ fun JerreaderTranslationFavoriteRow(
             JerreaderGlyph(
                 icon = JerreaderIcon.DICTIONARY,
                 tint = colors.accent,
-                modifier = Modifier.size(14.dp)
+                modifier = Modifier.size(18.dp)
             )
             Text(
                 text = languagePair,
@@ -386,7 +399,7 @@ fun JerreaderTranslationFavoriteRow(
             Text(
                 text = trailingNote,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .5f)
             )
             trailing()
         }
@@ -410,14 +423,14 @@ fun JerreaderTranslationFavoriteRow(
                 horizontalArrangement = Arrangement.spacedBy(5.dp)
             ) {
                 JerreaderGlyph(
-                    icon = JerreaderIcon.DICTIONARY,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(13.dp)
+                    icon = JerreaderIcon.BOOK_CLOSED,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .5f),
+                    modifier = Modifier.size(16.dp)
                 )
                 Text(
                     text = bookTitle,
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .5f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -438,7 +451,7 @@ fun JerreaderEmptyState(
     Column(
         modifier = modifier.fillMaxWidth().padding(28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically)
     ) {
         Surface(
             modifier = Modifier.size(68.dp),

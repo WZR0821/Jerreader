@@ -15,6 +15,7 @@ import com.jerreader.shared.library.LibraryBook
 )
 data class BookEntity(
     @PrimaryKey val id: String,
+    val activityJson: String? = null,
     val title: String,
     val author: String?,
     val language: String?,

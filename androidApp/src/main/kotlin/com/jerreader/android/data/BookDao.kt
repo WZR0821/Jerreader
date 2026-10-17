@@ -50,6 +50,9 @@ interface BookDao {
         progress: Double
     )
 
+    @Query("UPDATE books SET activityJson = :json WHERE id = :id")
+    suspend fun updateActivity(id: String, json: String)
+
     @Query("UPDATE books SET totalReadingSeconds = totalReadingSeconds + :seconds WHERE id = :id")
     suspend fun addReadingTime(id: String, seconds: Double)
 

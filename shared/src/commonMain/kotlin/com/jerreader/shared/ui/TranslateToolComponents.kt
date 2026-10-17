@@ -1,5 +1,8 @@
 package com.jerreader.shared.ui
 
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -10,9 +13,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -35,6 +36,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 /**
  * The controls the standalone translator is built from, ported from the iOS
@@ -56,40 +58,42 @@ fun <T> JerreaderSegmentedPicker(
     onSelect: (T) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Surface(
-        modifier = modifier.fillMaxWidth().height(34.dp),
-        shape = RoundedCornerShape(9.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant
-    ) {
-        Row(
-            modifier = Modifier.padding(2.dp),
-            horizontalArrangement = Arrangement.spacedBy(2.dp)
+    Box(modifier.fillMaxWidth().heightIn(min = 44.dp), contentAlignment = Alignment.Center) {
+        Surface(
+            modifier = Modifier.fillMaxWidth().heightIn(min = 32.dp),
+            shape = RoundedCornerShape(9.dp),
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f)
         ) {
-            options.forEach { (value, title) ->
-                val isSelected = value == selected
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .clip(RoundedCornerShape(7.dp))
-                        .background(
-                            if (isSelected) {
-                                MaterialTheme.colorScheme.surfaceContainerHigh
-                            } else {
-                                Color.Transparent
-                            }
+            Row(
+                modifier = Modifier.padding(2.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                options.forEach { (value, title) ->
+                    val isSelected = value == selected
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 28.dp)
+                            .clip(RoundedCornerShape(7.dp))
+                            .background(
+                                if (isSelected) {
+                                    if (MaterialTheme.colorScheme.onSurface == Color.Black) Color.White else LocalJerreaderColors.current.raisedPaper
+                                } else {
+                                    Color.Transparent
+                                }
+                            )
+                            .clickable { onSelect(value) }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = title,
+                            style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp, lineHeight = 18.sp),
+                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                            textAlign = TextAlign.Center,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
-                        .clickable { onSelect(value) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-                        textAlign = TextAlign.Center,
-                        maxLines = 1,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
+                    }
                 }
             }
         }
@@ -175,7 +179,8 @@ fun <T> JerreaderInlineMenu(
             Text(
                 text = options.firstOrNull { it.first == selected }?.second.orEmpty(),
                 style = MaterialTheme.typography.titleSmall,
-                maxLines = 1
+                modifier = Modifier.weight(1f, fill = false),
+                textAlign = TextAlign.Center
             )
             JerreaderGlyph(
                 icon = JerreaderIcon.CHEVRON_DOWN,
@@ -224,18 +229,15 @@ fun JerreaderSwapButton(
         modifier = modifier
             .size(44.dp)
             .clip(CircleShape)
-            // The language bar already sits on `mutedSurface`, so the button
-            // needs a stronger accent wash than `accentFill` to read at all.
-            .background(
-                if (enabled) colors.accent.copy(alpha = 0.14f) else Color.Transparent
-            )
-            .clickable(enabled = enabled, onClick = onClick),
+            .background(colors.accent.copy(alpha = 0.084f))
+            .semantics { contentDescription = "交换原文和译文语言" }
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         JerreaderGlyph(
             icon = JerreaderIcon.SWAP,
             tint = if (enabled) colors.accent else colors.secondaryText,
-            modifier = Modifier.size(19.dp)
+            modifier = Modifier.size(18.dp)
         )
     }
 }
@@ -268,7 +270,7 @@ fun JerreaderLanguageBar(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(LocalJerreaderColors.current.mutedSurface)
+            .background(LocalJerreaderColors.current.mutedSurface.copy(alpha = 0.72f))
             .padding(horizontal = 14.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,

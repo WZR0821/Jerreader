@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -17,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
@@ -25,15 +27,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 /**
- * Reader controls, laid out like the iOS `readerChrome`: two floating rounded
- * cards over a full-bleed page, rather than docked bars. Geometry (17dp radius,
- * hairline border, 10dp inner padding, 44dp round chrome buttons and 54dp
- * page buttons) follows `EPUBReaderView.swift`.
+ * Edge-aligned reader controls matching iOS readerChrome. The publication is
+ * still laid out by Readium; these views only draw app controls above it.
  */
 @Composable
 fun ReaderTopChrome(
@@ -44,15 +49,16 @@ fun ReaderTopChrome(
     onTableOfContents: () -> Unit,
     onToggleBookmark: () -> Unit,
     onAppearance: () -> Unit,
+    transparency: Float = .15f,
     modifier: Modifier = Modifier
 ) {
-    ChromeCard(modifier = modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+    ChromeBar(modifier = modifier, transparency = transparency) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            ChromeButton(JerreaderIcon.CLOSE, onClick = onClose)
-            Column(modifier = Modifier.weight(1f).padding(horizontal = 4.dp)) {
+            ChromeButton(JerreaderIcon.CLOSE, "关闭阅读器", onClick = onClose)
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
                 Text(
                     text = chapterTitle,
                     style = MaterialTheme.typography.titleSmall,
@@ -67,7 +73,7 @@ fun ReaderTopChrome(
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            ChromeButton(JerreaderIcon.TABLE_OF_CONTENTS, onClick = onTableOfContents)
+            ChromeButton(JerreaderIcon.TABLE_OF_CONTENTS, "目录与阅读导航", onClick = onTableOfContents)
             ChromeButton(
                 icon = if (isBookmarked) {
                     JerreaderIcon.BOOKMARK_FILLED
@@ -75,16 +81,15 @@ fun ReaderTopChrome(
                     JerreaderIcon.BOOKMARK_OUTLINE
                 },
                 isActive = isBookmarked,
+                label = if (isBookmarked) "移除当前书签" else "添加当前书签",
                 onClick = onToggleBookmark
             )
             // iOS labels this control 「格式」 rather than using a glyph.
-            TextButton(
-                onClick = onAppearance,
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-            ) {
+            Box(Modifier.size(44.dp).semantics { contentDescription = "阅读设置" }
+                .clickable(role = Role.Button, onClick = onAppearance), contentAlignment = Alignment.Center) {
                 Text(
                     "格式",
-                    style = MaterialTheme.typography.titleSmall,
+                    style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface
                 )
             }
@@ -93,6 +98,7 @@ fun ReaderTopChrome(
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 fun ReaderBottomChrome(
     chapterLabel: String,
     progress: Double,
@@ -105,9 +111,10 @@ fun ReaderBottomChrome(
     onNextPage: () -> Unit,
     isQuickTranslationEnabled: Boolean,
     onToggleQuickTranslation: () -> Unit,
+    transparency: Float = .15f,
     modifier: Modifier = Modifier
 ) {
-    ChromeCard(modifier = modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+    ChromeBar(modifier = modifier, bottom = true, transparency = transparency) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (showProgress) {
                 Row(
@@ -131,29 +138,36 @@ fun ReaderBottomChrome(
                 Slider(
                     value = progress.toFloat().coerceIn(0f, 1f),
                     onValueChange = { onProgressChange(it.toDouble()) },
-                    modifier = Modifier.fillMaxWidth().height(24.dp)
+                    modifier = Modifier.fillMaxWidth().height(31.dp).semantics { contentDescription = "快速调整阅读进度" },
+                    thumb = { Box(Modifier.size(28.dp).shadow(3.dp, CircleShape).background(Color.White, CircleShape)) },
+                    track = { state ->
+                        Box(Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)).background(Color(0xFFD2D4D6))) {
+                            Box(Modifier.fillMaxWidth(state.value.coerceIn(0f, 1f)).fillMaxHeight().background(MaterialTheme.colorScheme.primary))
+                        }
+                    }
                 )
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 if (canGoToAdjacentChapter) {
-                    PageButton(JerreaderIcon.CHEVRON_DOUBLE_LEFT, onClick = onPreviousChapter)
+                    PageButton(JerreaderIcon.CHEVRON_DOUBLE_LEFT, "上一章", onClick = onPreviousChapter)
                 }
-                PageButton(JerreaderIcon.CHEVRON_LEFT, onClick = onPreviousPage)
+                PageButton(JerreaderIcon.CHEVRON_LEFT, "上一页", onClick = onPreviousPage)
                 PageButton(
                     icon = if (isQuickTranslationEnabled) {
-                        JerreaderIcon.SPEECH_BUBBLE_FILLED
+                        JerreaderIcon.TRANSLATION_BUBBLE_FILLED
                     } else {
                         JerreaderIcon.SPEECH_BUBBLE
                     },
                     isActive = isQuickTranslationEnabled,
+                    label = if (isQuickTranslationEnabled) "关闭轻点翻译" else "开启轻点翻译",
                     onClick = onToggleQuickTranslation
                 )
-                PageButton(JerreaderIcon.CHEVRON_RIGHT, onClick = onNextPage)
+                PageButton(JerreaderIcon.CHEVRON_RIGHT, "下一页", onClick = onNextPage)
                 if (canGoToAdjacentChapter) {
-                    PageButton(JerreaderIcon.CHEVRON_DOUBLE_RIGHT, onClick = onNextChapter)
+                    PageButton(JerreaderIcon.CHEVRON_DOUBLE_RIGHT, "下一章", onClick = onNextChapter)
                 }
             }
         }
@@ -161,24 +175,31 @@ fun ReaderBottomChrome(
 }
 
 @Composable
-private fun ChromeCard(
+private fun ChromeBar(
     modifier: Modifier = Modifier,
+    bottom: Boolean = false,
+    transparency: Float = .15f,
     content: @Composable () -> Unit
 ) {
     Surface(
-        modifier = modifier.fillMaxWidth().widthIn(max = 780.dp),
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-        shadowElevation = 6.dp
+        modifier = modifier.fillMaxWidth(),
+        color = (if (MaterialTheme.colorScheme.onSurface.luminance() > .5f) Color(0xFF202020) else Color(0xFFF2F2F2)).copy(alpha = 1f - transparency.coerceIn(0f, 1f))
     ) {
-        Box(modifier = Modifier.padding(10.dp)) { content() }
+        Column {
+            if (bottom) JerreaderDivider()
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Box(Modifier.widthIn(max = if (bottom) 660.dp else 780.dp).fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = if (bottom) 6.dp else 4.dp)) { content() }
+            }
+            if (!bottom) JerreaderDivider()
+        }
     }
 }
 
 @Composable
 private fun ChromeButton(
     icon: JerreaderIcon,
+    label: String,
     onClick: () -> Unit,
     isActive: Boolean = false
 ) {
@@ -187,7 +208,8 @@ private fun ChromeButton(
             .size(44.dp)
             .clip(CircleShape)
             .background(if (isActive) MaterialTheme.colorScheme.primary else Color.Transparent)
-            .clickable(onClick = onClick),
+            .semantics { contentDescription = label }
+            .clickable(role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         JerreaderGlyph(
@@ -197,7 +219,7 @@ private fun ChromeButton(
             } else {
                 MaterialTheme.colorScheme.onSurface
             },
-            modifier = Modifier.size(22.dp)
+            modifier = Modifier.size(20.dp)
         )
     }
 }
@@ -205,22 +227,24 @@ private fun ChromeButton(
 @Composable
 private fun RowScope.PageButton(
     icon: JerreaderIcon,
+    label: String,
     onClick: () -> Unit,
     isActive: Boolean = false
 ) {
     Box(
         modifier = Modifier
             .weight(1f)
-            .height(54.dp)
-            .clip(RoundedCornerShape(14.dp))
+            .height(48.dp)
+            .clip(RoundedCornerShape(12.dp))
             .background(
                 if (isActive) {
                     MaterialTheme.colorScheme.primary
                 } else {
-                    MaterialTheme.colorScheme.secondaryContainer
+                    LocalJerreaderColors.current.accentFill.let { it.copy(alpha = it.alpha * .72f) }
                 }
             )
-            .clickable(onClick = onClick),
+            .semantics { contentDescription = label }
+            .clickable(role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         JerreaderGlyph(

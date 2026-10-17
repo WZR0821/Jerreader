@@ -1,7 +1,6 @@
 package com.jerreader.android
 
 import android.content.Intent
-import android.graphics.BitmapFactory
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -48,7 +47,6 @@ import com.jerreader.shared.ui.JerreaderLibraryApp
 import com.jerreader.shared.ui.JerreaderTheme
 import android.net.Uri
 import androidx.core.content.IntentCompat
-import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -67,11 +65,17 @@ class MainActivity : ComponentActivity() {
         }
 
     private var pendingCoverBookId: String? = null
+    private var pendingCoverSelection: ((Uri) -> Unit)? = null
     private val chooseCover =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             val bookId = pendingCoverBookId
+            val selection = pendingCoverSelection
             pendingCoverBookId = null
-            if (uri != null && bookId != null) viewModel.updateCover(bookId, uri)
+            pendingCoverSelection = null
+            if (uri != null) {
+                if (selection != null) selection(uri)
+                else if (bookId != null) viewModel.updateCover(bookId, uri)
+            }
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -107,16 +111,17 @@ class MainActivity : ComponentActivity() {
                     }
                 )
             }
+            val tabStates = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
             var settingsRoute by rememberSaveable { mutableStateOf(SettingsRoute.ROOT) }
 
             // Secondary screens are Compose state, not activities, so back has to
             // unwind them explicitly. Without this, back from a settings sub-page
             // or from a non-library tab dropped straight to the launcher.
-            BackHandler(enabled = settingsRoute != SettingsRoute.ROOT) {
+            BackHandler(enabled = selectedTab == AndroidAppTab.SETTINGS && settingsRoute != SettingsRoute.ROOT) {
                 settingsRoute = SettingsRoute.ROOT
             }
             BackHandler(
-                enabled = settingsRoute == SettingsRoute.ROOT &&
+                enabled = (selectedTab != AndroidAppTab.SETTINGS || settingsRoute == SettingsRoute.ROOT) &&
                     selectedTab != AndroidAppTab.LIBRARY
             ) { selectedTab = AndroidAppTab.LIBRARY }
 
@@ -125,7 +130,8 @@ class MainActivity : ComponentActivity() {
             }
 
             JerreaderTheme(accent = appPreferences.theme) {
-                when (selectedTab) {
+                com.jerreader.android.ui.JerreaderSystemBars()
+                tabStates.SaveableStateProvider(selectedTab.name) { when (selectedTab) {
                     AndroidAppTab.LIBRARY -> JerreaderLibraryApp(
                         state = state,
                         onImport = {
@@ -146,9 +152,17 @@ class MainActivity : ComponentActivity() {
                         },
                         onDismissMessage = viewModel::clearMessage,
                         onChangeCover = { bookId ->
+                            pendingCoverSelection = null
                             pendingCoverBookId = bookId
                             chooseCover.launch(arrayOf("image/*"))
                         },
+                        onPickCover = { onPicked ->
+                            pendingCoverBookId = null
+                            pendingCoverSelection = { uri -> onPicked(uri.toString()) }
+                            chooseCover.launch(arrayOf("image/*"))
+                        },
+                        coverDraftContent = { uri -> AndroidCoverDraft(uri) },
+                        onSaveCover = { id, uri -> viewModel.updateCover(id, Uri.parse(uri)) },
                         onUpdateBook = viewModel::updateBook,
                         onBatchUpdateBooks = { ids, category, series, language, tags ->
                             viewModel.updateBooks(
@@ -256,7 +270,7 @@ class MainActivity : ComponentActivity() {
                         },
                         bottomBar = bottomBar
                     )
-                }
+                } }
             }
         }
         handleIncomingPublication(intent)
@@ -295,24 +309,13 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun AndroidBookCover(book: LibraryBook) {
-        val cover by produceState<android.graphics.Bitmap?>(null, book.coverFileName) {
-            value = withContext(Dispatchers.IO) {
-                book.coverFileName
-                    ?.let(graph.publicationStore::resolveCover)
-                    ?.takeIf(File::isFile)
-                    ?.let { file ->
-                        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                        BitmapFactory.decodeFile(file.absolutePath, bounds)
-                        val sample = if (bounds.outWidth > 960 || bounds.outHeight > 960) 2 else 1
-                        BitmapFactory.decodeFile(
-                            file.absolutePath,
-                            BitmapFactory.Options().apply { inSampleSize = sample }
-                        )
-                    }
-            }
+        val fileName = book.coverFileName
+        val cover by produceState<Pair<String?, android.graphics.Bitmap?>?>(null, fileName) {
+            val bitmap = fileName?.let { com.jerreader.android.library.BookCoverCache.load(graph.publicationStore.resolveCover(it)) }
+            value = fileName to bitmap
         }
 
-        val bitmap = cover
+        val bitmap = cover?.takeIf { it.first == fileName }?.second
         if (bitmap != null) {
             Image(
                 bitmap = bitmap.asImageBitmap(),
@@ -321,19 +324,33 @@ class MainActivity : ComponentActivity() {
                 contentScale = ContentScale.Crop
             )
         } else {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    book.title.take(1).ifEmpty { "J" },
-                    style = MaterialTheme.typography.displayMedium,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-            }
+            com.jerreader.shared.ui.JerreaderBookPlaceholder(book)
         }
+    }
+
+    /** Decode a bounded preview; picking or cancelling never modifies the stored cover. */
+    @Composable
+    private fun AndroidCoverDraft(source: String) {
+        val preview by produceState<Pair<String, android.graphics.Bitmap?>?>(null, source) {
+            val bitmap = withContext(Dispatchers.IO) {
+                runCatching {
+                    val uri = Uri.parse(source)
+                    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
+                    check(bounds.outWidth > 0 && bounds.outHeight > 0)
+                    var sample = 1
+                    while (maxOf(bounds.outWidth / sample, bounds.outHeight / sample) > 768) sample *= 2
+                    val options = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+                    contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, options) }
+                }.getOrNull()
+            }
+            value = source to bitmap
+        }
+        val bitmap = preview?.takeIf { it.first == source }?.second
+        if (bitmap != null) Image(bitmap.asImageBitmap(), contentDescription = "待保存的新封面",
+            modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        else Text(if (preview?.first == source) "无法预览所选图片，请重新选择。" else "正在准备封面…",
+            style = MaterialTheme.typography.labelMedium)
     }
 
     companion object {

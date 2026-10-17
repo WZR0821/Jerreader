@@ -1,5 +1,8 @@
 package com.jerreader.shared.ui
 
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -78,13 +81,18 @@ fun TranslationCard(
     onCopy: (String) -> Unit,
     onFavorite: ((TranslationResult) -> Unit)? = null,
     onExplain: ((TranslationResult) -> Unit)? = null,
+    onSaveAnalysis: (() -> Unit)? = null,
     onAnnotate: ((String) -> Unit)? = null,
     onExpandCrossPage: (() -> Unit)? = null,
     onAddToVocabulary: (() -> Unit)? = null,
+    onLookup: (() -> Unit)? = null,
     crossPageMessage: String? = null,
     isExpandingCrossPage: Boolean = false,
     onOpenSettings: () -> Unit,
     onDrag: ((Float, Float) -> Unit)? = null,
+    translationContent: (@Composable (TranslationCardState.Success) -> Unit)? = null,
+    japaneseFuriganaEnabled: Boolean = false,
+    onToggleFurigana: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
@@ -99,7 +107,10 @@ fun TranslationCard(
             onAnnotate = onAnnotate,
             onExpandCrossPage = onExpandCrossPage,
             onAddToVocabulary = onAddToVocabulary,
-            isExpandingCrossPage = isExpandingCrossPage
+            onLookup = onLookup,
+            isExpandingCrossPage = isExpandingCrossPage,
+            japaneseFuriganaEnabled = japaneseFuriganaEnabled,
+            onToggleFurigana = onToggleFurigana
         )
         JerreaderDivider()
         Column(
@@ -118,20 +129,8 @@ fun TranslationCard(
                 }
 
                 is TranslationCardState.Success -> {
-                    // iOS marks the translation with a vertical accent rule.
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Box(
-                            modifier = Modifier
-                                .width(3.dp)
-                                .heightIn(min = 22.dp)
-                                .clip(RoundedCornerShape(2.dp))
-                                .background(MaterialTheme.colorScheme.primary)
-                        )
-                        Text(
-                            text = state.result.translatedText,
-                            style = MaterialTheme.typography.bodyLarge
-                        )
-                    }
+                    if (translationContent != null) translationContent(state)
+                    else Text(state.result.translatedText, style = MaterialTheme.typography.bodyLarge)
                     state.analysisText?.let { analysis ->
                         Text(
                             "句子结构",
@@ -139,6 +138,7 @@ fun TranslationCard(
                             modifier = Modifier.padding(top = 4.dp)
                         )
                         Text(analysis, style = MaterialTheme.typography.bodyMedium)
+                        if (onSaveAnalysis != null) TextButton(onClick = onSaveAnalysis) { Text("保存到语法知识库") }
                     }
                 }
 
@@ -177,7 +177,10 @@ private fun OverlayHeader(
     onAnnotate: ((String) -> Unit)?,
     onExpandCrossPage: (() -> Unit)?,
     onAddToVocabulary: (() -> Unit)?,
-    isExpandingCrossPage: Boolean
+    onLookup: (() -> Unit)?,
+    isExpandingCrossPage: Boolean,
+    japaneseFuriganaEnabled: Boolean,
+    onToggleFurigana: (() -> Unit)?
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     val canFavorite = state is TranslationCardState.Success && onFavorite != null
@@ -259,6 +262,15 @@ private fun OverlayHeader(
                     expanded = menuExpanded,
                     onDismissRequest = { menuExpanded = false }
                 ) {
+                    onToggleFurigana?.let { toggle ->
+                        DropdownMenuItem(text = { Text("日语注音") },
+                            trailingIcon = { if (japaneseFuriganaEnabled) Text("✓") },
+                            onClick = { menuExpanded = false; toggle() })
+                    }
+                    onLookup?.let { lookup ->
+                        DropdownMenuItem(text = { Text("语境查词 / 修改词语") },
+                            onClick = { menuExpanded = false; lookup() })
+                    }
                     if (state is TranslationCardState.Success) {
                         DropdownMenuItem(
                             text = { Text("复制译文") },
@@ -310,7 +322,7 @@ private fun OverlayHeader(
             }
             // iOS keeps favouriting on the header rather than inside the menu,
             // as long as there is room for it.
-            if (showsFavoriteButton && state is TranslationCardState.Success && onFavorite != null) {
+            if (showsFavoriteButton) {
                 HeaderIconButton(JerreaderIcon.STAR_OUTLINE) { onFavorite(state.result) }
             }
             HeaderIconButton(JerreaderIcon.CLOSE, onClick = onDismiss)
@@ -325,7 +337,15 @@ private fun HeaderIconButton(icon: JerreaderIcon, onClick: () -> Unit) {
             .size(32.dp)
             .clip(CircleShape)
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .clickable(onClick = onClick),
+            .semantics {
+                contentDescription = when (icon) {
+                    JerreaderIcon.MORE -> "更多翻译操作"
+                    JerreaderIcon.STAR_OUTLINE -> "收藏译文"
+                    JerreaderIcon.CLOSE -> "关闭译文"
+                    else -> "翻译操作"
+                }
+            }
+            .clickable(role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         JerreaderGlyph(

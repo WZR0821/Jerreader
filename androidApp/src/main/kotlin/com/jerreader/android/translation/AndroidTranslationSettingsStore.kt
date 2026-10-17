@@ -1,5 +1,6 @@
 package com.jerreader.android.translation
 
+import androidx.core.content.edit
 import android.content.Context
 import com.jerreader.shared.domain.LanguageCode
 import com.jerreader.shared.translation.DirectAIProvider
@@ -39,7 +40,9 @@ class AndroidTranslationSettingsStore(
     }
 
     fun updateDirectProvider(value: DirectAIProvider) {
-        storage.edit().putString(KEY_DIRECT_PROVIDER, value.name).apply()
+        storage.edit {
+            putString(KEY_DIRECT_PROVIDER, value.name)
+        }
         mutablePreferences.value = mutablePreferences.value.copy(
             directProvider = value,
             directEndpoint = storedEndpoint(value),
@@ -49,12 +52,16 @@ class AndroidTranslationSettingsStore(
     }
 
     fun updateDirectEndpoint(value: String) {
-        storage.edit().putString(endpointKey(preferences.value.directProvider), value).apply()
+        storage.edit {
+            putString(endpointKey(preferences.value.directProvider), value)
+        }
         mutablePreferences.value = mutablePreferences.value.copy(directEndpoint = value)
     }
 
     fun updateDirectModel(value: String) {
-        storage.edit().putString(modelKey(preferences.value.directProvider), value).apply()
+        storage.edit {
+            putString(modelKey(preferences.value.directProvider), value)
+        }
         mutablePreferences.value = mutablePreferences.value.copy(directModel = value)
     }
 
@@ -351,12 +358,12 @@ class AndroidTranslationSettingsStore(
         value: Any,
         transform: TranslationPreferences.() -> TranslationPreferences
     ) {
-        val editor = storage.edit()
-        when (value) {
-            is String -> editor.putString(key, value)
-            is Boolean -> editor.putBoolean(key, value)
+        storage.edit {
+            when (value) {
+                is String -> putString(key, value)
+                is Boolean -> putBoolean(key, value)
+            }
         }
-        editor.apply()
         mutablePreferences.value = mutablePreferences.value.transform()
     }
 

@@ -23,6 +23,7 @@ sealed class TranslationFailure(message: String) : Exception(message) {
     data object ConfigurationMissing : TranslationFailure("请先在“设置 → 翻译与 AI”中配置翻译服务。")
     data object InvalidConfiguration : TranslationFailure("翻译服务配置无效，请检查 HTTPS 地址、模型和密钥。")
     data class ProviderRejected(val detail: String) : TranslationFailure(detail)
+    data class LocalModelsMissing(val languages: String) : TranslationFailure("尚未下载${languages}语言包。请前往“设置 → 翻译与 AI → 离线资源”准备；基础查词无需下载。")
     data object ServiceUnavailable : TranslationFailure("翻译服务暂时不可用。")
 }
 

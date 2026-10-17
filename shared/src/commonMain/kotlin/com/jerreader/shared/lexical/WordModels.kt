@@ -59,7 +59,10 @@ data class WordExplanation(
     val usageNote: String? = null,
     val sentenceContext: String? = null,
     val providerIdentifier: String
-)
+) {
+    val contextualDictionaryEntry: String get() =
+        "词典形：${lemma ?: surfaceForm}\n读音：${reading.orEmpty()}\n词性：${partOfSpeech.orEmpty()}\n释义：${definitions.joinToString("；")}"
+}
 
 sealed class LexicalLookupFailure(message: String) : Exception(message) {
     data object EmptyInput : LexicalLookupFailure("请选择需要查询的词语。")

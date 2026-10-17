@@ -1,5 +1,6 @@
 package com.jerreader.android.translation
 
+import androidx.core.content.edit
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
@@ -29,7 +30,9 @@ class AndroidKeystoreCredentialStore(context: Context) : TranslationCredentialSt
             cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(TAG_LENGTH_BITS, iv))
             cipher.doFinal(encrypted).decodeToString()
         }.getOrElse {
-            preferences.edit().remove(account).apply()
+            preferences.edit {
+                remove(account)
+            }
             null
         }
     }
@@ -37,16 +40,18 @@ class AndroidKeystoreCredentialStore(context: Context) : TranslationCredentialSt
     override fun save(account: String, secret: String?) {
         val normalized = secret?.trim().orEmpty()
         if (normalized.isEmpty()) {
-            preferences.edit().remove(account).apply()
+            preferences.edit {
+                remove(account)
+            }
             return
         }
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, secretKey())
         val encrypted = cipher.doFinal(normalized.encodeToByteArray())
         val payload = cipher.iv + encrypted
-        preferences.edit()
-            .putString(account, Base64.encodeToString(payload, Base64.NO_WRAP))
-            .apply()
+        preferences.edit {
+            putString(account, Base64.encodeToString(payload, Base64.NO_WRAP))
+        }
     }
 
     private fun secretKey(): SecretKey {

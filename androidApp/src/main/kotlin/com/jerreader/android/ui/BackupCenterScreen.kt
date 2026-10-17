@@ -37,9 +37,13 @@ import com.jerreader.shared.ui.JerreaderPrimaryButton
 import com.jerreader.shared.ui.JerreaderRow
 import com.jerreader.shared.ui.JerreaderSection
 import com.jerreader.shared.ui.JerreaderSegmented
-import com.jerreader.shared.ui.SettingsPage
+import com.jerreader.shared.ui.*
+import androidx.compose.foundation.layout.Column
+import androidx.compose.ui.Alignment
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Android counterpart of the iOS backup centre. The user picks a folder through
@@ -52,9 +56,10 @@ import kotlinx.coroutines.launch
 fun BackupCenterScreen(
     graph: AppGraph,
     onBack: () -> Unit,
+    bottomBar: @Composable () -> Unit = {},
     /**
      * Set by the empty-library entry point so a fresh installation lands on the
-     * archive picker instead of having to find the restore section.
+     * folder picker instead of having to find the restore section.
      */
     startsWithArchivePicker: Boolean = false
 ) {
@@ -67,27 +72,66 @@ fun BackupCenterScreen(
     var busy by remember { mutableStateOf(false) }
     var pendingDeletion by remember { mutableStateOf<LibraryBackupArchiveInfo?>(null) }
     var pendingRestore by remember { mutableStateOf<LibraryBackupArchiveInfo?>(null) }
+    var restoringFolder by remember { mutableStateOf<Uri?>(null) }
+    var selectForRestore by remember { mutableStateOf(false) }
+    var selectForBackup by remember { mutableStateOf(false) }
+    var showsAdvanced by remember { mutableStateOf(false) }
     var suggestedFolder by remember { mutableStateOf<Pair<Uri, String>?>(null) }
     val scope = rememberCoroutineScope()
 
     suspend fun reload() {
-        backups = runCatching { graph.backupService.listBackups() }.getOrDefault(emptyList())
+        runCatching { graph.backupService.listBackups() }
+            .onSuccess { backups = it }
+            .onFailure { backups = emptyList(); error = it.message ?: "无法读取备份文件夹。" }
     }
 
     LaunchedEffect(folder?.treeUri) { reload() }
 
+    fun createBackup() {
+        if (busy || manualScopes.isEmpty()) return
+        scope.launch {
+            busy = true; error = null; message = null
+            runCatching { graph.backupService.backup(manualScopes) }
+                .onSuccess { result ->
+                    message = buildString {
+                        append("备份完成：${result.archiveName}（${formatBytes(result.sizeBytes)}）。")
+                        if (result.removedCount > 0) append("同时清理了 ${result.removedCount} 份旧备份。")
+                        if (result.isOverLimit) append("最新一份自身已超过容量上限，因此仍被保留。")
+                    }
+                }.onFailure { error = it.message ?: "备份没有完成，请稍后重试。" }
+            reload(); busy = false
+        }
+    }
+
     val folderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
-        if (uri == null) return@rememberLauncherForActivityResult
+        val backupAfterSelection = selectForBackup
+        selectForBackup = false
+        if (uri == null) { selectForRestore = false; return@rememberLauncherForActivityResult }
         scope.launch {
             error = null
-            runCatching { graph.backupDirectory.select(uri) }
+            if (selectForRestore) {
+                selectForRestore = false
+                busy = true
+                runCatching { graph.backupService.listBackupsInFolder(uri).maxByOrNull { it.createdAtEpochMillis } }
+                    .onSuccess { newest ->
+                        if (newest == null) error = "所选文件夹中没有可用的 Jerreader 备份。"
+                        else { restoringFolder = uri; pendingRestore = newest }
+                    }.onFailure { error = it.message ?: "无法读取备份文件夹。" }
+                busy = false
+                return@launch
+            }
+            busy = true
+            val selected = runCatching { withContext(Dispatchers.IO) { graph.backupDirectory.select(uri) } }
+            busy = false
+            selected
                 .onSuccess {
-                    message = "备份位置已更改：${it.displayName}"
                     suggestedFolder = null
+                    if (backupAfterSelection) createBackup()
+                    else message = "备份位置已更改：${it.displayName}"
                 }
-                .onFailure { error = "无法使用这个文件夹，请换一个位置。" }
+                .onFailure { error = "无法使用这个文件夹，请重新授权或选择其他位置。" }
             reload()
         }
     }
@@ -117,214 +161,91 @@ fun BackupCenterScreen(
 
     LaunchedEffect(startsWithArchivePicker) {
         if (!startsWithArchivePicker) return@LaunchedEffect
-        archivePicker.launch(
-            arrayOf("application/zip", "application/octet-stream", "*/*")
-        )
+        selectForRestore = true
+        folderPicker.launch(folder?.treeUri)
     }
 
-    SettingsPage(title = "备份与恢复", onBack = onBack) {
-        JerreaderSection(
-            title = "备份位置",
-            footnote = "目录授权、API Key、代理凭据和可再生的翻译缓存都不会写入备份。"
-        ) {
-            Text(
-                folder?.displayName ?: "尚未选择文件夹",
-                style = MaterialTheme.typography.bodyMedium
-            )
-            Text(
-                "可以选择本机存储，也可以选择已装好的云盘目录；书籍与记录只写入你选的这个位置。",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            suggestedFolder?.let { (treeUri, name) ->
-                Text(
-                    "刚恢复的备份来自「$name」。",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                TextButton(onClick = { folderPicker.launch(treeUri) }) {
-                    Text("继续备份到这个文件夹")
-                }
+    SettingsPage(title = "备份中心", onBack = onBack, bottomBar = bottomBar) {
+        SettingsGroup("备份位置", footer = "选择你自己的文件夹，备份直接保存在那里。重装或重签后点‘从备份文件夹恢复’，选择同一文件夹即可恢复并继续使用。") {
+            SettingsValueRow("当前文件夹", folder?.displayName ?: "尚未选择外部文件夹", compact = false)
+            suggestedFolder?.let { (uri, name) ->
+                SettingsFootnote("刚恢复的备份来自「$name」。")
+                SettingsActionRow("继续备份到这个文件夹", { selectForRestore = false; folderPicker.launch(uri) }, enabled = !busy)
             }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                TextButton(onClick = { folderPicker.launch(null) }) {
-                    Text(if (folder == null) "选择备份文件夹" else "修改文件夹")
-                }
-                if (folder != null) {
-                    TextButton(onClick = {
-                        graph.backupDirectory.clear()
-                        backups = emptyList()
-                        message = "已停止使用该文件夹。"
-                    }) { Text("停止使用") }
-                }
-            }
+            SettingsActionRow("选择备份文件夹", { selectForRestore = false; folderPicker.launch(folder?.treeUri) }, enabled = !busy, showDivider = folder != null, icon = JerreaderIcon.FOLDER)
+            if (folder != null) SettingsActionRow("停止使用此文件夹", {
+                graph.backupDirectory.clear(); backups = emptyList(); message = "已停止使用该文件夹。"
+            }, enabled = !busy, showDivider = false)
         }
-
-        JerreaderSection(
-            title = "手动备份",
-            footnote = "包含书籍文件会让备份明显变大，但重装后无需重新找书。"
-        ) {
-            LibraryBackupScope.entries.forEach { scopeOption ->
-                JerreaderRow(label = scopeOption.title, detail = scopeOption.detail) {
-                    Switch(
-                        checked = scopeOption in manualScopes,
-                        onCheckedChange = { checked ->
-                            manualScopes = if (checked) {
-                                manualScopes + scopeOption
-                            } else {
-                                manualScopes - scopeOption
-                            }
-                        }
-                    )
-                }
-                if (scopeOption != LibraryBackupScope.entries.last()) JerreaderDivider()
-            }
-            JerreaderPrimaryButton(
-                text = if (busy) "处理中…" else "立即备份到当前文件夹",
-                icon = JerreaderIcon.SHIELD,
-                enabled = folder != null && manualScopes.isNotEmpty() && !busy,
-                onClick = {
-                    scope.launch {
-                        busy = true
-                        error = null
-                        message = null
-                        runCatching { graph.backupService.backup(manualScopes) }
-                            .onSuccess { result ->
-                                message = buildString {
-                                    append("备份完成：${result.archiveName}（${formatBytes(result.sizeBytes)}）。")
-                                    if (result.removedCount > 0) {
-                                        append("同时清理了 ${result.removedCount} 份旧备份。")
-                                    }
-                                    if (result.isOverLimit) {
-                                        append("最新一份自身已超过容量上限，因此仍被保留。")
-                                    }
-                                }
-                            }
-                            .onFailure { error = it.message ?: "备份没有完成，请稍后重试。" }
-                        reload()
-                        busy = false
+        SettingsGroup("自动备份", footer = "在 App 运行时检查是否到期并补做；系统不保证 App 未运行时准点执行。") {
+            SettingsToggleRow("自动备份", policy.automaticEnabled,
+                { enabled -> graph.backupPolicy.update { it.copy(automaticEnabled = enabled) } }, showDivider = policy.automaticEnabled)
+            if (policy.automaticEnabled) SettingsValueRow("上次完成",
+                policy.lastAutomaticBackupAtEpochMillis?.let(::formatTimestamp) ?: "尚未备份", compact = false)
+        }
+        SettingsGroup("") {
+            SettingsActionRow("立即备份", {
+                if (folder == null) {
+                    selectForRestore = false; selectForBackup = true; folderPicker.launch(null)
+                } else createBackup()
+            }, enabled = !busy && manualScopes.isNotEmpty())
+            SettingsActionRow("更多备份选项", { showsAdvanced = !showsAdvanced }, showDivider = false, disclosureExpanded = showsAdvanced)
+        }
+        if (showsAdvanced) {
+        SettingsGroup("自动策略", footer = "超出限制时从最旧的一份开始清理，并保留最新一份。") {
+            SettingsMenuRow("备份间隔", LibraryBackupPolicy.INTERVAL_CHOICES.map { it to if (it == 1) "每天" else "每 $it 天" },
+                policy.intervalDays, { days -> graph.backupPolicy.update { it.copy(intervalDays = days) } }, enabled = policy.automaticEnabled)
+            SettingsMenuRow("保存时间", LibraryBackupPolicy.RETENTION_CHOICES.map { it to if (it == 0) "不按时间删除" else "保留 $it 天" },
+                policy.retentionDays, { days -> graph.backupPolicy.update { it.copy(retentionDays = days) } }, enabled = policy.automaticEnabled)
+            SettingsMenuRow("最多保留", LibraryBackupPolicy.COUNT_CHOICES.map { it to "$it 份" },
+                policy.maximumBackupCount, { count -> graph.backupPolicy.update { it.copy(maximumBackupCount = count) } }, enabled = policy.automaticEnabled)
+            SettingsMenuRow("总容量上限", LibraryBackupPolicy.SIZE_CHOICES.map { it to if (it == 0L) "不限容量" else formatBytes(it) },
+                policy.maximumTotalBytes, { bytes -> graph.backupPolicy.update { it.copy(maximumTotalBytes = bytes) } },
+                enabled = policy.automaticEnabled, showDivider = false)
+        }
+        SettingsGroup("自动备份范围", footer = "包含书籍文件会让备份明显变大，但重装后无需重新找书。") {
+            LibraryBackupScope.entries.forEach { option ->
+                BackupScopeRow(option, option in policy.automaticScopes, enabled = policy.automaticEnabled) { checked ->
+                    graph.backupPolicy.update { current ->
+                        val next = if (checked) current.automaticScopes + option else current.automaticScopes - option
+                        if (next.isEmpty()) current else current.copy(automaticScopes = next)
                     }
                 }
-            )
-        }
-
-        JerreaderSection(
-            title = "自动备份",
-            footnote = "自动备份在打开书架时检查是否到期，只写入当前文件夹。"
-        ) {
-            JerreaderRow(label = "定期自动备份") {
-                Switch(
-                    checked = policy.automaticEnabled,
-                    onCheckedChange = { enabled ->
-                        graph.backupPolicy.update { it.copy(automaticEnabled = enabled) }
-                    }
-                )
-            }
-            JerreaderFieldLabel("备份间隔")
-            JerreaderSegmented(
-                options = LibraryBackupPolicy.INTERVAL_CHOICES.map { it to "$it 天" },
-                selected = policy.intervalDays,
-                onSelect = { days -> graph.backupPolicy.update { it.copy(intervalDays = days) } }
-            )
-            JerreaderFieldLabel("自动备份范围", modifier = Modifier.padding(top = 10.dp))
-            LibraryBackupScope.entries.forEach { scopeOption ->
-                JerreaderRow(label = scopeOption.title) {
-                    Switch(
-                        checked = scopeOption in policy.automaticScopes,
-                        onCheckedChange = { checked ->
-                            graph.backupPolicy.update { current ->
-                                current.copy(
-                                    automaticScopes = if (checked) {
-                                        current.automaticScopes + scopeOption
-                                    } else {
-                                        current.automaticScopes - scopeOption
-                                    }
-                                )
-                            }
-                        }
-                    )
-                }
             }
         }
-
-        JerreaderSection(
-            title = "保留策略",
-            footnote = "超出限制时从最旧的一份开始删除，但永远保留最新的一份。"
-        ) {
-            JerreaderFieldLabel("保存时间")
-            JerreaderSegmented(
-                options = LibraryBackupPolicy.RETENTION_CHOICES.map {
-                    it to if (it == 0) "不按时间删除" else "保留 $it 天"
-                },
-                selected = policy.retentionDays,
-                onSelect = { days -> graph.backupPolicy.update { it.copy(retentionDays = days) } }
-            )
-            JerreaderFieldLabel("最多份数", modifier = Modifier.padding(top = 10.dp))
-            JerreaderSegmented(
-                options = LibraryBackupPolicy.COUNT_CHOICES.map { it to "$it 份" },
-                selected = policy.maximumBackupCount,
-                onSelect = { count ->
-                    graph.backupPolicy.update { it.copy(maximumBackupCount = count) }
+        SettingsGroup("手动备份") {
+            LibraryBackupScope.entries.forEach { option ->
+                BackupScopeRow(option, option in manualScopes, enabled = !busy) { checked ->
+                    manualScopes = if (checked) manualScopes + option else manualScopes - option
                 }
-            )
-            JerreaderFieldLabel("总容量上限", modifier = Modifier.padding(top = 10.dp))
-            JerreaderSegmented(
-                options = LibraryBackupPolicy.SIZE_CHOICES.map {
-                    it to if (it == 0L) "不限容量" else formatBytes(it)
-                },
-                selected = policy.maximumTotalBytes,
-                onSelect = { bytes ->
-                    graph.backupPolicy.update { it.copy(maximumTotalBytes = bytes) }
-                }
-            )
-        }
-
-        JerreaderSection(title = "当前文件夹中的备份") {
-            if (folder == null) {
-                Text("先选择一个备份文件夹。", style = MaterialTheme.typography.bodyMedium)
-            } else if (backups.isEmpty()) {
-                Text("当前文件夹还没有备份。", style = MaterialTheme.typography.bodyMedium)
             }
+            SettingsActionRow(if (busy) "处理中…" else "保存到当前文件夹", ::createBackup,
+                enabled = folder != null && manualScopes.isNotEmpty() && !busy, showDivider = false)
+        }
+        }
+        SettingsGroup("恢复") {
+            SettingsActionRow("从备份文件夹恢复", { selectForRestore = true; folderPicker.launch(folder?.treeUri) }, enabled = !busy, showDivider = showsAdvanced)
+            if (showsAdvanced) SettingsActionRow("选择单个备份文件", { archivePicker.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) },
+                enabled = !busy, showDivider = false)
+        }
+        SettingsGroup("当前文件夹中的备份", footer = "列表直接读取当前文件夹。到期、超出份数或容量时会从最旧的开始清理，并尽量保留最新一份。") {
+            if (backups.isEmpty()) SettingsFootnote(if (folder == null) "先选择一个备份文件夹。" else "当前文件夹还没有备份。", showDivider = false)
             backups.forEach { info ->
-                JerreaderRow(
-                    label = info.name,
-                    detail = "${formatTimestamp(info.createdAtEpochMillis)} · ${formatBytes(info.sizeBytes)}"
-                ) {
-                    Row {
-                        TextButton(enabled = !busy, onClick = { pendingRestore = info }) {
-                            Text("恢复")
-                        }
-                        TextButton(enabled = !busy, onClick = { pendingDeletion = info }) {
-                            Text("删除")
-                        }
+                SettingsInsetRow {
+                    Text(info.name, style = MaterialTheme.typography.bodyLarge)
+                    Text("${formatTimestamp(info.createdAtEpochMillis)} · ${formatBytes(info.sizeBytes)}", style = MaterialTheme.typography.labelMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        LearningButton(enabled = !busy, onClick = { restoringFolder = null; pendingRestore = info }) { Text("恢复") }
+                        LearningButton(enabled = !busy, destructive = true, onClick = { pendingDeletion = info }) { Text("删除") }
                     }
                 }
-                if (info != backups.last()) JerreaderDivider()
             }
         }
-
-        JerreaderSection(
-            title = "从备份文件恢复",
-            footnote = "恢复只做合并：备份中已存在的书籍与记录不会产生重复。"
-        ) {
-            TextButton(enabled = !busy, onClick = {
-                archivePicker.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
-            }) { Text("选择备份文件") }
+        SettingsGroup("重要说明") {
+            SettingsFootnote("目录授权、API Key、代理凭据和可再生的翻译缓存都不会写入备份。", showDivider = false)
         }
-
-        message?.let {
-            JerreaderCard { Text(it, style = MaterialTheme.typography.bodyMedium) }
-        }
-        error?.let {
-            JerreaderCard {
-                Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
-            }
-        }
+        message?.let { JerreaderCard { Text(it) } }
+        error?.let { JerreaderCard { Text(it, color = MaterialTheme.colorScheme.error) } }
     }
 
     pendingDeletion?.let { info ->
@@ -355,7 +276,7 @@ fun BackupCenterScreen(
 
     pendingRestore?.let { info ->
         AlertDialog(
-            onDismissRequest = { pendingRestore = null },
+            onDismissRequest = { pendingRestore = null; restoringFolder = null },
             title = { Text("从这份备份恢复？") },
             text = {
                 Text("会把备份中的书籍与记录合并到本机，已有的内容保持不变。API Key 未包含在备份中，需要重新填写。")
@@ -363,6 +284,8 @@ fun BackupCenterScreen(
             confirmButton = {
                 TextButton(onClick = {
                     val target = info
+                    val sourceFolder = restoringFolder
+                    restoringFolder = null
                     pendingRestore = null
                     scope.launch {
                         error = null
@@ -371,13 +294,22 @@ fun BackupCenterScreen(
                             onBusy = { busy = it },
                             onResult = { text, failed ->
                                 if (failed) error = text else message = text
+                            },
+                            onRestored = { result ->
+                                suggestedFolder = result.suggestedFolderUri?.let { uri ->
+                                    uri to (result.suggestedFolderName ?: "刚恢复的备份文件夹")
+                                }
                             }
-                        ) { graph.backupService.restore(target.name) }
+                        ) {
+                            if (sourceFolder != null) graph.backupService.restoreFromFolder(sourceFolder, target.name)
+                            else graph.backupService.restore(target.name)
+                        }
+                        reload()
                     }
                 }) { Text("开始恢复") }
             },
             dismissButton = {
-                TextButton(onClick = { pendingRestore = null }) { Text("取消") }
+                TextButton(onClick = { pendingRestore = null; restoringFolder = null }) { Text("取消") }
             }
         )
     }
@@ -404,6 +336,7 @@ private suspend fun restoreArchive(
                                 result.books.takeIf { it > 0 }?.let { "$it 本书" },
                                 result.bookmarks.takeIf { it > 0 }?.let { "$it 个书签" },
                                 result.annotations.takeIf { it > 0 }?.let { "$it 条批注" },
+                                result.grammarNotes.takeIf { it > 0 }?.let { "$it 条语法收藏" },
                                 result.words.takeIf { it > 0 }?.let { "$it 条生词/历史" },
                                 result.translationFavorites.takeIf { it > 0 }
                                     ?.let { "$it 条翻译收藏" },
@@ -442,4 +375,18 @@ private fun formatBytes(bytes: Long): String = when {
 private fun formatTimestamp(epochMillis: Long): String {
     val format = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
     return format.format(java.util.Date(epochMillis))
+}
+
+
+@Composable
+private fun BackupScopeRow(option: LibraryBackupScope, selected: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
+    SettingsInsetRow(showDivider = option != LibraryBackupScope.entries.last()) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(option.title, style = MaterialTheme.typography.bodyLarge)
+                Text(option.detail, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            JerreaderToggle(selected, onChange, enabled = enabled, label = option.title)
+        }
+    }
 }

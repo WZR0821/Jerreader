@@ -1,0 +1,14 @@
+{
+  "version": "2026-09-01",
+  "license": "CC-BY-SA-4.0",
+  "inputJapaneseEntries": 137247,
+  "entries": 31468,
+  "headwords": 27957,
+  "entriesWithReading": 30218,
+  "chineseKeys": 35784,
+  "bytes": 4566382,
+  "sha256": "8f824646f72d07eccf2bfee74ef1539b7c7230d4bd6ca5e9a4e38516bc27243b",
+  "sourceSHA256": "70c62c00f4746c966fa3ad191a0553240fadc617d7d9a76aa11fca9b399fbb79",
+  "sourceURL": "https://kaikki.org/zhwiktionary/raw-wiktextract-data.jsonl.gz",
+  "changes": "Japanese entries only; omit redirect-only senses and quotations; merge duplicate senses; simplify Chinese glosses and POS with OpenCC; derive exact Chinese keys and inflection index."
+}

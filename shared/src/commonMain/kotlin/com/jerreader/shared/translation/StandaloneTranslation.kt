@@ -74,7 +74,7 @@ object StandaloneTranslationRequestPolicy {
                 StandaloneTranslationValidationError.EmptyText
             )
         }
-        if (normalized.length > mode.maximumCharacterCount) {
+        if (textCharacterCount(normalized) > mode.maximumCharacterCount) {
             throw StandaloneTranslationValidationException(
                 StandaloneTranslationValidationError.TextTooLong(mode.maximumCharacterCount)
             )

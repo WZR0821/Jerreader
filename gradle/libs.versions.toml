@@ -12,6 +12,7 @@ androidxLifecycle = "2.10.0"
 coroutines = "1.10.2"
 desugar = "2.1.5"
 junit = "4.13.2"
+json = "20240303"
 androidxTestCore = "1.7.0"
 androidxTestRunner = "1.7.0"
 room = "2.8.4"
@@ -22,6 +23,7 @@ androidPdfViewer = "3.2.8"
 androidxDocumentFile = "1.1.0"
 
 [libraries]
+json = { module = "org.json:json", version.ref = "json" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidxActivity" }
 androidx-appcompat = { module = "androidx.appcompat:appcompat", version.ref = "androidxAppcompat" }
 androidx-core = { module = "androidx.core:core-ktx", version.ref = "androidxCore" }
