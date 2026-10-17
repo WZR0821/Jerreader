@@ -24,6 +24,7 @@ final class WordLookupRecord: Identifiable {
     var lastLookedUpAt: Date
     var isFavorite: Bool
     var isInHistory: Bool
+    var reviewData: Data?
 
     var language: LanguageCode {
         LanguageCode(rawValue: languageRawValue) ?? .english
@@ -39,6 +40,12 @@ final class WordLookupRecord: Identifiable {
 
     var displayTerm: String {
         lemma?.nilIfBlank ?? surfaceForm
+    }
+
+    var wordExplanation: WordExplanation {
+        WordExplanation(surfaceForm: surfaceForm, lemma: lemma, reading: reading, language: language,
+            partOfSpeech: partOfSpeech, definitions: definitions, inflectionNote: inflectionNote,
+            examples: examples, usageNote: usageNote, sentenceContext: sentenceContext)
     }
 
     var copyText: String {
@@ -119,6 +126,12 @@ final class WordLookupRecord: Identifiable {
         sourceBookTitle: String?,
         at date: Date
     ) {
+        if surfaceForm != explanation.surfaceForm || sentenceContext != explanation.sentenceContext?.nilIfBlank
+            || self.sourceBookID != sourceBookID || definitions != explanation.definitions
+            || reading != explanation.reading?.nilIfBlank || partOfSpeech != explanation.partOfSpeech?.nilIfBlank {
+            aiAnalysis = nil
+            aiProviderIdentifier = nil
+        }
         surfaceForm = explanation.surfaceForm
         lemma = explanation.lemma?.nilIfBlank
         reading = explanation.reading?.nilIfBlank

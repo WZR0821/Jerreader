@@ -359,17 +359,34 @@ enum JapaneseFuriganaFormatter {
 /// A free-form Chinese, English and Japanese translator. It deliberately owns
 /// its direction, mode and provider choices so experimenting here does not
 /// silently change the reader's translation settings.
+struct TranslationToolDraft {
+    var sourceChoice: TranslationSourceLanguageChoice
+    var targetLanguage: LanguageCode
+    var mode: StandaloneTranslationMode = .sentence
+    var provider: TranslationProviderChoice
+    var inputText = ""
+
+    @MainActor init(settings: TranslationSettingsStore) {
+        sourceChoice = settings.sourceLanguageChoice
+        targetLanguage = settings.targetLanguage
+        provider = settings.provider
+    }
+}
+
 struct TranslateToolView: View {
+    @AppStorage(ReaderInterfaceDefaults.japaneseFuriganaKey)
+    private var japaneseFuriganaEnabled = false
     @Environment(\.modelContext) private var modelContext
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Query private var lookupRecords: [WordLookupRecord]
     @ObservedObject var translationSettings: TranslationSettingsStore
 
-    @State private var sourceChoice: TranslationSourceLanguageChoice
-    @State private var targetLanguage: LanguageCode
-    @State private var mode: StandaloneTranslationMode = .sentence
-    @State private var provider: TranslationProviderChoice
-    @State private var inputText = ""
+    @Binding private var sourceChoice: TranslationSourceLanguageChoice
+    @Binding private var targetLanguage: LanguageCode
+    @Binding private var mode: StandaloneTranslationMode
+    @Binding private var provider: TranslationProviderChoice
+    @Binding private var inputText: String
     @State private var result: TranslationResult?
     @State private var errorMessage: String?
     @State private var isTranslating = false
@@ -377,11 +394,14 @@ struct TranslateToolView: View {
     @State private var appleConfiguration: TranslationSession.Configuration?
     @State private var pendingAppleRequest: StandaloneTranslationRequest?
     @State private var activeRequestID: UUID?
+    @State private var translationWatchdog = StandaloneTranslationWatchdog()
     @State private var didCopy = false
     @State private var didSaveFavorite = false
     @State private var wordLookupResultID: UUID?
     @State private var wordLookupRequestID: UUID?
     @State private var wordLookupTask: Task<Void, Never>?
+    @State private var wordLookupWatchdog = StandaloneTranslationWatchdog(timing: .init(network: .seconds(15)))
+    @State private var wordLookupRetryRequest: StandaloneTranslationRequest?
     @State private var isLookingUpWord = false
     @State private var wordLookupErrorMessage: String?
     @State private var referenceDictionaryTerm: ReferenceDictionaryTerm?
@@ -396,18 +416,17 @@ struct TranslateToolView: View {
 
     init(
         translationSettings: TranslationSettingsStore,
+        draft: Binding<TranslationToolDraft>,
         lexicalLookupService: any LexicalLookupService =
-            WiktionaryLexicalLookupService()
+            OfflineFirstLexicalLookupService()
     ) {
         self.translationSettings = translationSettings
         self.lexicalLookupService = lexicalLookupService
-        _sourceChoice = State(
-            initialValue: translationSettings.sourceLanguageChoice
-        )
-        _targetLanguage = State(
-            initialValue: translationSettings.targetLanguage
-        )
-        _provider = State(initialValue: translationSettings.provider)
+        _sourceChoice = draft.sourceChoice
+        _targetLanguage = draft.targetLanguage
+        _provider = draft.provider
+        _mode = draft.mode
+        _inputText = draft.inputText
     }
 
     private var trimmedInput: String {
@@ -459,10 +478,12 @@ struct TranslateToolView: View {
             )
         }
         .onChange(of: mode) { cancelTranslation(clearResult: true) }
-        .onChange(of: provider) { cancelTranslation(clearResult: false) }
+        .onChange(of: provider) { clearStaleOutput() }
+        .onChange(of: inputText) { clearStaleOutput() }
         .onChange(of: sourceChoice) { clearStaleOutput() }
         .onChange(of: targetLanguage) { clearStaleOutput() }
         .onDisappear {
+            isInputFocused = false
             cancelTranslation(clearResult: false)
             cancelWordLookup(clearResult: false)
         }
@@ -502,8 +523,7 @@ struct TranslateToolView: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                    Image(systemName: "chevron.down")
-                        .font(.caption2.weight(.bold))
+                    JerreaderSymbol(name: "chevron.down", size: 13)
                         .foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, 4)
@@ -547,7 +567,10 @@ struct TranslateToolView: View {
     @ViewBuilder
     private var wordLookupContent: some View {
         if mode == .word, isLookingUpWord {
-            Label("正在补充词典形、读音和释义…", systemImage: "book")
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text("正在补充词典形、读音和释义…")
+            }
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -581,6 +604,13 @@ struct TranslateToolView: View {
                 Label(wordLookupErrorMessage, systemImage: "book.closed")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+
+                if let request = wordLookupRetryRequest {
+                    Button("重试词典查询") { beginWordLookup(for: request) }
+                        .font(.subheadline.weight(.semibold))
+                        .frame(minHeight: 44)
+                        .accessibilityIdentifier("standalone-retry-dictionary")
+                }
 
                 if UIReferenceLibraryViewController.dictionaryHasDefinition(
                     forTerm: trimmedInput
@@ -624,7 +654,7 @@ struct TranslateToolView: View {
             }
 
             Button(action: swapLanguages) {
-                Image(systemName: "arrow.left.arrow.right")
+                JerreaderSymbol(name: "arrow.left.arrow.right", size: 18)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(
                         canSwapLanguages ? JerreaderTheme.accent : Color.secondary
@@ -668,8 +698,7 @@ struct TranslateToolView: View {
                 Text(title)
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
-                Image(systemName: "chevron.down")
-                    .font(.caption2.weight(.bold))
+                JerreaderSymbol(name: "chevron.down", size: 12)
             }
             .foregroundStyle(.primary)
             .frame(maxWidth: .infinity)
@@ -688,52 +717,17 @@ struct TranslateToolView: View {
                 .font(.body)
                 .accessibilityIdentifier("standalone-translation-input")
 
-            HStack(spacing: 10) {
-                Text("\(trimmedInput.count) / \(mode.maximumCharacterCount)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(
-                        trimmedInput.count > mode.maximumCharacterCount
-                            ? Color.red
-                            : .secondary
-                    )
-
-                Spacer()
-
-                if !inputText.isEmpty {
-                    Button("清空") {
-                        inputText = ""
-                        cancelTranslation(clearResult: true)
-                    }
-                    .font(.subheadline)
-                    .frame(minHeight: 44)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    inputCount
+                    Spacer()
+                    inputActions
                 }
-
-                Button(action: translate) {
-                    HStack(spacing: 6) {
-                        if isTranslating {
-                            ProgressView()
-                                .controlSize(.small)
-                            .tint(JerreaderTheme.onPrimaryAction)
-                        }
-                        Text(isTranslating ? "翻译中" : "翻译")
-                            .font(.subheadline.weight(.semibold))
-                    }
-                    .foregroundStyle(JerreaderTheme.onPrimaryAction)
-                    .padding(.horizontal, 18)
-                    .frame(minHeight: 44)
-                    .background(
-                        canTranslate
-                            ? AnyShapeStyle(JerreaderTheme.primaryAction)
-                            : AnyShapeStyle(Color.gray.opacity(0.55)),
-                        in: RoundedRectangle(
-                            cornerRadius: 12,
-                            style: .continuous
-                        )
-                    )
+                VStack(alignment: .leading, spacing: 6) {
+                    inputCount
+                    inputActions
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                 }
-                .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.96))
-                .disabled(!canTranslate)
-                .accessibilityIdentifier("standalone-translate-button")
             }
         }
         .padding(16)
@@ -744,10 +738,15 @@ struct TranslateToolView: View {
     private var translationOutput: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                Label(targetLanguage.displayName, systemImage: "text.bubble")
+                JerreaderLabel(title: targetLanguage.displayName, icon: "text.bubble", size: 15)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(JerreaderTheme.accent)
                 Spacer()
+                if result?.sourceLanguage == .japanese || targetLanguage == .japanese {
+                    Toggle("日语注音", isOn: $japaneseFuriganaEnabled)
+                        .toggleStyle(.button).font(.caption)
+                        .accessibilityIdentifier("japanese-furigana-toggle")
+                }
                 if result?.isFromCache == true {
                     Text("缓存")
                         .font(.caption2)
@@ -756,7 +755,12 @@ struct TranslateToolView: View {
             }
 
             if let result {
-                if mode == .sentence, targetLanguage == .japanese {
+                if japaneseFuriganaEnabled, result.sourceLanguage == .japanese {
+                    Text("原文注音").font(.caption).foregroundStyle(.secondary)
+                    JapaneseFuriganaText(text: result.sourceText)
+                        .accessibilityIdentifier("japanese-source-furigana")
+                }
+                if japaneseFuriganaEnabled, targetLanguage == .japanese {
                     JapaneseFuriganaText(text: result.translatedText)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .accessibilityIdentifier("standalone-translation-result")
@@ -773,7 +777,9 @@ struct TranslateToolView: View {
                 HStack(spacing: 9) {
                     ProgressView().controlSize(.small)
                     Text(
-                        provider == .apple
+                        mode == .word
+                            ? "正在查词或准备翻译…"
+                            : provider == .apple
                             ? "正在准备 Apple 翻译…"
                             : "正在请求 AI 翻译…"
                     )
@@ -798,15 +804,68 @@ struct TranslateToolView: View {
         )
     }
 
+    private var inputCount: some View {
+        Text("\(trimmedInput.count) / \(mode.maximumCharacterCount)")
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(
+                trimmedInput.count > mode.maximumCharacterCount
+                    ? Color.red
+                    : .secondary
+            )
+    }
+
+    private var inputActions: some View {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
+            : AnyLayout(HStackLayout(spacing: 10))
+        return layout {
+            if !inputText.isEmpty {
+                Button("清空") {
+                    inputText = ""
+                    cancelTranslation(clearResult: true)
+                }
+                .font(.subheadline)
+                .frame(minHeight: 44)
+            }
+
+            Button(action: translate) {
+                HStack(spacing: 6) {
+                    if isTranslating {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(JerreaderTheme.onPrimaryAction)
+                    }
+                    Text(isTranslating ? "翻译中" : "翻译")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .foregroundStyle(JerreaderTheme.onPrimaryAction)
+                .padding(.horizontal, 18)
+                .frame(minHeight: 44)
+                .background(
+                    canTranslate
+                        ? AnyShapeStyle(JerreaderTheme.primaryAction)
+                        : AnyShapeStyle(Color.gray.opacity(0.55)),
+                    in: RoundedRectangle(
+                        cornerRadius: 12,
+                        style: .continuous
+                    )
+                )
+            }
+            .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.96))
+            .disabled(!canTranslate)
+            .accessibilityIdentifier("standalone-translate-button")
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
     private func resultActions(_ result: TranslationResult) -> some View {
-        HStack(spacing: 18) {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
+            : AnyLayout(HStackLayout(spacing: 18))
+        return layout {
             Button {
                 UIPasteboard.general.string = result.translatedText
                 didCopy = true
-                Task { @MainActor in
-                    try? await Task.sleep(for: .seconds(2))
-                    didCopy = false
-                }
             } label: {
                 Label(
                     didCopy ? "已复制" : "复制",
@@ -827,8 +886,8 @@ struct TranslateToolView: View {
                 .frame(minHeight: 44)
             }
 
-            Spacer()
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .buttonStyle(.plain)
         .foregroundStyle(JerreaderTheme.accent)
     }
@@ -892,11 +951,7 @@ struct TranslateToolView: View {
 
     private func translate() {
         isInputFocused = false
-        errorMessage = nil
-        translateTask?.cancel()
-        cancelWordLookup(clearResult: true)
-        pendingAppleRequest = nil
-        appleConfiguration = nil
+        cancelTranslation(clearResult: true)
 
         let request: StandaloneTranslationRequest
         do {
@@ -915,6 +970,64 @@ struct TranslateToolView: View {
         result = nil
         activeRequestID = request.id
         isTranslating = true
+        translateTask = Task { @MainActor in
+            if request.mode == .word {
+                let lexicon: JapaneseChineseLexicon?
+                if (request.sourceLanguage == .japanese && request.targetLanguage == .simplifiedChinese) ||
+                   (request.sourceLanguage == .simplifiedChinese && request.targetLanguage == .japanese) {
+                    lexicon = await Task.detached(priority: .userInitiated) { JapaneseChineseLexicon.shared }.value
+                    guard !Task.isCancelled, activeRequestID == request.id else { return }
+                } else { lexicon = nil }
+                let translated: String?
+                if request.sourceLanguage == .japanese, request.targetLanguage == .simplifiedChinese {
+                    translated = lexicon?.japanese(request.text,
+                        candidates: WiktionaryLexicalLookupService.lookupCandidates(for: request.text, language: .japanese))?.definition
+                } else if request.sourceLanguage == .simplifiedChinese, request.targetLanguage == .japanese {
+                    translated = lexicon?.chinese(request.text)
+                } else { translated = nil }
+                if let translated {
+                    guard !Task.isCancelled, activeRequestID == request.id else { return }
+                    result = TranslationResult(sourceText: request.text, translatedText: translated,
+                        sourceLanguage: request.sourceLanguage, targetLanguage: request.targetLanguage,
+                        providerIdentifier: "中日词典 · 离线", providerVersion: JapaneseChineseLexicon.version, isFromCache: false)
+                    isTranslating = false; activeRequestID = nil
+                    beginWordLookup(for: request)
+                    return
+                }
+            }
+            if request.mode == .word, request.sourceLanguage == .english,
+               request.targetLanguage == .simplifiedChinese {
+                let candidates = WiktionaryLexicalLookupService.lookupCandidates(for: request.text, language: .english)
+                let entry = await OfflineDictionaryPackageStore.shared.lookup(candidates: candidates)
+                guard !Task.isCancelled, activeRequestID == request.id else { return }
+                if let entry {
+                    result = TranslationResult(sourceText: request.text, translatedText: entry.definition,
+                        sourceLanguage: .english, targetLanguage: .simplifiedChinese,
+                        providerIdentifier: "ECDICT 离线词库", providerVersion: OfflineDictionaryManifest.version, isFromCache: false)
+                    isTranslating = false; activeRequestID = nil
+                    beginWordLookup(for: request)
+                    return
+                }
+            }
+            guard !Task.isCancelled, activeRequestID == request.id else { return }
+            startConfiguredTranslation(request)
+        }
+    }
+
+    private func startConfiguredTranslation(_ request: StandaloneTranslationRequest) {
+        translationWatchdog.start(
+            id: request.id,
+            systemTranslation: provider == .apple,
+            restart: {
+                guard activeRequestID == request.id else { return }
+                appleConfiguration?.invalidate()
+            },
+            timedOut: { timeout in
+                guard activeRequestID == request.id else { return }
+                cancelTranslation(clearResult: true)
+                errorMessage = timeout.message
+            }
+        )
 
         switch provider {
         case .apple:
@@ -926,6 +1039,7 @@ struct TranslateToolView: View {
 
         case .directAPI, .backendProxy:
             guard let service = resolvedAIService(for: provider, mode: mode) else {
+                translationWatchdog.complete(id: request.id)
                 isTranslating = false
                 activeRequestID = nil
                 errorMessage = provider == .directAPI
@@ -986,6 +1100,7 @@ struct TranslateToolView: View {
         guard let request = pendingAppleRequest,
               activeRequestID == request.id
         else { return }
+        translationWatchdog.sessionDidStart(id: request.id)
         await performTranslation(request, using: service)
         if pendingAppleRequest?.id == request.id {
             pendingAppleRequest = nil
@@ -997,6 +1112,13 @@ struct TranslateToolView: View {
         _ request: StandaloneTranslationRequest,
         using service: any TranslationService
     ) async {
+        defer {
+            translationWatchdog.complete(id: request.id)
+            if activeRequestID == request.id {
+                isTranslating = false
+                activeRequestID = nil
+            }
+        }
         do {
             let output = try await service.translate(
                 text: request.text,
@@ -1020,10 +1142,6 @@ struct TranslateToolView: View {
             errorMessage = (error as? LocalizedError)?.errorDescription
                 ?? "翻译没有完成，请稍后重试。"
         }
-
-        guard activeRequestID == request.id else { return }
-        isTranslating = false
-        activeRequestID = nil
     }
 
     private func clearStaleOutput() {
@@ -1032,6 +1150,7 @@ struct TranslateToolView: View {
     }
 
     private func cancelTranslation(clearResult: Bool) {
+        translationWatchdog.cancel()
         translateTask?.cancel()
         translateTask = nil
         pendingAppleRequest = nil
@@ -1041,6 +1160,8 @@ struct TranslateToolView: View {
         errorMessage = nil
         if clearResult {
             result = nil
+            didCopy = false
+            didSaveFavorite = false
             cancelWordLookup(clearResult: true)
         }
     }
@@ -1051,14 +1172,22 @@ struct TranslateToolView: View {
 
         let currentRequestID = UUID()
         wordLookupRequestID = currentRequestID
+        wordLookupRetryRequest = request
         isLookingUpWord = true
         let service = lexicalLookupService
+        wordLookupWatchdog.start(id: currentRequestID, systemTranslation: false, restart: {}) { _ in
+            guard wordLookupRequestID == currentRequestID else { return }
+            cancelWordLookup(clearResult: false)
+            wordLookupErrorMessage = "词典查询等待超时，可重试；已有译文仍可使用。"
+        }
 
         wordLookupTask = Task { @MainActor in
             defer {
+                wordLookupWatchdog.complete(id: currentRequestID)
                 if wordLookupRequestID == currentRequestID {
                     isLookingUpWord = false
                     wordLookupTask = nil
+                    wordLookupRequestID = nil
                 }
             }
             do {
@@ -1087,11 +1216,13 @@ struct TranslateToolView: View {
     }
 
     private func cancelWordLookup(clearResult: Bool) {
+        wordLookupWatchdog.cancel()
         wordLookupTask?.cancel()
         wordLookupTask = nil
         wordLookupRequestID = nil
         isLookingUpWord = false
         if clearResult {
+            wordLookupRetryRequest = nil
             wordLookupResultID = nil
             wordLookupErrorMessage = nil
         }
@@ -1140,22 +1271,23 @@ struct TranslateToolView: View {
 
     private func saveToFavorites(_ result: TranslationResult) {
         let store = TranslationFavoriteStore(modelContext: modelContext)
-        _ = try? store.setFavorite(
-            true,
-            bookID: Self.standaloneBookID,
-            bookTitle: "翻译工具",
-            locatorJSON: nil,
-            result: result
-        )
-        didSaveFavorite = true
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(2))
-            didSaveFavorite = false
+        do {
+            _ = try store.setFavorite(
+                true,
+                bookID: Self.standaloneBookID,
+                bookTitle: "翻译工具",
+                locatorJSON: nil,
+                result: result
+            )
+            didSaveFavorite = true
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription
+                ?? "收藏没有保存成功，请稍后重试。"
         }
     }
 }
 
-private struct JapaneseFuriganaText: UIViewRepresentable {
+struct JapaneseFuriganaText: UIViewRepresentable {
     let text: String
 
     func makeUIView(context: Context) -> UITextView {
@@ -1166,7 +1298,7 @@ private struct JapaneseFuriganaText: UIViewRepresentable {
         textView.isScrollEnabled = false
         textView.textContainerInset = .zero
         textView.textContainer.lineFragmentPadding = 0
-        textView.adjustsFontForContentSizeCategory = true
+        textView.adjustsFontForContentSizeCategory = false
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         textView.accessibilityLabel = text
         return textView
@@ -1190,7 +1322,9 @@ private struct JapaneseFuriganaText: UIViewRepresentable {
     }
 
     private var attributedText: NSAttributedString {
-        let bodyFont = UIFont.preferredFont(forTextStyle: .body)
+        let bodyFont = UIFontMetrics(forTextStyle: .body).scaledFont(
+            for: .systemFont(ofSize: 17), maximumPointSize: 19
+        )
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineSpacing = max(5, bodyFont.pointSize * 0.28)
         paragraphStyle.paragraphSpacing = 3

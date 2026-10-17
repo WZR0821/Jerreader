@@ -140,6 +140,20 @@ struct ReaderAppearancePreferences: Equatable {
     var japaneseTextOrientation: ReaderTextOrientationChoice
 }
 
+enum ReaderInterfaceDefaults {
+    static let topTransparencyKey = "reader.topBarTransparency"
+    static let bottomTransparencyKey = "reader.bottomBarTransparency"
+    static let japaneseFuriganaKey = "translation.japaneseFuriganaEnabled"
+    static let immersiveReadingKey = "reader.immersiveReading"
+    static let barTransparency = 0.15
+    static let topContentInset: CGFloat = 52
+    static let bottomContentInset: CGFloat = 128
+
+    static func backgroundOpacity(_ transparency: Double) -> Double {
+        1 - min(max(transparency.isFinite ? transparency : barTransparency, 0), 1)
+    }
+}
+
 enum ReaderAppearanceDefaults {
     static let fontPointSizeKey = "reader.defaults.fontPointSize"
     static let themeKey = "reader.defaults.theme"

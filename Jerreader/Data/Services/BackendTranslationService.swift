@@ -178,7 +178,10 @@ struct BackendTranslationService: TranslationService, ContextExplanationService 
             explanationRequest
         )
         let focusedText = explanationRequest.focusedText
-        let context = explanationRequest.contextText
+        let context = [explanationRequest.contextText,
+            explanationRequest.isWordLookup ? explanationRequest.dictionaryEntry.map {
+                "词典候选资料（仅供参考，若不适合原句请指出）：\n" + $0
+            } : nil].compactMap { $0 }.joined(separator: "\n\n").nilIfBlankForLookup
         guard !focusedText.isEmpty else { throw ServiceError.emptyText }
         guard focusedText.count <= 2_000 else { throw ServiceError.textTooLong }
         guard configuration.endpoint.scheme?.lowercased() == "https",
@@ -214,7 +217,7 @@ struct BackendTranslationService: TranslationService, ContextExplanationService 
                     sourceLanguage: explanationRequest.sourceLanguage,
                     responseLanguage: explanationRequest.responseLanguage,
                     fallback: AIPromptTemplateDefaults.grammarAnalysis
-                )
+                ) + explanationRequest.lookupInstruction
             )
         )
 
@@ -434,7 +437,10 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
             explanationRequest
         )
         let focusedText = explanationRequest.focusedText
-        let context = explanationRequest.contextText
+        let context = [explanationRequest.contextText,
+            explanationRequest.isWordLookup ? explanationRequest.dictionaryEntry.map {
+                "词典候选资料（仅供参考，若不适合原句请指出）：\n" + $0
+            } : nil].compactMap { $0 }.joined(separator: "\n\n").nilIfBlankForLookup
         guard !focusedText.isEmpty else { throw ServiceError.emptyText }
         guard focusedText.count <= 2_000 else { throw ServiceError.textTooLong }
         guard configuration.endpoint.scheme?.lowercased() == "https",
@@ -450,7 +456,7 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
             sourceLanguage: explanationRequest.sourceLanguage,
             responseLanguage: explanationRequest.responseLanguage,
             fallback: AIPromptTemplateDefaults.grammarAnalysis
-        )
+        ) + explanationRequest.lookupInstruction
         let userContent: String
         if let context {
             userContent = """
@@ -766,4 +772,8 @@ private extension String {
         let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
+}
+
+private extension String {
+    var nilIfBlankForLookup: String? { isEmpty ? nil : self }
 }

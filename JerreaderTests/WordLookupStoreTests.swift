@@ -220,6 +220,27 @@ final class WordLookupStoreTests: XCTestCase {
         XCTAssertTrue(anki.contains("Jerreader 生词 文学 chapter-1"))
     }
 
+    func testAIContextIsInvalidatedWhenSentenceSurfaceOrBookChanges() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let book = UUID()
+        let explanation = englishExplanation(surfaceForm: "went", lemma: "go")
+        let record = try WordLookupStore.record(explanation, sourceBookID: book, in: context)
+        record.aiAnalysis = "旧原句解释"; record.aiProviderIdentifier = "mock"
+        _ = try WordLookupStore.record(explanation, sourceBookID: book, in: context)
+        XCTAssertEqual(record.aiAnalysis, "旧原句解释")
+        _ = try WordLookupStore.record(englishExplanation(surfaceForm: "went", lemma: "go", sentenceContext: "It went wrong."), sourceBookID: book, in: context)
+        XCTAssertNil(record.aiAnalysis)
+        XCTAssertNil(record.aiProviderIdentifier)
+        XCTAssertEqual(record.definitions, explanation.definitions)
+        record.aiAnalysis = "其他语境"
+        _ = try WordLookupStore.record(explanation, sourceBookID: UUID(), in: context)
+        XCTAssertNil(record.aiAnalysis)
+        record.aiAnalysis = "过去式"
+        _ = try WordLookupStore.record(englishExplanation(surfaceForm: "go", lemma: "go"), in: context)
+        XCTAssertNil(record.aiAnalysis)
+    }
+
     private func makeContainer() throws -> ModelContainer {
         let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
         return try ModelContainer(

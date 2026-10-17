@@ -274,7 +274,7 @@ struct JerreaderSectionTitle: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             if let systemImage {
-                Image(systemName: systemImage)
+                JerreaderSymbol(name: systemImage)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(JerreaderTheme.accent)
                     .frame(width: 22, height: 22)
@@ -304,7 +304,7 @@ struct JerreaderStatusPill: View {
     var tint = JerreaderTheme.accent
 
     var body: some View {
-        Label(title, systemImage: systemImage)
+        JerreaderLabel(title: title, icon: systemImage, size: 12)
             .font(.caption.weight(.semibold))
             .foregroundStyle(tint)
             .padding(.horizontal, 10)
@@ -336,7 +336,7 @@ struct JerreaderLoadingGlyph: View {
                 .fill(JerreaderTheme.accentFill)
                 .frame(width: size * 0.76, height: size * 0.76)
 
-            Image(systemName: systemImage)
+            JerreaderSymbol(name: systemImage, size: size * 0.31)
                 .font(.system(size: size * 0.31, weight: .semibold))
                 .foregroundStyle(JerreaderTheme.accent)
                 .rotationEffect(
@@ -363,7 +363,7 @@ struct JerreaderEmptyState: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Image(systemName: systemImage)
+            JerreaderSymbol(name: systemImage, size: 30)
                 .font(.system(size: 30, weight: .medium))
                 .foregroundStyle(JerreaderTheme.accent)
                 .frame(width: 68, height: 68)

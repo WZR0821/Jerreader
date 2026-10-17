@@ -5032,6 +5032,22 @@ final class ReaderServicesTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(prepared.contextText).contains(focused))
     }
 
+    func testContextualLookupSeparatesChosenSenseAndSentenceCache() {
+        let sentence = ContextExplanationRequest(focusedText: "食べる", contextText: "これで食べる。",
+            sourceLanguage: .japanese, responseLanguage: .simplifiedChinese)
+        var word = sentence
+        word.isWordLookup = true
+        word.dictionaryEntry = "吃"
+        func key(_ request: ContextExplanationRequest) -> String {
+            ContextExplanationInputPolicy.semanticIdentity(for: request, providerIdentifier: "mock", providerVersion: "1")
+        }
+        XCTAssertNotEqual(key(sentence), key(word))
+        let previous = key(word)
+        word.dictionaryEntry = "维持生计"
+        XCTAssertNotEqual(previous, key(word))
+        XCTAssertTrue(ContextExplanationInputPolicy.prepared(word).isWordLookup)
+    }
+
     func testContextExplanationSemanticIdentityNormalizesEquivalentWhitespace() {
         let first = ContextExplanationRequest(
             focusedText: "It was light.",

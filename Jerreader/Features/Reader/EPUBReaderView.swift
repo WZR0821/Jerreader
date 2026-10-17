@@ -14,17 +14,25 @@ struct EPUBReaderScreen: View {
     @State private var scrubbedProgress: Double?
     @AppStorage(ReaderAppearanceDefaults.showsProgressKey)
     private var showsReadingProgress = true
+    @AppStorage(ReaderInterfaceDefaults.immersiveReadingKey)
+    private var immersiveReading = true
+    @AppStorage(ReaderInterfaceDefaults.topTransparencyKey)
+    private var topBarTransparency = ReaderInterfaceDefaults.barTransparency
+    @AppStorage(ReaderInterfaceDefaults.bottomTransparencyKey)
+    private var bottomBarTransparency = ReaderInterfaceDefaults.barTransparency
 
     init(
         book: BookRecord,
         modelContext: ModelContext,
-        translationSettings: TranslationSettingsStore
+        translationSettings: TranslationSettingsStore,
+        initialLocatorJSON: String? = nil
     ) {
         _model = StateObject(
             wrappedValue: EPUBReaderViewModel(
                 book: book,
                 modelContext: modelContext,
-                translationSettings: translationSettings
+                translationSettings: translationSettings,
+                initialLocatorJSON: initialLocatorJSON
             )
         )
     }
@@ -34,7 +42,8 @@ struct EPUBReaderScreen: View {
             readerContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
-                .ignoresSafeArea()
+                .padding(.top, ReaderInterfaceDefaults.topContentInset)
+                .padding(.bottom, ReaderInterfaceDefaults.bottomContentInset)
 
             readerChrome
                 .opacity(model.controlsVisible ? 1 : 0)
@@ -84,6 +93,7 @@ struct EPUBReaderScreen: View {
             reduceMotion ? nil : JerreaderMotion.stateChange,
             value: model.readerActivityMessage
         )
+        .statusBarHidden(immersiveReading)
         .preferredColorScheme(prefersDarkReaderChrome ? .dark : .light)
         .sensoryFeedback(
             .impact(weight: .light),
@@ -129,6 +139,20 @@ struct EPUBReaderScreen: View {
             )
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $model.isShowingContextualLookup) {
+            NavigationStack {
+                LookupView(translationSettings: model.translationSettings,
+                    initialWord: model.translationState.request?.sourceText ?? "",
+                    initialContext: model.translationState.request?.contextText ?? model.translationState.request?.sourceText ?? "",
+                    language: model.translationState.request?.sourceLanguage,
+                    sourceBookID: model.book.id, sourceBookTitle: model.book.title)
+                    .navigationTitle("语境查词")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar { ToolbarItem(placement: .confirmationAction) {
+                        Button("关闭") { model.isShowingContextualLookup = false }
+                    } }
+            }
         }
         .sheet(isPresented: $model.isShowingContextExplanation) {
             ReaderContextExplanationSheet(model: model)
@@ -241,7 +265,7 @@ struct EPUBReaderScreen: View {
             .padding(.vertical, 4)
             .frame(maxWidth: 780)
             .frame(maxWidth: .infinity)
-            .background(.thinMaterial)
+            .background(readerBackground.opacity(ReaderInterfaceDefaults.backgroundOpacity(topBarTransparency)))
             .overlay(alignment: .bottom) {
                 Rectangle()
                     .fill(JerreaderTheme.line)
@@ -339,7 +363,7 @@ struct EPUBReaderScreen: View {
             .padding(.vertical, 6)
             .frame(maxWidth: 660)
             .frame(maxWidth: .infinity)
-            .background(.thinMaterial)
+            .background(readerBackground.opacity(ReaderInterfaceDefaults.backgroundOpacity(bottomBarTransparency)))
             .overlay(alignment: .top) {
                 Rectangle()
                     .fill(JerreaderTheme.line)
@@ -354,8 +378,14 @@ struct EPUBReaderScreen: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.body.weight(.semibold))
+            Group {
+                if systemImage == "textformat" {
+                    Text("格式").font(.body.weight(.semibold))
+                } else {
+                    Image(uiImage: JerreaderIconImage.image(systemImage == "list.bullet.rectangle" ? "TABLE_OF_CONTENTS" : systemImage))
+                        .resizable().scaledToFit().frame(width: 20, height: 20)
+                }
+            }
                 .foregroundStyle(isActive ? JerreaderTheme.onPrimaryAction : Color.primary)
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
@@ -373,8 +403,8 @@ struct EPUBReaderScreen: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.title3.weight(.bold))
+            Image(uiImage: JerreaderIconImage.image(systemImage))
+                .resizable().scaledToFit().frame(width: 26, height: 26)
                 .foregroundStyle(isActive ? JerreaderTheme.onPrimaryAction : Color.primary)
                 .frame(maxWidth: .infinity)
                 .frame(minHeight: 48)
@@ -581,16 +611,6 @@ private struct ReaderTranslationLayer: View {
                 cardWidth: cardWidth,
                 cardHeight: positioningCardHeight
             )
-#if DEBUG
-            let readerFrame = geometry.frame(in: .global)
-            let resolvedCardFrameInWindow = CGRect(
-                x: readerFrame.minX + targetPosition.x - cardWidth / 2,
-                y: readerFrame.minY + targetPosition.y - positioningCardHeight / 2,
-                width: cardWidth,
-                height: positioningCardHeight
-            )
-#endif
-
             ReaderTranslationOverlay(
                 model: model,
                 maximumCardHeight: overlayLayout.maximumCardHeight,
@@ -614,6 +634,10 @@ private struct ReaderTranslationLayer: View {
                         key: TranslationCardHeightKey.self,
                         value: cardGeometry.size.height
                     )
+#if DEBUG
+                    .preference(key: TranslationCardFrameKey.self,
+                                value: cardGeometry.frame(in: .global))
+#endif
                 }
             }
             .position(targetPosition)
@@ -639,14 +663,6 @@ private struct ReaderTranslationLayer: View {
                     transaction.animation = nil
                 }
             }
-#if DEBUG
-            Color.clear
-                .preference(
-                    key: TranslationCardFrameKey.self,
-                    value: resolvedCardFrameInWindow
-                )
-                .allowsHitTesting(false)
-#endif
         }
         .onPreferenceChange(TranslationCardHeightKey.self) { height in
             // SwiftUI delivers preference callbacks from a Sendable closure
@@ -882,11 +898,11 @@ private struct ReaderTranslationLayer: View {
     }
 
     private func topInset(in geometry: GeometryProxy) -> CGFloat {
-        max(geometry.safeAreaInsets.top, model.controlsVisible ? 70 : 12)
+        max(geometry.safeAreaInsets.top, model.controlsVisible ? ReaderInterfaceDefaults.topContentInset + 12 : 12)
     }
 
     private func bottomInset(in geometry: GeometryProxy) -> CGFloat {
-        max(geometry.safeAreaInsets.bottom, model.controlsVisible ? 94 : 12)
+        max(geometry.safeAreaInsets.bottom, model.controlsVisible ? ReaderInterfaceDefaults.bottomContentInset + 12 : 12)
     }
 
     private func beginSelectionAdjustment() {
@@ -935,10 +951,11 @@ private struct TranslationOverlayDragState: Equatable {
 }
 
 private struct TranslationCardHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 126
+    static let defaultValue: CGFloat = 0
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
+        let next = nextValue()
+        if next.isFinite, next > 0 { value = next }
     }
 }
 
@@ -964,6 +981,8 @@ private struct TranslationTextHeightKey: PreferenceKey {
 }
 
 private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
+    @AppStorage(ReaderInterfaceDefaults.japaneseFuriganaKey)
+    private var japaneseFuriganaEnabled = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var model: EPUBReaderViewModel
     let maximumCardHeight: CGFloat
@@ -1236,6 +1255,10 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
                 Label("AI 句子结构分析", systemImage: "text.line.magnify")
             }
 
+            Button { model.isShowingContextualLookup = true } label: {
+                Label("语境查词 / 修改词语", systemImage: "character.book.closed")
+            }
+
             if model.canAddCurrentSelectionToVocabulary {
                 Button {
                     model.addCurrentSelectionToVocabulary()
@@ -1272,6 +1295,12 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
             .disabled(!model.canExpandTranslationAcrossPage)
 
             Divider()
+
+            if model.translationState.request?.sourceLanguage == .japanese
+                || model.translationState.request?.targetLanguage == .japanese {
+                Toggle("日语注音", isOn: $japaneseFuriganaEnabled)
+                    .accessibilityIdentifier("reader-furigana-toggle")
+            }
 
             Button {
                 model.retryTranslation()
@@ -1380,12 +1409,23 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
     }
 
     private func translatedText(_ text: String) -> some View {
-        Text(text)
-            .font(.body)
-            .lineSpacing(5)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 10) {
+            if japaneseFuriganaEnabled,
+               let request = model.translationState.request,
+               request.sourceLanguage == .japanese {
+                Text("原文注音").font(.caption).foregroundStyle(.secondary)
+                JapaneseFuriganaText(text: request.sourceText)
+                    .accessibilityIdentifier("japanese-source-furigana")
+                Divider()
+            }
+            if japaneseFuriganaEnabled,
+               model.translationState.request?.targetLanguage == .japanese {
+                JapaneseFuriganaText(text: text)
+            } else {
+                Text(text).font(.body).lineSpacing(5).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)
         .padding(.top, 15)
@@ -1686,6 +1726,7 @@ private struct ReaderContextExplanationSheet: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 focusedText(request.focusedText)
+                SaveGrammarNoteButton(draft: model.grammarNoteDraft(request: request, result: result))
 
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 11) {

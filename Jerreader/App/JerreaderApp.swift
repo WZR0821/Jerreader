@@ -1,23 +1,6 @@
 @preconcurrency import SwiftData
 import SwiftUI
 
-enum JerreaderSchemaV1: VersionedSchema {
-    static let versionIdentifier = Schema.Version(1, 0, 0)
-    static let models: [any PersistentModel.Type] = [
-        BookRecord.self,
-        WordLookupRecord.self,
-        TranslationCacheRecord.self,
-        TranslationFavoriteRecord.self,
-        ReadingBookmarkRecord.self,
-        ReadingAnnotationRecord.self,
-    ]
-}
-
-enum JerreaderMigrationPlan: SchemaMigrationPlan {
-    static let schemas: [any VersionedSchema.Type] = [JerreaderSchemaV1.self]
-    static let stages: [MigrationStage] = []
-}
-
 @main
 struct JerreaderApp: App {
     private let modelContainer: ModelContainer?
@@ -25,8 +8,20 @@ struct JerreaderApp: App {
 
     init() {
         do {
+#if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--jerreader-learning-ui-fixture") {
+                let schema = Schema(versionedSchema: JerreaderSchemaV2.self)
+                let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)])
+                if !ProcessInfo.processInfo.arguments.contains("--jerreader-learning-ui-empty") {
+                    try LearningUIFixture.seed(container.mainContext)
+                }
+                modelContainer = container
+                storeErrorDescription = nil
+                return
+            }
+#endif
             modelContainer = try ModelContainer(
-                for: Schema(versionedSchema: JerreaderSchemaV1.self),
+                for: Schema(versionedSchema: JerreaderSchemaV2.self),
                 migrationPlan: JerreaderMigrationPlan.self
             )
             storeErrorDescription = nil
@@ -36,15 +31,28 @@ struct JerreaderApp: App {
         }
     }
 
+#if DEBUG
+    private var learningFixtureColorScheme: ColorScheme? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard arguments.contains("--jerreader-learning-ui-fixture") else { return nil }
+        return arguments.contains("--jerreader-learning-ui-dark") ? .dark : .light
+    }
+#endif
+
     var body: some Scene {
         WindowGroup {
             if let modelContainer {
                 ContentView()
                     .modelContainer(modelContainer)
+                    .dynamicTypeSize(...DynamicTypeSize.xLarge)
+#if DEBUG
+                    .preferredColorScheme(learningFixtureColorScheme)
+#endif
             } else {
                 DataStoreRecoveryView(
                     detail: storeErrorDescription ?? "未知错误"
                 )
+                .dynamicTypeSize(...DynamicTypeSize.xLarge)
             }
         }
     }

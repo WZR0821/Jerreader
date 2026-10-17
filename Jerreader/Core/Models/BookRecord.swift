@@ -16,6 +16,7 @@ final class BookRecord: Identifiable {
     var lastOpenedAt: Date?
     var lastReadLocatorJSON: String?
     var lastReadProgress: Double = 0
+    var activityData: Data?
     var totalReadingSeconds: Double = 0
     var category: String = ""
     var series: String = ""

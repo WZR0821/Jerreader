@@ -33,19 +33,19 @@ struct ContentView: View {
                 translationSettings: translationSettings
             )
                 .tabItem {
-                    Label("书架", systemImage: "books.vertical.fill")
+                    Label { Text("书架") } icon: { Image(uiImage: JerreaderIconImage.image("books.vertical.fill")) }
                 }
                 .tag(AppTab.library)
 
             LearningHubView(translationSettings: translationSettings)
                 .tabItem {
-                    Label("学习", systemImage: "character.book.closed.fill")
+                    Label { Text("学习") } icon: { Image(uiImage: JerreaderIconImage.image("character.book.closed.fill")) }
                 }
                 .tag(AppTab.learning)
 
             AppSettingsView(translationSettings: translationSettings)
                 .tabItem {
-                    Label("设置", systemImage: "gearshape.fill")
+                    Label { Text("设置") } icon: { Image(uiImage: JerreaderIconImage.image("gearshape.fill")) }
                 }
                 .tag(AppTab.settings)
         }
@@ -60,11 +60,17 @@ struct ContentView: View {
             incomingBookURL = url
         }
         .task {
+#if DEBUG
+            guard !ProcessInfo.processInfo.arguments.contains("--jerreader-learning-ui-fixture") else { return }
+#endif
             await LibraryBackupAutomation.shared.performIfDue(
                 context: modelContext
             )
         }
         .onChange(of: scenePhase) { _, phase in
+#if DEBUG
+            guard !ProcessInfo.processInfo.arguments.contains("--jerreader-learning-ui-fixture") else { return }
+#endif
             guard phase == .active || phase == .background else { return }
             Task {
                 await LibraryBackupAutomation.shared.performIfDue(

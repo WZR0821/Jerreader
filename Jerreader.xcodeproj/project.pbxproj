@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0E883C0993847176F61B7F97 /* JerreaderIcons.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F395C7755163C0B53DA151F /* JerreaderIcons.swift */; };
 		A00000000000000000000001 /* JerreaderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000001 /* JerreaderApp.swift */; };
 		A00000000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000002 /* ContentView.swift */; };
 		A00000000000000000000003 /* LanguageCode.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000003 /* LanguageCode.swift */; };
@@ -37,6 +38,7 @@
 		A00000000000000000000018 /* WordLookupStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000017 /* WordLookupStore.swift */; };
 		A00000000000000000000019 /* LookupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000018 /* LookupView.swift */; };
 		A000000000000000000000F4 /* TranslateToolView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B000000000000000000000F4 /* TranslateToolView.swift */; };
+		A000000000000000000000F7 /* StandaloneTranslationWatchdog.swift in Sources */ = {isa = PBXBuildFile; fileRef = B000000000000000000000F7 /* StandaloneTranslationWatchdog.swift */; };
 		A0000000000000000000001A /* VocabularyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000019 /* VocabularyView.swift */; };
 		A0000000000000000000001B /* LookupHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000001A /* LookupHistoryView.swift */; };
 		A0000000000000000000001C /* WordRecordViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000001B /* WordRecordViews.swift */; };
@@ -82,6 +84,25 @@
 		A00000000000000000000043 /* ReadingAnnotationRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000042 /* ReadingAnnotationRecord.swift */; };
 		A00000000000000000000044 /* ReadingAnnotationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000043 /* ReadingAnnotationStore.swift */; };
 		A00000000000000000000045 /* ContextExplanationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000044 /* ContextExplanationService.swift */; };
+		A000000000000000000000F8 /* WordReviewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B000000000000000000000F8 /* WordReviewState.swift */; };
+		A000000000000000000000F9 /* WordReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B000000000000000000000F9 /* WordReviewView.swift */; };
+		A000000000000000000000FA /* SentencePractice.swift in Sources */ = {isa = PBXBuildFile; fileRef = B000000000000000000000FA /* SentencePractice.swift */; };
+		A000000000000000000000FB /* SentencePracticeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B000000000000000000000FB /* SentencePracticeView.swift */; };
+		A000000000000000000000FC /* GrammarNoteRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = B000000000000000000000FC /* GrammarNoteRecord.swift */; };
+		A000000000000000000000FD /* GrammarNotebookView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B000000000000000000000FD /* GrammarNotebookView.swift */; };
+		A000000000000000000000FE /* ReadingActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = B000000000000000000000FE /* ReadingActivity.swift */; };
+		A000000000000000000000FF /* ReadingGrowthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B000000000000000000000FF /* ReadingGrowthView.swift */; };
+		A00000000000000000000100 /* OfflineDictionaryPackage.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000100 /* OfflineDictionaryPackage.swift */; };
+		A00000000000000000000101 /* OfflineDictionaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000101 /* OfflineDictionaryView.swift */; };
+		A00000000000000000000102 /* OfflineFirstLexicalLookupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000102 /* OfflineFirstLexicalLookupService.swift */; };
+		A00000000000000000000103 /* JerreaderSchemas.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000103 /* JerreaderSchemas.swift */; };
+		A00000000000000000000106 /* JapaneseChineseLexicon.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000106 /* JapaneseChineseLexicon.swift */; };
+		A00000000000000000000107 /* LearningPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000107 /* LearningPage.swift */; };
+		A00000000000000000000108 /* ja-zh-core.tsv in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000108 /* ja-zh-core.tsv */; };
+		A00000000000000000000109 /* ja-zh-wiktionary.tsv in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000109 /* ja-zh-wiktionary.tsv */; };
+		A00000000000000000000110 /* ja-zh-NOTICE.txt in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000110 /* ja-zh-NOTICE.txt */; };
+		EA1200000000000000000001 /* AIModelCatalogService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB1200000000000000000001 /* AIModelCatalogService.swift */; };
+		EA1200000000000000000002 /* AIModelPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB1200000000000000000002 /* AIModelPicker.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -102,6 +123,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		5F395C7755163C0B53DA151F /* JerreaderIcons.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JerreaderIcons.swift; sourceTree = "<group>"; };
 		B00000000000000000000001 /* JerreaderApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JerreaderApp.swift; sourceTree = "<group>"; };
 		B00000000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		B00000000000000000000003 /* LanguageCode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanguageCode.swift; sourceTree = "<group>"; };
@@ -131,6 +153,7 @@
 		B00000000000000000000017 /* WordLookupStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WordLookupStore.swift; sourceTree = "<group>"; };
 		B00000000000000000000018 /* LookupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookupView.swift; sourceTree = "<group>"; };
 		B000000000000000000000F4 /* TranslateToolView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslateToolView.swift; sourceTree = "<group>"; };
+		B000000000000000000000F7 /* StandaloneTranslationWatchdog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StandaloneTranslationWatchdog.swift; sourceTree = "<group>"; };
 		B00000000000000000000019 /* VocabularyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VocabularyView.swift; sourceTree = "<group>"; };
 		B0000000000000000000001A /* LookupHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookupHistoryView.swift; sourceTree = "<group>"; };
 		B0000000000000000000001B /* WordRecordViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WordRecordViews.swift; sourceTree = "<group>"; };
@@ -176,6 +199,25 @@
 		B00000000000000000000042 /* ReadingAnnotationRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingAnnotationRecord.swift; sourceTree = "<group>"; };
 		B00000000000000000000043 /* ReadingAnnotationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingAnnotationStore.swift; sourceTree = "<group>"; };
 		B00000000000000000000044 /* ContextExplanationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextExplanationService.swift; sourceTree = "<group>"; };
+		B000000000000000000000F8 /* WordReviewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WordReviewState.swift; sourceTree = "<group>"; };
+		B000000000000000000000F9 /* WordReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WordReviewView.swift; sourceTree = "<group>"; };
+		B000000000000000000000FA /* SentencePractice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentencePractice.swift; sourceTree = "<group>"; };
+		B000000000000000000000FB /* SentencePracticeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentencePracticeView.swift; sourceTree = "<group>"; };
+		B000000000000000000000FC /* GrammarNoteRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrammarNoteRecord.swift; sourceTree = "<group>"; };
+		B000000000000000000000FD /* GrammarNotebookView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrammarNotebookView.swift; sourceTree = "<group>"; };
+		B000000000000000000000FE /* ReadingActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingActivity.swift; sourceTree = "<group>"; };
+		B000000000000000000000FF /* ReadingGrowthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingGrowthView.swift; sourceTree = "<group>"; };
+		B00000000000000000000100 /* OfflineDictionaryPackage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineDictionaryPackage.swift; sourceTree = "<group>"; };
+		B00000000000000000000101 /* OfflineDictionaryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineDictionaryView.swift; sourceTree = "<group>"; };
+		B00000000000000000000102 /* OfflineFirstLexicalLookupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineFirstLexicalLookupService.swift; sourceTree = "<group>"; };
+		B00000000000000000000103 /* JerreaderSchemas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JerreaderSchemas.swift; sourceTree = "<group>"; };
+		B00000000000000000000106 /* JapaneseChineseLexicon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JapaneseChineseLexicon.swift; sourceTree = "<group>"; };
+		B00000000000000000000107 /* LearningPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LearningPage.swift; sourceTree = "<group>"; };
+		B00000000000000000000108 /* ja-zh-core.tsv */ = {isa = PBXFileReference; lastKnownFileType = text; path = "shared/dictionaries/ja-zh-core.tsv"; sourceTree = SOURCE_ROOT; };
+		B00000000000000000000109 /* ja-zh-wiktionary.tsv */ = {isa = PBXFileReference; lastKnownFileType = text; path = "shared/dictionaries/ja-zh-wiktionary.tsv"; sourceTree = SOURCE_ROOT; };
+		B00000000000000000000110 /* ja-zh-NOTICE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "shared/dictionaries/ja-zh-NOTICE.txt"; sourceTree = SOURCE_ROOT; };
+		EB1200000000000000000001 /* AIModelCatalogService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIModelCatalogService.swift; sourceTree = "<group>"; };
+		EB1200000000000000000002 /* AIModelPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIModelPicker.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -234,11 +276,14 @@
 			isa = PBXGroup;
 			children = (
 				B00000000000000000000001 /* JerreaderApp.swift */,
+				B00000000000000000000103 /* JerreaderSchemas.swift */,
 				B00000000000000000000002 /* ContentView.swift */,
 				B00000000000000000000035 /* AppSettingsView.swift */,
+				EB1200000000000000000002 /* AIModelPicker.swift */,
 				B000000000000000000000F1 /* LibraryBackupSettingsView.swift */,
 				B00000000000000000000036 /* AppGuideView.swift */,
 				B0000000000000000000001D /* JerreaderTheme.swift */,
+				5F395C7755163C0B53DA151F /* JerreaderIcons.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -306,6 +351,7 @@
 				B00000000000000000000022 /* AppleTranslationService.swift */,
 				B0000000000000000000002F /* TranslationSettingsStore.swift */,
 				B00000000000000000000030 /* BackendTranslationService.swift */,
+				EB1200000000000000000001 /* AIModelCatalogService.swift */,
 				B00000000000000000000031 /* TranslationFavoriteStore.swift */,
 				B0000000000000000000003D /* ReadingBookmarkStore.swift */,
 				B00000000000000000000043 /* ReadingAnnotationStore.swift */,
@@ -342,6 +388,20 @@
 				B0000000000000000000002C /* LearningHubView.swift */,
 				B00000000000000000000018 /* LookupView.swift */,
 				B000000000000000000000F4 /* TranslateToolView.swift */,
+				B000000000000000000000F8 /* WordReviewState.swift */,
+				B000000000000000000000F9 /* WordReviewView.swift */,
+				B000000000000000000000FA /* SentencePractice.swift */,
+				B000000000000000000000FB /* SentencePracticeView.swift */,
+				B000000000000000000000FC /* GrammarNoteRecord.swift */,
+				B000000000000000000000FD /* GrammarNotebookView.swift */,
+				B000000000000000000000FE /* ReadingActivity.swift */,
+				B000000000000000000000FF /* ReadingGrowthView.swift */,
+				B00000000000000000000100 /* OfflineDictionaryPackage.swift */,
+				B00000000000000000000101 /* OfflineDictionaryView.swift */,
+				B00000000000000000000106 /* JapaneseChineseLexicon.swift */,
+				B00000000000000000000107 /* LearningPage.swift */,
+				B00000000000000000000102 /* OfflineFirstLexicalLookupService.swift */,
+				B000000000000000000000F7 /* StandaloneTranslationWatchdog.swift */,
 				B00000000000000000000019 /* VocabularyView.swift */,
 				B0000000000000000000001A /* LookupHistoryView.swift */,
 				B0000000000000000000001B /* WordRecordViews.swift */,
@@ -369,6 +429,9 @@
 			children = (
 				B0000000000000000000000D /* Assets.xcassets */,
 				B00000000000000000000029 /* Localizable.xcstrings */,
+				B00000000000000000000108 /* ja-zh-core.tsv */,
+				B00000000000000000000110 /* ja-zh-NOTICE.txt */,
+				B00000000000000000000109 /* ja-zh-wiktionary.tsv */,
 				B0000000000000000000003B /* InfoPlist.xcstrings */,
 				B0000000000000000000001E /* Info.plist */,
 			);
@@ -526,6 +589,9 @@
 			files = (
 				A0000000000000000000000D /* Assets.xcassets in Resources */,
 				A00000000000000000000029 /* Localizable.xcstrings in Resources */,
+				A00000000000000000000108 /* ja-zh-core.tsv in Resources */,
+				A00000000000000000000110 /* ja-zh-NOTICE.txt in Resources */,
+				A00000000000000000000109 /* ja-zh-wiktionary.tsv in Resources */,
 				A0000000000000000000003B /* InfoPlist.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -554,9 +620,11 @@
 				A00000000000000000000001 /* JerreaderApp.swift in Sources */,
 				A00000000000000000000002 /* ContentView.swift in Sources */,
 				A00000000000000000000035 /* AppSettingsView.swift in Sources */,
+				EA1200000000000000000002 /* AIModelPicker.swift in Sources */,
 				A000000000000000000000F1 /* LibraryBackupSettingsView.swift in Sources */,
 				A00000000000000000000036 /* AppGuideView.swift in Sources */,
 				A0000000000000000000001E /* JerreaderTheme.swift in Sources */,
+				0E883C0993847176F61B7F97 /* JerreaderIcons.swift in Sources */,
 				A00000000000000000000012 /* BookRecord.swift in Sources */,
 				A00000000000000000000037 /* BookFormat.swift in Sources */,
 				A00000000000000000000013 /* BookImportError.swift in Sources */,
@@ -589,6 +657,7 @@
 				A00000000000000000000022 /* AppleTranslationService.swift in Sources */,
 				A0000000000000000000002F /* TranslationSettingsStore.swift in Sources */,
 				A00000000000000000000030 /* BackendTranslationService.swift in Sources */,
+				EA1200000000000000000001 /* AIModelCatalogService.swift in Sources */,
 				A00000000000000000000031 /* TranslationFavoriteStore.swift in Sources */,
 				A0000000000000000000003F /* ReadingBookmarkStore.swift in Sources */,
 				A00000000000000000000044 /* ReadingAnnotationStore.swift in Sources */,
@@ -605,6 +674,21 @@
 				A00000000000000000000032 /* ReaderSettingsView.swift in Sources */,
 				A00000000000000000000019 /* LookupView.swift in Sources */,
 				A000000000000000000000F4 /* TranslateToolView.swift in Sources */,
+				A000000000000000000000F8 /* WordReviewState.swift in Sources */,
+				A000000000000000000000F9 /* WordReviewView.swift in Sources */,
+				A000000000000000000000FA /* SentencePractice.swift in Sources */,
+				A000000000000000000000FB /* SentencePracticeView.swift in Sources */,
+				A000000000000000000000FC /* GrammarNoteRecord.swift in Sources */,
+				A000000000000000000000FD /* GrammarNotebookView.swift in Sources */,
+				A000000000000000000000FE /* ReadingActivity.swift in Sources */,
+				A000000000000000000000FF /* ReadingGrowthView.swift in Sources */,
+				A00000000000000000000100 /* OfflineDictionaryPackage.swift in Sources */,
+				A00000000000000000000101 /* OfflineDictionaryView.swift in Sources */,
+				A00000000000000000000106 /* JapaneseChineseLexicon.swift in Sources */,
+				A00000000000000000000107 /* LearningPage.swift in Sources */,
+				A00000000000000000000102 /* OfflineFirstLexicalLookupService.swift in Sources */,
+				A00000000000000000000103 /* JerreaderSchemas.swift in Sources */,
+				A000000000000000000000F7 /* StandaloneTranslationWatchdog.swift in Sources */,
 				A0000000000000000000001A /* VocabularyView.swift in Sources */,
 				A0000000000000000000001B /* LookupHistoryView.swift in Sources */,
 				A0000000000000000000001C /* WordRecordViews.swift in Sources */,
@@ -732,7 +816,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 56;
+				CURRENT_PROJECT_VERSION = 60;
 				DEVELOPMENT_ASSET_PATHS = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -740,7 +824,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Jerreader";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
-				MARKETING_VERSION = 1.3.5;
+				MARKETING_VERSION = 1.4.1;
 				OTHER_SWIFT_FLAGS = "$(inherited) -file-prefix-map \"$(SRCROOT)=.\" -debug-prefix-map \"$(SRCROOT)=.\"";
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.Jerreader;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -759,7 +843,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 56;
+				CURRENT_PROJECT_VERSION = 60;
 				DEVELOPMENT_ASSET_PATHS = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -767,7 +851,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Jerreader";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
-				MARKETING_VERSION = 1.3.5;
+				MARKETING_VERSION = 1.4.1;
 				OTHER_SWIFT_FLAGS = "$(inherited) -file-prefix-map \"$(SRCROOT)=.\" -debug-prefix-map \"$(SRCROOT)=.\"";
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.Jerreader;
 				PRODUCT_NAME = "$(TARGET_NAME)";

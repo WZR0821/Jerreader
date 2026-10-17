@@ -14,7 +14,8 @@ struct LearningSearchField: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
+            Image(uiImage: JerreaderIconImage.image("magnifyingglass"))
+                .resizable().scaledToFit().frame(width: 16, height: 16)
                 .foregroundStyle(.secondary)
 
             TextField(prompt, text: $text)
@@ -26,7 +27,9 @@ struct LearningSearchField: View {
                 Button {
                     text = ""
                 } label: {
-                    Image(systemName: "xmark.circle.fill")
+                    Image(uiImage: JerreaderIconImage.image("xmark"))
+                        .resizable().scaledToFit().frame(width: 13, height: 13)
+                        .frame(width: 20, height: 20)
                         .foregroundStyle(.tertiary)
                 }
                 .buttonStyle(.plain)
@@ -34,7 +37,8 @@ struct LearningSearchField: View {
             }
         }
         .padding(.horizontal, 12)
-        .frame(height: 42)
+        .padding(.vertical, 6)
+        .frame(minHeight: 48)
         .background(
             JerreaderTheme.paper,
             in: RoundedRectangle(cornerRadius: 13, style: .continuous)
@@ -70,8 +74,8 @@ struct LearningToolbarIcon: View {
     let accessibilityLabel: String
 
     var body: some View {
-        Image(systemName: systemImage)
-            .font(.subheadline.weight(.semibold))
+        Image(uiImage: JerreaderIconImage.image(systemImage))
+            .resizable().scaledToFit().frame(width: 18, height: 18)
             .foregroundStyle(JerreaderTheme.accent)
             .frame(width: 42, height: 42)
             .background(
@@ -104,7 +108,8 @@ struct WordRecordRow: View {
                 Spacer(minLength: 8)
 
                 if record.isFavorite {
-                    Image(systemName: "star.fill")
+                    Image(uiImage: JerreaderIconImage.image("star.fill"))
+                        .resizable().scaledToFit().frame(width: 18, height: 18)
                         .foregroundStyle(JerreaderTheme.accent)
                         .accessibilityLabel("已收藏")
                 }
@@ -169,7 +174,7 @@ struct WordRecordCard: View {
                 }
 
                 if let lemma = record.lemma, lemma != record.surfaceForm {
-                    Label("基本形：\(lemma)", systemImage: "arrow.trianglehead.counterclockwise")
+                    JerreaderLabel(title: "基本形：\(lemma)", icon: "SWAP", size: 18)
                         .font(.headline)
                         .foregroundStyle(.primary)
                         .textSelection(.enabled)
@@ -177,7 +182,7 @@ struct WordRecordCard: View {
 
                 HStack(spacing: 10) {
                     if let reading = record.reading, !reading.isEmpty {
-                        Label(reading, systemImage: "character.book.closed")
+                        JerreaderLabel(title: reading, icon: "character.book.closed", size: 18)
                     }
                     if let partOfSpeech = record.partOfSpeech, !partOfSpeech.isEmpty {
                         Text(partOfSpeech)
@@ -190,7 +195,8 @@ struct WordRecordCard: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 13) {
-                Text("中文释义")
+                Text(record.usageNote?.contains("译文") == true || record.usageNote?.contains("AI") == true
+                    ? "参考释义 · 中文" : "词典释义 · 中文")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
 
@@ -215,7 +221,7 @@ struct WordRecordCard: View {
             }
 
             if let usageNote = record.usageNote, !usageNote.isEmpty {
-                detailSection(title: "用法", text: usageNote, icon: "lightbulb")
+                detailSection(title: "来源与用法", text: usageNote, icon: "lightbulb")
             }
 
             if let inflectionNote = record.inflectionNote, !inflectionNote.isEmpty {
@@ -227,6 +233,7 @@ struct WordRecordCard: View {
             }
 
             if !record.examples.isEmpty {
+                DisclosureGroup("展开词典例句") {
                 VStack(alignment: .leading, spacing: 11) {
                     Label("例句", systemImage: "quote.bubble")
                         .font(.caption.weight(.semibold))
@@ -258,12 +265,20 @@ struct WordRecordCard: View {
                 }
             }
 
+            }
+
             if let aiAnalysis = record.aiAnalysis, !aiAnalysis.isEmpty {
+                DisclosureGroup("展开 AI 语境建议") {
                 detailSection(
-                    title: "AI 日语深度解析",
+                    title: "AI 语境建议（需结合原句核对）",
                     text: aiAnalysis,
                     icon: "sparkles"
                 )
+                SaveGrammarNoteButton(draft: GrammarNoteDraft(
+                    title: record.displayTerm, sentence: record.sentenceContext ?? record.surfaceForm,
+                    explanation: aiAnalysis, language: record.languageRawValue,
+                    bookID: record.sourceBookID, bookTitle: record.sourceBookTitle))
+                }
             }
 
             if let sentenceContext = record.sentenceContext, !sentenceContext.isEmpty {
@@ -271,7 +286,7 @@ struct WordRecordCard: View {
             }
 
             if let sourceBookTitle = record.sourceBookTitle, !sourceBookTitle.isEmpty {
-                Label("来源：《\(sourceBookTitle)》", systemImage: "book.closed")
+                JerreaderLabel(title: "来源：《\(sourceBookTitle)》", icon: "book.closed", size: 16)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -302,7 +317,7 @@ struct WordRecordCard: View {
 
     private func detailSection(title: String, text: String, icon: String) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            Label(title, systemImage: icon)
+            JerreaderLabel(title: title, icon: ["lightbulb": "INFO", "arrow.trianglehead.branch": "SWAP", "text.quote": "SENTENCES", "sparkles": "NOTE"][icon] ?? icon, size: 14)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(JerreaderTheme.accent)
             Text(text)
@@ -326,8 +341,8 @@ struct WordRecordCard: View {
     ) -> some View {
         Button(action: action) {
             VStack(spacing: 7) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 17, weight: .semibold))
+                Image(uiImage: JerreaderIconImage.image(systemImage))
+                    .resizable().scaledToFit().frame(width: 17, height: 17)
                     .foregroundStyle(isActive ? JerreaderTheme.accent : .primary)
                     .frame(width: 38, height: 38)
                     .background(

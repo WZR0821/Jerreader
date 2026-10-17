@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Darwin
 import PDFKit
 @preconcurrency import ReadiumShared
 import ReadiumZIPFoundation
@@ -317,9 +318,15 @@ final class LibraryTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
 
         let sourceURL = root.appendingPathComponent("vertical-source.epub")
-        try await writeVerticalJapaneseEPUB(to: sourceURL)
+        try await writeVerticalJapaneseEPUB(to: sourceURL, repetitions: 120)
         let imported = try await EPUBImportService(rootDirectoryURL: root)
             .importBook(from: sourceURL, existingFingerprints: [])
+        let immutableBookURL = try LibraryPaths.bookURL(
+            fileName: imported.localFileName, rootDirectoryURL: root
+        )
+        let immutableBookData = try Data(contentsOf: immutableBookURL)
+        let immutableBookAttributes = try FileManager.default.attributesOfItem(atPath: immutableBookURL.path)
+        let immutableBookDate = try XCTUnwrap(immutableBookAttributes[.modificationDate] as? Date)
         let book = BookRecord(
             title: imported.title,
             author: imported.author,
@@ -331,7 +338,13 @@ final class LibraryTests: XCTestCase {
         )
         let publication = try await EPUBPublicationService(rootDirectoryURL: root)
             .open(book: book)
-        defer { publication.close() }
+        defer {
+            publication.close()
+            XCTAssertEqual(try? Data(contentsOf: immutableBookURL), immutableBookData)
+            let finalAttributes = try? FileManager.default.attributesOfItem(atPath: immutableBookURL.path)
+            let finalDate = finalAttributes?[.modificationDate] as? Date
+            XCTAssertEqual(finalDate, immutableBookDate, "Reading and layout changes must preserve the publication modification date")
+        }
 
         let layout = await JapanesePublicationLayoutDetector.detect(
             in: publication,
@@ -389,7 +402,11 @@ final class LibraryTests: XCTestCase {
                     (() => {
                       if (document.readyState !== 'complete') return null;
                       if (!document.getElementById('paragraph')) return null;
-                      return getComputedStyle(document.documentElement).writingMode;
+                      const mode = getComputedStyle(document.documentElement).writingMode;
+                      const links = Array.from(document.querySelectorAll('link[rel="stylesheet"]'));
+                      const css = links.map(link => link.getAttribute('href') || '').filter(href => href.includes('ReadiumCSS'));
+                      if (!css.length || mode.startsWith('vertical') !== css.some(href => href.includes('/cjk-vertical/'))) return null;
+                      return mode;
                     })()
                     """
                 ) as? String, !value.isEmpty else { continue }
@@ -409,7 +426,7 @@ final class LibraryTests: XCTestCase {
                 if let value {
                     last = value
                     if value == expected {
-                        try? await Task.sleep(for: .milliseconds(250))
+                        try? await Task.sleep(for: .milliseconds(650))
                         controller?.view.layoutIfNeeded()
                         let confirmed = await chapterWritingMode()
                         if confirmed == expected { return expected }
@@ -426,6 +443,96 @@ final class LibraryTests: XCTestCase {
         XCTAssertEqual(verticalMode, "vertical-rl")
         XCTAssertEqual(controller?.navigator.settings.readingProgression, .rtl)
         XCTAssertEqual(controller?.navigator.settings.verticalText, true)
+        func visibleCharacterIDs(_ label: String) async throws -> (Set<String>, Int) {
+            let webView = try XCTUnwrap(allWebViews(in: controller?.navigator.view).first)
+            let geometryValue = try await webView.evaluateJavaScript("""
+                (() => {
+                    const w = innerWidth, h = innerHeight;
+                    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                    let node, nodeIndex = 0, clipped = 0, total = 0;
+                    const visible = [], edges = [];
+                    while (node = walker.nextNode()) {
+                        const index = nodeIndex++;
+                        if (!node.textContent.trim() || node.parentElement.closest('rt,rp,script,style')) continue;
+                        for (let i = 0; i < node.length; i++) {
+                            if (/\\s/.test(node.data[i])) continue;
+                            total++;
+                            const range = document.createRange(); range.setStart(node,i); range.setEnd(node,i+1);
+                            const r = range.getBoundingClientRect();
+                            if (r.width < 1 || r.right <= 0 || r.left >= w || r.bottom <= 0 || r.top >= h) continue;
+                            visible.push(index + ':' + i);
+                            if (r.left < -0.5 || r.right > w + 0.5) {
+                                clipped++;
+                                if (edges.length < 4) edges.push({left:r.left, right:r.right, text:node.data[i]});
+                            }
+                        }
+                    }
+                    const style = getComputedStyle(document.documentElement);
+                    return {width:w, height:h, visible, total, clipped, edges, scrollX,
+                      bodyWidth:document.body.scrollWidth, documentWidth:document.scrollingElement.scrollWidth,
+                      bodyAxis:getComputedStyle(document.body).getPropertyValue('-webkit-column-axis'),
+                      bodyLayoutWidth:getComputedStyle(document.body).width,
+                      axis:style.getPropertyValue('-webkit-column-axis'), columns:style.columnWidth};
+                })()
+                """)
+            let geometry = try XCTUnwrap(geometryValue as? [String: Any])
+            let attachment = XCTAttachment(string: String(describing: geometry))
+            attachment.name = "vertical-edge-geometry-" + label
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            let screenshot = XCTAttachment(image: UIGraphicsImageRenderer(bounds: webView.bounds).image { _ in
+                webView.drawHierarchy(in: webView.bounds, afterScreenUpdates: true)
+            })
+            screenshot.name = "vertical-page-edges-" + label
+            screenshot.lifetime = .keepAlways
+            add(screenshot)
+            XCTAssertTrue(webView.scrollView.isPagingEnabled, "Loading must not disable page snapping")
+            XCTAssertEqual(geometry["clipped"] as? Int, 0, "Both outer columns must be fully visible: \(label)")
+            let visible = Set(geometry["visible"] as? [String] ?? [])
+            XCTAssertGreaterThan(visible.count, 0)
+            return (visible, geometry["total"] as? Int ?? 0)
+        }
+        func assertCompleteVerticalPages(prefix: String) async throws {
+            let webView = try XCTUnwrap(allWebViews(in: controller?.navigator.view).first)
+            _ = try await webView.evaluateJavaScript("(() => { window.scrollTo(0, 0); return true; })()")
+            try await Task.sleep(for: .milliseconds(350))
+            let firstPage = try await visibleCharacterIDs(prefix + "first")
+            var allVisible = firstPage.0
+            var pages = [firstPage.0]
+            var pageTurns = 0
+            while pageTurns < 48 {
+                let scrollView = try XCTUnwrap(allWebViews(in: controller?.navigator.view).first?.scrollView)
+                let before = scrollView.contentOffset.x
+                controller?.navigateForward()
+                try await Task.sleep(for: .milliseconds(600))
+                if abs(scrollView.contentOffset.x - before) < 0.5 { break }
+                pageTurns += 1
+                let page = try await visibleCharacterIDs(prefix + "next-\(pageTurns)")
+                allVisible.formUnion(page.0)
+                pages.append(page.0)
+            }
+            XCTAssertGreaterThan(pageTurns, 0, "The long fixture must exercise an actual page boundary")
+            XCTAssertEqual(allVisible.count, firstPage.1, "No characters may disappear between vertical pages")
+            for index in pages.dropLast().indices.reversed() {
+                controller?.navigateBackward()
+                try await Task.sleep(for: .milliseconds(600))
+                let previous = try await visibleCharacterIDs(prefix + "previous-\(index)")
+                XCTAssertEqual(previous.0, pages[index], "Backward pagination must revisit the same complete page without skipping")
+            }
+
+        }
+        try await assertCompleteVerticalPages(prefix: "normal-")
+        // Switch layouts from inside the chapter, not from its already-aligned edge.
+        for _ in 0..<2 {
+            controller?.navigateForward()
+            try await Task.sleep(for: .milliseconds(600))
+        }
+
+        // Match the app: preference changes occur while a settings sheet covers the reader.
+        let preferencesSheet = UIViewController()
+        preferencesSheet.modalPresentationStyle = .pageSheet
+        controller?.present(preferencesSheet, animated: false)
+        try await Task.sleep(for: .milliseconds(200))
 
         // 一键横排：文字必须真的变横，翻页方向必须变成从左向右。
         controller?.applyPreferences(
@@ -439,6 +546,8 @@ final class LibraryTests: XCTestCase {
             readingMode: .paginated,
             customBackgroundHex: ""
         )
+        try await Task.sleep(for: .milliseconds(750))
+        preferencesSheet.dismiss(animated: false)
         let horizontalMode = await settledWritingMode(expecting: "horizontal-tb")
         XCTAssertEqual(
             horizontalMode,
@@ -447,6 +556,9 @@ final class LibraryTests: XCTestCase {
         )
         XCTAssertEqual(controller?.navigator.settings.readingProgression, .ltr)
         XCTAssertEqual(controller?.navigator.settings.verticalText, false)
+        for webView in allWebViews(in: controller?.navigator.view) {
+            XCTAssertTrue(webView.scrollView.isPagingEnabled, "Horizontal page mode must keep Readium's UIKit snapping")
+        }
 
         // 切回原版：把版式交还给出版物，方向也回到从右向左。
         controller?.applyPreferences(
@@ -464,6 +576,28 @@ final class LibraryTests: XCTestCase {
         XCTAssertEqual(restoredMode, "vertical-rl")
         XCTAssertEqual(controller?.navigator.settings.readingProgression, .rtl)
         XCTAssertEqual(controller?.navigator.settings.verticalText, true)
+        _ = try await visibleCharacterIDs("restored")
+
+        controller?.applyPreferences(
+            fontSize: 1.5, theme: .light, fontChoice: .serif,
+            lineHeight: 1.6, paragraphSpacing: 1.3, pageMargins: 1.5,
+            textOrientation: .publication, readingMode: .paginated,
+            customBackgroundHex: ""
+        )
+        _ = await settledWritingMode(expecting: "vertical-rl")
+        var fontSettled = false
+        for _ in 0..<100 {
+            if let webView = allWebViews(in: controller?.navigator.view).first,
+               let size = try? await webView.evaluateJavaScript("parseFloat(getComputedStyle(document.body).fontSize)") as? Double,
+               size >= 23 {
+                fontSettled = true
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertTrue(fontSettled, "The larger-font pagination must actually be rendered")
+        try await Task.sleep(for: .milliseconds(350))
+        try await assertCompleteVerticalPages(prefix: "large-")
     }
 
     /// Runs the same vertical/horizontal round trip against a real book on
@@ -1292,6 +1426,44 @@ final class LibraryTests: XCTestCase {
         XCTAssertEqual(dateAfterImport.timeIntervalSince1970, originalDate.timeIntervalSince1970)
     }
 
+    func testReadOnlyBookAccessPreservesNanosecondsAndSkipsUnchangedMetadata() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let data = Data("Immutable publication input".utf8)
+        try data.write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let expected = timespec(tv_sec: 1_700_000_000, tv_nsec: 123_456_789)
+        let times = [timespec(tv_sec: 0, tv_nsec: Int(UTIME_OMIT)), expected]
+        let result = url.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return Int32(-1) }
+            return times.withUnsafeBufferPointer { Darwin.utimensat(AT_FDCWD, path, $0.baseAddress, 0) }
+        }
+        XCTAssertEqual(result, 0)
+        func metadata() throws -> stat {
+            var value = stat()
+            let status = url.withUnsafeFileSystemRepresentation { path in
+                guard let path else { return Int32(-1) }
+                return Darwin.lstat(path, &value)
+            }
+            guard status == 0 else { throw POSIXError(.EIO) }
+            return value
+        }
+        let access = try LibraryPublicationReadOnlyAccess.prepare(url: url)
+        let prepared = try metadata()
+        access.restoreModificationDate()
+        let unchanged = try metadata()
+        XCTAssertEqual(unchanged.st_mtimespec.tv_sec, expected.tv_sec)
+        XCTAssertEqual(unchanged.st_mtimespec.tv_nsec, expected.tv_nsec)
+        XCTAssertEqual(unchanged.st_ctimespec.tv_sec, prepared.st_ctimespec.tv_sec)
+        XCTAssertEqual(unchanged.st_ctimespec.tv_nsec, prepared.st_ctimespec.tv_nsec)
+
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_800_000_000)], ofItemAtPath: url.path)
+        access.restoreModificationDate()
+        let restored = try metadata()
+        XCTAssertEqual(restored.st_mtimespec.tv_sec, expected.tv_sec)
+        XCTAssertEqual(restored.st_mtimespec.tv_nsec, expected.tv_nsec)
+        XCTAssertEqual(try Data(contentsOf: url), data)
+    }
+
     func testOpeningStoredBookIsReadOnlyAndPreservesModificationDate() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1478,7 +1650,8 @@ private func allWebViews(in root: UIView?) -> [WKWebView] {
 @discardableResult
 func writeVerticalJapaneseEPUB(
     to destinationURL: URL,
-    title: String = "縦書きの本"
+    title: String = "縦書きの本",
+    repetitions: Int = 1
 ) async throws -> URL {
     let identifier = "urn:uuid:\(UUID().uuidString.lowercased())"
     let modified = ISO8601DateFormatter().string(from: Date())
@@ -1530,7 +1703,7 @@ func writeVerticalJapaneseEPUB(
             <link rel="stylesheet" type="text/css" href="style.css"/>
           </head>
           <body class="vrtl">
-            <p id="paragraph">吾輩は猫である。名前はまだ無い。どこで生れたか頓と見当がつかぬ。</p>
+            <p id="paragraph">\(String(repeating: "吾輩は猫である。名前はまだ無い。どこで生れたか頓と見当がつかぬ。", count: repetitions))</p>
             <p>何でも薄暗いじめじめした所でニャーニャー泣いていた事だけは記憶している。</p>
           </body>
         </html>

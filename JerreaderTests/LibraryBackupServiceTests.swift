@@ -9,6 +9,66 @@ import XCTest
 
 @MainActor
 final class LibraryBackupServiceTests: XCTestCase {
+    func testVersion1UpgradePreservesFavoritesAndAddsEmptyLearningState() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("migration.store")
+        let wordID = UUID()
+        do {
+            let schema = Schema(versionedSchema: JerreaderSchemaV1.self)
+            let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, url: url)])
+            let old = JerreaderSchemaV1.WordLookupRecord()
+            old.id = wordID; old.lookupKey = "ja|猫"; old.surfaceForm = "猫"
+            old.languageRawValue = "ja"; old.isFavorite = true; old.isInHistory = true
+            old.definitionsData = Data("[\"猫\"]".utf8)
+            container.mainContext.insert(old)
+            try container.mainContext.save()
+        }
+        let schema = Schema(versionedSchema: JerreaderSchemaV2.self)
+        let upgraded = try ModelContainer(for: schema, migrationPlan: JerreaderMigrationPlan.self,
+            configurations: [ModelConfiguration(schema: schema, url: url)])
+        let word = try XCTUnwrap(upgraded.mainContext.fetch(FetchDescriptor<WordLookupRecord>()).first)
+        XCTAssertEqual(word.id, wordID)
+        XCTAssertTrue(word.isFavorite)
+        XCTAssertEqual(word.definitions, ["猫"])
+        XCTAssertNil(word.reviewData)
+        XCTAssertTrue(try upgraded.mainContext.fetch(FetchDescriptor<GrammarNoteRecord>()).isEmpty)
+    }
+
+    func testNewLearningFieldsRoundTripAndOldBackupDefaults() throws {
+        let source = try makeContainer()
+        let book = BookRecord(title: "来源", author: "作者", localFileName: "source.epub", fileFingerprint: "feature-round-trip")
+        book.activityData = try JSONEncoder().encode(ReadingActivity(days: ["2026-09-07": ReadingDay(seconds: 600, queries: 2)]))
+        source.mainContext.insert(book)
+        let word = WordLookupRecord(explanation: WordExplanation(surfaceForm: "cat", lemma: nil, reading: nil,
+            language: .english, partOfSpeech: nil, definitions: ["猫"], usageNote: nil, sentenceContext: "The cat slept."),
+            sourceBookID: book.id, isFavorite: true)
+        var review = WordReviewState(); review.grade(.known, at: Date(), bookID: book.id)
+        word.reviewData = try JSONEncoder().encode(review)
+        source.mainContext.insert(word)
+        let favorite = TranslationFavoriteRecord(favoriteKey: "practice", sourceText: "The cat slept.", translatedText: "猫睡了。",
+            sourceLanguage: .english, targetLanguage: .simplifiedChinese, providerIdentifier: "mock", bookID: book.id,
+            bookTitle: book.title, locatorJSON: nil)
+        favorite.practiceData = try JSONEncoder().encode(SentencePractice(answer: "cat", prompt: "The ____ slept."))
+        source.mainContext.insert(favorite)
+        source.mainContext.insert(GrammarNoteRecord(GrammarNoteDraft(title: "过去时", sentence: "The cat slept.",
+            explanation: "slept 是过去式。", language: "en", tags: "时态", bookID: book.id, bookTitle: book.title)))
+        try source.mainContext.save()
+        let snapshot = try LibraryBackupService.snapshot(context: source.mainContext, options: .full)
+        let data = try JSONEncoder().encode(snapshot.records)
+        let restoredRecords = try JSONDecoder().decode(BackupRecords.self, from: data)
+        let target = try makeContainer()
+        _ = try LibraryBackupService.merge(records: restoredRecords, scopes: LibraryBackupOptions.full.scopes, into: target.mainContext)
+        try target.mainContext.save()
+        XCTAssertEqual(WordReviewState.decode(try target.mainContext.fetch(FetchDescriptor<WordLookupRecord>()).first?.reviewData), review)
+        XCTAssertEqual(try target.mainContext.fetch(FetchDescriptor<TranslationFavoriteRecord>()).first?.practiceData, favorite.practiceData)
+        XCTAssertEqual(try target.mainContext.fetch(FetchDescriptor<BookRecord>()).first?.activityData, book.activityData)
+        XCTAssertEqual(try target.mainContext.fetch(FetchDescriptor<GrammarNoteRecord>()).first?.tags, "时态")
+        let legacy = Data("{\"books\":[],\"bookmarks\":[],\"annotations\":[],\"favorites\":[],\"words\":[]}".utf8)
+        XCTAssertNil(try JSONDecoder().decode(BackupRecords.self, from: legacy).grammarNotes)
+    }
+
     func testBackupImportPickerAllowsICloudProviderDataFallback() throws {
         let types = LibraryBackupImportPolicy.allowedContentTypes
 
@@ -93,6 +153,10 @@ final class LibraryBackupServiceTests: XCTestCase {
             )
         )
         sourceDefaults.set("dark", forKey: ReaderAppearanceDefaults.themeKey)
+        sourceDefaults.set(0.35, forKey: ReaderInterfaceDefaults.topTransparencyKey)
+        sourceDefaults.set(0.75, forKey: ReaderInterfaceDefaults.bottomTransparencyKey)
+        sourceDefaults.set(true, forKey: ReaderInterfaceDefaults.japaneseFuriganaKey)
+        sourceDefaults.set(false, forKey: ReaderInterfaceDefaults.immersiveReadingKey)
         sourceDefaults.set(
             "must-not-leave-device",
             forKey: "test.secret.apiKey"
@@ -143,6 +207,10 @@ final class LibraryBackupServiceTests: XCTestCase {
             targetDefaults.string(forKey: ReaderAppearanceDefaults.themeKey),
             "dark"
         )
+        XCTAssertEqual(targetDefaults.double(forKey: ReaderInterfaceDefaults.topTransparencyKey), 0.35)
+        XCTAssertEqual(targetDefaults.double(forKey: ReaderInterfaceDefaults.bottomTransparencyKey), 0.75)
+        XCTAssertTrue(targetDefaults.bool(forKey: ReaderInterfaceDefaults.japaneseFuriganaKey))
+        XCTAssertFalse(targetDefaults.bool(forKey: ReaderInterfaceDefaults.immersiveReadingKey))
         XCTAssertNil(targetDefaults.object(forKey: "test.secret.apiKey"))
     }
 
@@ -834,6 +902,36 @@ final class LibraryBackupServiceTests: XCTestCase {
     /// A folder named by an archive from another device is usually not
     /// reachable here. Failing to adopt it must not cost the user the folder
     /// they already had.
+    func testReadoptingSameButMissingFolderDoesNotReportHealthyAuthorization() throws {
+        let folder = temporaryDirectory()
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let defaults = isolatedDefaults()
+        defer { clear(defaults) }
+        let store = LibraryBackupDirectoryStore(defaults: defaults)
+        try store.selectDirectory(folder)
+        try FileManager.default.removeItem(at: folder)
+        XCTAssertFalse(store.adoptDirectory(folder))
+        XCTAssertThrowsError(try store.selectedDirectoryAccess())
+    }
+
+    func testUnavailableOldFolderDoesNotBlockAnUnrelatedFilePickerURL() throws {
+        let workspace = temporaryDirectory()
+        let oldFolder = workspace.appendingPathComponent("old", isDirectory: true)
+        try FileManager.default.createDirectory(at: oldFolder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let defaults = isolatedDefaults()
+        defer { clear(defaults) }
+        let store = LibraryBackupDirectoryStore(defaults: defaults)
+        try store.selectDirectory(oldFolder)
+        try FileManager.default.removeItem(at: oldFolder)
+
+        let newlyPicked = workspace.appendingPathComponent("fresh.jerreader-backup")
+        XCTAssertNil(try store.accessIfNeeded(for: newlyPicked))
+        // The broken grant still reports an error for files which need it.
+        XCTAssertThrowsError(try store.accessIfNeeded(for: oldFolder.appendingPathComponent("old.jerreader-backup")))
+    }
+
     func testAdoptingAnUnreachableFolderLeavesThePreviousSelectionIntact() throws {
         let workspace = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: workspace) }
@@ -895,6 +993,7 @@ final class LibraryBackupServiceTests: XCTestCase {
             ReadingAnnotationRecord.self,
             TranslationFavoriteRecord.self,
             WordLookupRecord.self,
+            GrammarNoteRecord.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )
     }

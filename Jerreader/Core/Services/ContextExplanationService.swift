@@ -5,6 +5,12 @@ struct ContextExplanationRequest: Equatable, Sendable {
     let contextText: String?
     let sourceLanguage: LanguageCode?
     let responseLanguage: LanguageCode
+    var isWordLookup = false
+    var dictionaryEntry: String? = nil
+
+    var lookupInstruction: String {
+        isWordLookup ? "\n本次是语境查词。先给出该词在原句中的简短中文含义，再说明词典形与关键活用。区分推测和确定信息；缺少原句或无法消歧时明确说明，不编造读音、词源或词典依据。" : ""
+    }
 }
 
 struct ContextExplanationResult: Equatable, Sendable {
@@ -52,7 +58,9 @@ enum ContextExplanationInputPolicy {
             focusedText: focused,
             contextText: context,
             sourceLanguage: request.sourceLanguage,
-            responseLanguage: request.responseLanguage
+            responseLanguage: request.responseLanguage,
+            isWordLookup: request.isWordLookup,
+            dictionaryEntry: request.dictionaryEntry.map { String($0.prefix(1_000)) }
         )
     }
 
@@ -67,6 +75,8 @@ enum ContextExplanationInputPolicy {
             request.contextText ?? "",
             request.sourceLanguage?.rawValue ?? "auto",
             request.responseLanguage.rawValue,
+            request.isWordLookup ? "word-lookup-v2" : "sentence",
+            request.isWordLookup ? (request.dictionaryEntry ?? "") : "",
             providerIdentifier,
             providerVersion,
         ].joined(separator: "\u{001F}")

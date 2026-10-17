@@ -3,6 +3,7 @@ import SwiftData
 import SwiftUI
 import UniformTypeIdentifiers
 import UIKit
+import ImageIO
 
 struct LibraryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -108,7 +109,7 @@ struct LibraryView: View {
                     Button {
                         isShowingImportOptions = true
                     } label: {
-                        Image(systemName: "plus")
+                        JerreaderSymbol(name: "plus", size: 22)
                     }
                     .disabled(isImporting)
                     .accessibilityLabel("导入电子书")
@@ -159,7 +160,7 @@ struct LibraryView: View {
                             .disabled(books.isEmpty)
                         }
                     } label: {
-                        Image(systemName: "ellipsis.circle")
+                        JerreaderSymbol(name: "ellipsis.circle", size: 22)
                     }
                     .accessibilityLabel("书架更多操作")
                 }
@@ -207,7 +208,7 @@ struct LibraryView: View {
         }
         .sheet(item: $selectedManagedBook) { book in
             BookManagementView(book: book, existingFolders: categories)
-            .presentationDetents([.medium, .large])
+            .presentationDetents([.large])
             .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $isShowingBatchManagement) {
@@ -278,7 +279,7 @@ struct LibraryView: View {
             Button {
                 isShowingImportOptions = true
             } label: {
-                Label("导入书籍", systemImage: "square.and.arrow.down")
+                JerreaderLabel(title: "导入书籍", icon: "square.and.arrow.down")
                     .font(.headline)
                     .padding(.horizontal, 8)
             }
@@ -291,7 +292,7 @@ struct LibraryView: View {
             Button {
                 isShowingBackupRestore = true
             } label: {
-                Label("从备份恢复", systemImage: "arrow.uturn.backward.circle")
+                JerreaderLabel(title: "从备份恢复", icon: "RESTORE", size: 16)
                     .font(.subheadline)
                     .padding(.horizontal, 8)
             }
@@ -301,13 +302,13 @@ struct LibraryView: View {
             .padding(.top, 6)
             .accessibilityIdentifier("library-restore-backup")
 
-            Text("装过 Jerreader 的话，选中以前的备份文件即可恢复书架、进度和备份计划。")
+            Text("装过 Jerreader 的话，选择以前的备份文件夹即可恢复书架、进度和备份计划。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.top, 6)
 
-            Label("本机保存，不会上传", systemImage: "lock.fill")
+            JerreaderLabel(title: "本机保存，不会上传", icon: "lock.fill", size: 13)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.top, 10)
@@ -713,7 +714,7 @@ private struct RecentlyViewedBookView: View {
                         Label {
                             JerreaderRelativeTimeText(date: lastOpenedAt)
                         } icon: {
-                            Image(systemName: "clock")
+                            JerreaderSymbol(name: "CLOCK", size: 12)
                         }
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -734,7 +735,7 @@ private struct RecentlyViewedBookView: View {
 
                 Spacer(minLength: 8)
 
-                Image(systemName: "chevron.right")
+                JerreaderSymbol(name: "chevron.right", size: 13)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.tertiary)
             }
@@ -796,7 +797,7 @@ private struct LibraryFolderSection: View {
     ) -> some View {
         Button(action: action) {
             HStack(spacing: 11) {
-                Image(systemName: systemImage)
+                JerreaderSymbol(name: systemImage, size: 20)
                     .font(.title3)
                     .foregroundStyle(isSelected ? JerreaderTheme.onPrimaryAction : JerreaderTheme.accent)
                 VStack(alignment: .leading, spacing: 2) {
@@ -892,18 +893,18 @@ private struct BookCardView: View {
 
                 Menu {
                     Button(action: onOpen) {
-                        Label("开始阅读", systemImage: "book.pages")
+                        Label { Text("开始阅读") } icon: { Image(uiImage: JerreaderIconImage.image("BOOKS")) }
                     }
 
                     Button(action: onManage) {
-                        Label("编辑书籍信息", systemImage: "pencil")
+                        Label { Text("编辑书籍信息") } icon: { Image(uiImage: JerreaderIconImage.image("NOTE")) }
                     }
 
                     Button(role: .destructive, action: onDelete) {
-                        Label("删除", systemImage: "trash")
+                        Label { Text("删除") } icon: { Image(uiImage: JerreaderIconImage.image("TRASH")) }
                     }
                 } label: {
-                    Image(systemName: "ellipsis")
+                    JerreaderSymbol(name: "ellipsis", size: 18)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .frame(width: 44, height: 44)
@@ -914,15 +915,15 @@ private struct BookCardView: View {
         }
         .contextMenu {
             Button(action: onOpen) {
-                Label("开始阅读", systemImage: "book.pages")
+                Label { Text("开始阅读") } icon: { Image(uiImage: JerreaderIconImage.image("BOOKS")) }
             }
 
             Button(action: onManage) {
-                Label("编辑书籍信息", systemImage: "pencil")
+                Label { Text("编辑书籍信息") } icon: { Image(uiImage: JerreaderIconImage.image("NOTE")) }
             }
 
             Button(role: .destructive, action: onDelete) {
-                Label("删除", systemImage: "trash")
+                Label { Text("删除") } icon: { Image(uiImage: JerreaderIconImage.image("TRASH")) }
             }
         }
         // Flexible grid cells do not automatically constrain a Button's image
@@ -977,7 +978,7 @@ private struct LibraryReadingOverview: View {
                 metric(
                     value: "\(startedBooks.count)",
                     label: "已开始",
-                    systemImage: "book.pages"
+                    systemImage: "BOOKS"
                 )
 
                 Divider()
@@ -986,7 +987,7 @@ private struct LibraryReadingOverview: View {
                 metric(
                     value: "\(Int((averageProgress * 100).rounded()))%",
                     label: "平均进度",
-                    systemImage: "chart.bar"
+                    systemImage: "TREND"
                 )
             }
         }
@@ -1004,7 +1005,10 @@ private struct LibraryReadingOverview: View {
 
     private func metric(value: String, label: String, systemImage: String) -> some View {
         VStack(spacing: 5) {
-            Label(value, systemImage: systemImage)
+            HStack(spacing: 4) {
+                JerreaderSymbol(name: systemImage, size: 14)
+                Text(value)
+            }
                 .font(.subheadline.monospacedDigit().weight(.semibold))
                 .foregroundStyle(JerreaderTheme.accent)
                 .lineLimit(1)
@@ -1058,7 +1062,7 @@ private struct BookManagementView: View {
                                 selection: $selectedCoverItem,
                                 matching: .images
                             ) {
-                                Label("更换封面", systemImage: "photo")
+                                JerreaderLabel(title: "更换封面", icon: "PHOTO")
                             }
                             .buttonStyle(.bordered)
 
@@ -1112,6 +1116,8 @@ private struct BookManagementView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(JerreaderCanvasBackground())
             .navigationTitle("管理书籍")
             .navigationBarTitleDisplayMode(.inline)
             .disabled(isSaving)
@@ -1440,47 +1446,51 @@ private extension TimeInterval {
 
 private struct BookCoverView: View {
     let book: BookRecord
+    @State private var cover: BookCoverThumbnail?
 
     var body: some View {
         Group {
-            if let image = loadCover() {
-                Image(uiImage: image)
+            if let cover, cover.fileName == book.coverFileName {
+                Image(decorative: cover.image, scale: 1)
                     .resizable()
                     .scaledToFill()
             } else {
-                ZStack(alignment: .leading) {
-                    LinearGradient(
-                        colors: fallbackPalette,
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-
-                    Rectangle()
-                        .fill(.white.opacity(0.16))
-                        .frame(width: 6)
-                        .padding(.vertical, 6)
-
-                    VStack(spacing: 13) {
-                        Image(systemName: book.format.systemImage)
-                            .font(.system(size: 27, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.88))
-
-                        Text(book.title)
-                            .font(.system(.headline, design: .serif).weight(.bold))
-                            .multilineTextAlignment(.center)
-                            .lineLimit(4)
+                GeometryReader { geometry in
+                    let scale = min(geometry.size.width / 168, geometry.size.height / 252, 1)
+                    ZStack(alignment: .leading) {
+                        LinearGradient(
+                            colors: fallbackPalette,
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
 
                         Rectangle()
-                            .fill(.white.opacity(0.55))
-                            .frame(width: 34, height: 1)
+                            .fill(.white.opacity(0.16))
+                            .frame(width: 6 * scale)
+                            .padding(.vertical, 6 * scale)
 
-                        Text(book.author)
-                            .font(.caption)
-                            .lineLimit(2)
+                        VStack(spacing: 13 * scale) {
+                            JerreaderSymbol(name: "DICTIONARY", size: 27 * scale)
+                                .foregroundStyle(.white.opacity(0.88))
+
+                            Text(book.title)
+                                .font(.system(size: 17 * scale, weight: .bold, design: .serif))
+                                .multilineTextAlignment(.center)
+                                .lineLimit(4)
+
+                            Rectangle()
+                                .fill(.white.opacity(0.55))
+                                .frame(width: 34 * scale, height: 1)
+
+                            Text(book.author)
+                                .font(.system(size: 12 * scale))
+                                .multilineTextAlignment(.center)
+                                .lineLimit(2)
+                        }
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(18 * scale)
                     }
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(18)
                 }
             }
         }
@@ -1491,6 +1501,12 @@ private struct BookCoverView: View {
                 .stroke(.white.opacity(0.18), lineWidth: 0.75)
         }
         .accessibilityHidden(true)
+        .task(id: book.coverFileName) {
+            guard let fileName = book.coverFileName else { cover = nil; return }
+            let thumbnail = await BookCoverThumbnailStore.shared.load(fileName: fileName)
+            guard !Task.isCancelled else { return }
+            cover = thumbnail
+        }
     }
 
     private var fallbackPalette: [Color] {
@@ -1504,13 +1520,49 @@ private struct BookCoverView: View {
         return palettes[scalarTotal % palettes.count]
     }
 
-    private func loadCover() -> UIImage? {
-        guard let coverFileName = book.coverFileName,
-              let url = try? LibraryPaths.coverURL(fileName: coverFileName)
-        else {
-            return nil
+}
+
+/// The CGImage is fully decoded before publication and remains immutable.
+private final class BookCoverThumbnail: @unchecked Sendable {
+    let fileName: String
+    let image: CGImage
+    var cost: Int { image.bytesPerRow * image.height }
+    init(fileName: String, image: CGImage) { self.fileName = fileName; self.image = image }
+}
+
+/// Serial background decoding and a bounded LRU; no file access in View.body.
+private actor BookCoverThumbnailStore {
+    static let shared = BookCoverThumbnailStore()
+    private var cached: [String: BookCoverThumbnail] = [:]
+    private var recency: [String] = []
+    private var cost = 0
+    private let capacity = 24 * 1024 * 1024
+
+    func load(fileName: String) -> BookCoverThumbnail? {
+        guard !Task.isCancelled,
+              let url = try? LibraryPaths.coverURL(fileName: fileName),
+              let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]) else { return nil }
+        let key = "\(fileName):\(values.contentModificationDate?.timeIntervalSince1970 ?? 0):\(values.fileSize ?? 0)"
+        if let thumbnail = cached[key] {
+            recency.removeAll { $0 == key }; recency.append(key)
+            return thumbnail
         }
-        return UIImage(contentsOfFile: url.path)
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: 768,
+                kCGImageSourceShouldCacheImmediately: true
+              ] as CFDictionary), !Task.isCancelled else { return nil }
+        let thumbnail = BookCoverThumbnail(fileName: fileName, image: image)
+        while cost + thumbnail.cost > capacity, let oldest = recency.first {
+            recency.removeFirst()
+            cost -= cached.removeValue(forKey: oldest)?.cost ?? 0
+        }
+        if thumbnail.cost <= capacity {
+            cached[key] = thumbnail; recency.append(key); cost += thumbnail.cost
+        }
+        return thumbnail
     }
 }
 
@@ -1741,7 +1793,7 @@ private struct TransferMethodCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             if showsDisclosure {
-                Image(systemName: "chevron.right")
+                JerreaderSymbol(name: "chevron.right", size: 13)
                     .font(.caption.weight(.bold))
                     .foregroundStyle(.tertiary)
                     .padding(.top, 15)

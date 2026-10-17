@@ -48,10 +48,11 @@ struct LibraryBackupSummary: Equatable, Codable, Sendable {
     var annotations = 0
     var favorites = 0
     var words = 0
+    var grammarNotes: Int? = nil
 
     var isEmpty: Bool {
         books == 0 && bookmarks == 0 && annotations == 0
-            && favorites == 0 && words == 0
+            && favorites == 0 && words == 0 && (grammarNotes ?? 0) == 0
     }
 
     var description: String {
@@ -61,6 +62,7 @@ struct LibraryBackupSummary: Equatable, Codable, Sendable {
         if annotations > 0 { parts.append("\(annotations) 条批注") }
         if favorites > 0 { parts.append("\(favorites) 条翻译收藏") }
         if words > 0 { parts.append("\(words) 条生词/历史") }
+        if let grammarNotes, grammarNotes > 0 { parts.append("\(grammarNotes) 条语法收藏") }
         return parts.isEmpty ? "设置或已有内容" : parts.joined(separator: " · ")
     }
 }
@@ -644,7 +646,7 @@ struct LibraryBackupService: @unchecked Sendable {
             throw LibraryBackupError.archiveUnreadable
         }
         if !scopes.contains(.learning),
-           !records.favorites.isEmpty || !records.words.isEmpty
+           !records.favorites.isEmpty || !records.words.isEmpty || !(records.grammarNotes ?? []).isEmpty
         {
             throw LibraryBackupError.archiveUnreadable
         }

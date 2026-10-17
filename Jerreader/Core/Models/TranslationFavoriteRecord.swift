@@ -15,6 +15,7 @@ final class TranslationFavoriteRecord: Identifiable {
     var locatorJSON: String?
     var createdAt: Date
     var updatedAt: Date
+    var practiceData: Data?
 
     init(
         id: UUID = UUID(),

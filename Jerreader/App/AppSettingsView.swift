@@ -134,7 +134,7 @@ struct AppSettingsView: View {
             settingsDivider
             aboutRow(
                 title: "作者",
-                value: "WANG ZIRUI",
+                value: "Jerry Wong",
                 highlightsValue: true
             )
         }
@@ -146,7 +146,7 @@ struct AppSettingsView: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Label(title, systemImage: systemImage)
+            JerreaderLabel(title: title, icon: systemImage, size: 12)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .padding(.leading, 5)
@@ -181,7 +181,7 @@ struct AppSettingsView: View {
                     systemImage: systemImage
                 )
                 Spacer(minLength: 4)
-                Image(systemName: "chevron.right")
+                JerreaderSymbol(name: "chevron.right", size: 13)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.tertiary)
             }
@@ -317,7 +317,7 @@ private struct SettingsNavigationLabel: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         } icon: {
-            Image(systemName: systemImage)
+            JerreaderSymbol(name: systemImage)
                 .foregroundStyle(JerreaderTheme.accent)
         }
     }
@@ -388,14 +388,11 @@ private struct GlobalReaderDefaultsView: View {
                     Button {
                         isConfirmingApply = true
                     } label: {
-                        Label(
-                            "立即应用到书架中的现有书籍",
-                            systemImage: "books.vertical"
-                        )
+                        JerreaderLabel(title: "立即应用到书架中的现有书籍", icon: "books.vertical", size: 20)
                     }
                 }
 
-                Text("同步只覆盖阅读排版和选区配色，不会修改阅读位置、书签、划线、批注或笔记。")
+                Text("只覆盖阅读排版，不会修改阅读位置、书签、划线、批注或笔记。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {
@@ -752,6 +749,11 @@ struct TranslationSettingsDetailView: View {
                     $disablesTapPageTurnsDuringQuickTranslation,
                 showsQuickSentenceToggle: showsQuickSentenceToggle
             )
+            Section {
+                NavigationLink("离线资源") { OfflineDictionaryView() }
+            } footer: {
+                Text("基础查词无需下载。系统句段翻译的语言包由 iOS 在首次使用时管理，扩展词典在此按需准备。")
+            }
         }
         .scrollContentBackground(.hidden)
         .background(JerreaderCanvasBackground())
@@ -763,14 +765,21 @@ struct TranslationSettingsDetailView: View {
 
 private struct DataPrivacySettingsView: View {
     var body: some View {
-        List {
-            Label("书籍、书架与学习记录默认只保存在本机", systemImage: "iphone")
-            Label("API Key 只保存在本机钥匙串", systemImage: "key")
-            Label("在线 AI 只接收你主动选择的文字与必要上下文", systemImage: "checkmark.shield")
-            Text("密钥不会写入书籍、日志或 IPA。选择 Apple 系统翻译时，不会调用你配置的第三方 AI 服务。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        Form {
+            Section("本机数据") {
+                JerreaderLabel(title: "书籍、书架与学习记录默认只保存在本机", icon: "books.vertical")
+                JerreaderLabel(title: "API Key 只保存在本机安全存储", icon: "lock")
+                JerreaderLabel(title: "在线 AI 只接收你主动选择的文字与必要上下文", icon: "checkmark.shield")
+                JerreaderLabel(title: "导入的书籍是只读输入，阅读与翻译不会改写它", icon: "character.book.closed")
+            }
+            Section {
+                JerreaderLabel(title: "备份需要你先授权一个文件夹", icon: "square.and.arrow.down")
+            } header: { Text("写出副本") } footer: {
+                Text("密钥不会写入书籍、日志或安装包。备份只写入你选择的位置。")
+            }
         }
+        .scrollContentBackground(.hidden)
+        .background(JerreaderCanvasBackground())
         .navigationTitle("数据与隐私")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -781,7 +790,7 @@ private struct SettingsSectionHeader: View {
     let systemImage: String
 
     var body: some View {
-        Label(title, systemImage: systemImage)
+        JerreaderLabel(title: title, icon: systemImage)
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(JerreaderTheme.accent)
             .textCase(nil)
@@ -953,6 +962,11 @@ struct TranslationPreferencesSection: View {
 
                 connectionTestButton
 
+                AIModelPicker(configuration: AIModelCatalogConfiguration(
+                    api: settings.directAPIProvider == .anthropic ? .anthropic : settings.directAPIProvider == .gemini ? .gemini : .standard,
+                    endpoint: settings.directAPIProvider.usesCustomEndpoint ? settings.directAPIEndpoint : settings.directAPIProvider.defaultEndpointText,
+                    key: settings.directAPIKey), selectedModel: $settings.directAPIModel)
+
                 DisclosureGroup("高级配置") {
                     VStack(alignment: .leading, spacing: 10) {
                         TextField("模型名称", text: $settings.directAPIModel)
@@ -973,7 +987,7 @@ struct TranslationPreferencesSection: View {
                         Text(
                             settings.directAPIProvider.usesCustomEndpoint
                                 ? "兼容服务需要填写完整的 HTTPS Chat Completions 地址。"
-                                : "默认模型已经自动填写；只有服务商更换模型后才需要修改。"
+                                : "可刷新模型列表选择，也可手动填写服务商提供的模型 ID。"
                         )
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -983,7 +997,7 @@ struct TranslationPreferencesSection: View {
 
                 DisclosureGroup("直接 API 说明") {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("选择 GPT、Claude、Kimi 或其他服务商，再粘贴对应 API Key 即可。官方请求地址与推荐模型会自动填写；只有“其他兼容服务”需要手动填写完整 HTTPS 地址。")
+                        Text("选择 GPT、Claude、Kimi 或其他服务商，再粘贴对应 API Key 即可。官方请求地址与初始模型会自动填写；只有“其他兼容服务”需要手动填写完整 HTTPS 地址。")
                         Text("Key 按服务商分别保存在本机钥匙串中。直接调用会把本次选中文字发送给所选服务商，并可能产生少量 API 费用。")
                     }
                     .font(.caption)

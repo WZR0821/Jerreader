@@ -5,6 +5,14 @@ struct ReaderSettingsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var model: EPUBReaderViewModel
     @ObservedObject private var translationSettings: TranslationSettingsStore
+    @AppStorage(ReaderInterfaceDefaults.immersiveReadingKey)
+    private var immersiveReading = true
+    @AppStorage(ReaderInterfaceDefaults.topTransparencyKey)
+    private var topTransparency = ReaderInterfaceDefaults.barTransparency
+    @AppStorage(ReaderInterfaceDefaults.bottomTransparencyKey)
+    private var bottomTransparency = ReaderInterfaceDefaults.barTransparency
+    @AppStorage(ReaderInterfaceDefaults.japaneseFuriganaKey)
+    private var japaneseFuriganaEnabled = false
 
     init(model: EPUBReaderViewModel) {
         self.model = model
@@ -17,6 +25,7 @@ struct ReaderSettingsView: View {
         NavigationStack {
             Form {
                 paginationSection
+                interfaceSection
                 interactionSection
                 if model.isReflowableBook {
                     typographySection
@@ -92,6 +101,32 @@ struct ReaderSettingsView: View {
             Text("阅读方式")
         } footer: {
             Text("这一页的改动只作用于《\(model.book.title)》。要改所有新书的默认值，请到「设置 → 默认阅读排版」。")
+        }
+    }
+
+    private var interfaceSection: some View {
+        Section {
+            Toggle("沉浸阅读（隐藏状态栏）", isOn: $immersiveReading)
+            transparencySlider("顶部栏透明度", value: $topTransparency)
+            transparencySlider("底部栏透明度", value: $bottomTransparency)
+            Toggle("日语注音", isOn: $japaneseFuriganaEnabled)
+        } header: {
+            Text("阅读界面")
+        } footer: {
+            Text("只调整控制栏背景，按钮保持清晰。日语注音仅显示在翻译卡片中；这些选项对所有书生效。")
+        }
+    }
+
+    private func transparencySlider(_ title: String, value: Binding<Double>) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text((1 - ReaderInterfaceDefaults.backgroundOpacity(value.wrappedValue)).formatted(.percent.precision(.fractionLength(0))))
+                    .foregroundStyle(.secondary).monospacedDigit()
+            }
+            Slider(value: Binding(get: { 1 - ReaderInterfaceDefaults.backgroundOpacity(value.wrappedValue) }, set: { value.wrappedValue = $0 }), in: 0...1, step: 0.05)
+                .accessibilityLabel(title)
         }
     }
 

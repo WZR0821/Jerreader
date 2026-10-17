@@ -5,16 +5,22 @@ import UIKit
 @preconcurrency import ReadiumShared
 
 /// Keeps the KVO tokens that watch one spread's scroll view alive for as long as
-/// the scroll view itself. `NSMapTable` needs a class to hold them, and both
-/// observations share a lifetime, so they travel together.
+/// the scroll view itself. `NSMapTable` needs a class to hold the observations
+/// and the pending page-alignment task as one lifetime.
 private final class ReaderScrollViewObservations {
     let offset: NSKeyValueObservation
     let size: NSKeyValueObservation
+    let paging: NSKeyValueObservation
+    var pageAlignmentTask: Task<Void, Never>?
+    var wasUserPaging = false
 
-    init(offset: NSKeyValueObservation, size: NSKeyValueObservation) {
+    init(offset: NSKeyValueObservation, size: NSKeyValueObservation, paging: NSKeyValueObservation) {
         self.offset = offset
         self.size = size
+        self.paging = paging
     }
+
+    deinit { pageAlignmentTask?.cancel() }
 }
 
 @MainActor
@@ -66,6 +72,8 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
     private var selectionVisualPalette = ReaderSelectionVisualPalette.light
     private let selectionPolicyAppliedWebViews = NSHashTable<WKWebView>.weakObjects()
     private let writingModePolicyModes =
+        NSMapTable<WKWebView, NSString>.weakToStrongObjects()
+    private let verticalPaginationPolicyModes =
         NSMapTable<WKWebView, NSString>.weakToStrongObjects()
     private let verticalOffsetObservations =
         NSMapTable<UIScrollView, ReaderScrollViewObservations>.weakToStrongObjects()
@@ -177,11 +185,11 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
         // the activation here sends a cancel phase to the adapter, so one touch
         // can never both translate and turn the page. Swipe pagination remains
         // owned by the navigator and is unaffected.
-        navigator.addObserver(.tap { [weak self] _ in
-            self?.suppressesTapPageTurns ?? false
+        navigator.addObserver(.tap { [weak self] event in
+            await self?.handlePageTurnActivation(at: event.location) ?? false
         })
-        navigator.addObserver(.click { [weak self] _ in
-            self?.suppressesTapPageTurns ?? false
+        navigator.addObserver(.click { [weak self] event in
+            await self?.handlePageTurnActivation(at: event.location) ?? false
         })
         navigator.observeDecorationInteractions(
             inGroup: Self.annotationDecorationGroup
@@ -261,6 +269,7 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
         submittedPreferences = preferences
         appliedTextOrientation = textOrientation
         appliedReadingMode = readingMode
+        verticalPaginationPolicyModes.removeAllObjects()
         if orientationChanged {
             // Publish before submitting: Readium's invalidation reloads the
             // spine item, and the reloaded document must already see the new
@@ -269,6 +278,7 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
         }
         navigator.submitPreferences(preferences)
         enforceWritingModePolicy()
+        enforceVerticalPaginationPolicy()
 #if DEBUG
         updateLayoutUITestDiagnosticAfterSettling()
 #endif
@@ -296,16 +306,12 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
     /// in its original layout silently ignored the 逐页 setting and always
     /// scrolled — the reader had no way to turn one page at a time.
     ///
-    /// Rather than fight ReadiumCSS, the spread keeps scrolling and the *scroll
-    /// view* is made to snap: for vertical text the navigator's axis is already
-    /// horizontal, so one viewport width is exactly one page of columns. Paging
-    /// the scroll view therefore turns the same content one page at a time
-    /// without touching the CSS Readium disabled pagination for.
-    ///
-    /// Horizontal books never reach this path: Readium paginates them properly,
-    /// so `scroll` survives and nothing here changes.
+    /// The navigator keeps its vertical scroll pipeline, with native page
+    /// snapping maintained after asynchronous settings updates. A WebKit-only
+    /// CSS policy fragments Readium's vertical layout at complete page bounds
+    /// instead of cutting continuous text columns at arbitrary pixel offsets.
     private var usesVerticalPageSnapping: Bool {
-        appliedReadingMode == .paginated && rendersVerticalText
+        !isFixedLayout && appliedReadingMode == .paginated && rendersVerticalText
     }
 
     /// Whether the page currently lays out as `vertical-rl`, which is what
@@ -348,16 +354,23 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
 
         // Give the normal Readium invalidation path priority. A missing WebView
         // means the spread is between old and new instances, not that it failed.
+        var lastLoadedVariant: Bool?
         for _ in 0 ..< 20 {
             guard !Task.isCancelled else { return }
-            if let servesVertical = await currentDocumentServesVerticalCSS() {
+            lastLoadedVariant = await currentDocumentServesVerticalCSS()
+            if let servesVertical = lastLoadedVariant {
                 if servesVertical == expectsVerticalText {
                     return
                 }
-                break
             }
             try? await Task.sleep(for: .milliseconds(100))
         }
+        // A missing CSS variant is a document still loading, including the
+        // about:blank WebView Readium has just created for a changed spread.
+        // Reloading that placeholder cancels Readium's pending navigation and
+        // strands its activity indicator. Only recover a fully loaded, stale
+        // document after the normal invalidation has had time to finish.
+        guard lastLoadedVariant != nil else { return }
 
         let savedLocation = navigator.currentLocation
         for _ in 0 ..< 2 {
@@ -366,14 +379,11 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
             // Submitting the target again invokes Readium's official HTML-cache
             // eviction. `reloadFromOrigin` then prevents the current WebKit
             // instance from reusing its own stale response.
+            let webViews = visibleContentWebViews().filter {
+                !$0.isLoading && $0.url != nil && $0.url?.scheme != "about"
+            }
+            guard !webViews.isEmpty else { return }
             replaySubmittedPreferences()
-            let webViews = navigator.view.descendantWebViews.filter {
-                !$0.isHidden && $0.alpha > 0.01 && $0.window != nil
-            }
-            guard !webViews.isEmpty else {
-                try? await Task.sleep(for: .milliseconds(180))
-                continue
-            }
             webViews.forEach { $0.reloadFromOrigin() }
 
             for _ in 0 ..< 35 {
@@ -406,7 +416,13 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
     private func currentDocumentWritingMode() async -> String? {
         for webView in visibleContentWebViews() {
             if let value = try? await webView.evaluateJavaScript(
-                "getComputedStyle(document.documentElement).writingMode"
+                """
+                (() => {
+                  if (document.readyState !== 'complete') return null;
+                  if (!document.querySelector('link[href*="ReadiumCSS"]')) return null;
+                  return getComputedStyle(document.documentElement).writingMode;
+                })()
+                """
             ) as? String,
             !value.isEmpty
             {
@@ -429,6 +445,7 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
             if let value = try? await webView.evaluateJavaScript(
                 """
                 (() => {
+                  if (document.readyState !== 'complete') return null;
                   const links = Array.from(
                     document.querySelectorAll('link[rel="stylesheet"]')
                   ).map((link) => link.getAttribute('href') || '');
@@ -486,16 +503,39 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
 
         // `vertical-rl` begins at the right edge and advances leftwards, so for
         // a right-to-left publication "forward" means a decreasing x offset.
-        let readsRightToLeft = publicationLayout.rightToLeft
-        let step = (forward == readsRightToLeft) ? -width : width
+        let readsRightToLeft = navigator.settings.readingProgression == .rtl
         let maximumOffset = max(scrollView.contentSize.width - width, 0)
-        let target = scrollView.contentOffset.x + step
-        guard target >= -0.5, target <= maximumOffset + 0.5 else { return false }
+        let distance = readsRightToLeft
+            ? maximumOffset - scrollView.contentOffset.x : scrollView.contentOffset.x
+        let page = distance / width
+        let nextDistance = forward
+            ? min((floor(page + 0.001) + 1) * width, maximumOffset)
+            : max((ceil(page - 0.001) - 1) * width, 0)
+        let target = readsRightToLeft ? maximumOffset - nextDistance : nextDistance
+        // A chapter rarely fills an exact number of screens. Its partial last
+        // page is still a page; only leave the resource once its edge is reached.
+        guard abs(target - scrollView.contentOffset.x) > 0.5 else { return false }
 
         scrollView.setContentOffset(
-            CGPoint(x: min(max(target, 0), maximumOffset), y: scrollView.contentOffset.y),
+            CGPoint(x: target, y: scrollView.contentOffset.y),
             animated: true
         )
+        return true
+    }
+
+    private func handlePageTurnActivation(at point: CGPoint) async -> Bool {
+        if suppressesTapPageTurns { return true }
+        guard usesVerticalPageSnapping, isPageTurnTap(point) else { return false }
+        guard pendingSelectionRequestID == nil,
+              !selectionGestureGate.shouldSuppressTap(at: ProcessInfo.processInfo.systemUptime)
+        else { return true }
+        let leftEdge = point.x < navigator.view.bounds.midX
+        let forward = leftEdge == (navigator.settings.readingProgression == .rtl)
+        if stepVerticalPage(forward: forward) { return true }
+        // Readium's default adapter ignores taps while its settings say scroll.
+        // In our vertical page mode only chapter transitions are handed to it.
+        if forward { await navigator.goForward(options: .animated) }
+        else { await navigator.goBackward(options: .animated) }
         return true
     }
 
@@ -681,6 +721,9 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
         isPaginated = self.resolvedIsPaginated
         reportPaginationMode()
         view.setNeedsLayout()
+#if DEBUG
+        updateLayoutUITestDiagnosticAfterSettling()
+#endif
     }
 
     /// Readium can publish a final locator update while WebKit is still
@@ -812,7 +855,8 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
             Self.selectionPolicyScript(detachRubyAnnotations: true),
             Self.writingModePolicyScript(
                 forcesHorizontal: appliedTextOrientation == .horizontal
-            )
+            ),
+            Self.verticalPaginationPolicyScript(enabled: usesVerticalPageSnapping)
         ] {
             userContentController.addUserScript(
                 WKUserScript(
@@ -872,6 +916,86 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
                 }
             }
         }
+    }
+
+    private func enforceVerticalPaginationPolicy() {
+        let enabled = usesVerticalPageSnapping
+        let mode = enabled ? "page" : "scroll"
+        let script = Self.verticalPaginationPolicyScript(enabled: enabled, authoritative: true)
+        for webView in navigator.view.descendantWebViews {
+            guard verticalPaginationPolicyModes.object(forKey: webView) as String? != mode
+            else { continue }
+            verticalPaginationPolicyModes.setObject(mode as NSString, forKey: webView)
+            Task { @MainActor [weak self, weak webView] in
+                guard let webView else { return }
+                do {
+                    _ = try await webView.evaluateJavaScript(script)
+                } catch {
+                    self?.verticalPaginationPolicyModes.removeObject(forKey: webView)
+                }
+            }
+        }
+    }
+
+    /// Readium's vertical CSS defaults to continuous columns. WebKit supports
+    /// fragmenting those columns across horizontal pages through column-axis;
+    /// opt into that CSS only for vertical page mode. Readium still owns the
+    /// document, locators, typography, selection and previous/next navigation.
+    /// No text nodes or imported publication files are changed by this policy.
+    static func verticalPaginationPolicyScript(enabled: Bool, authoritative: Bool = false) -> String {
+        let value = enabled ? "page" : "scroll"
+        return #"""
+        (() => {
+          let mode = '\#(value)';
+          try {
+            if (\#(authoritative ? "true" : "false")) {
+              localStorage.setItem('jerreaderReaderVerticalPagination', mode);
+            } else {
+              const stored = localStorage.getItem('jerreaderReaderVerticalPagination');
+              if (stored === 'page' || stored === 'scroll') mode = stored;
+            }
+          } catch (_) {}
+          const apply = () => {
+            const root = document.documentElement;
+            if (!root) return;
+            root.setAttribute('data-jerreader-vertical-pagination', String(mode === 'page'));
+            const id = 'jerreader-reader-vertical-pagination';
+            if (document.getElementById(id)) return;
+            const style = document.createElement('style');
+            style.id = id;
+            style.textContent = `
+              @supports (-webkit-column-axis: horizontal) {
+                html:root[data-jerreader-vertical-pagination="true"] {
+                  -webkit-column-axis: auto !important;
+                  columns: auto auto !important;
+                  padding: 0 !important;
+                  overflow-x: auto !important;
+                  overflow-y: hidden !important;
+                  width: 100vw !important;
+                  min-width: 100vw !important;
+                  max-width: 100vw !important;
+                }
+                html:root[data-jerreader-vertical-pagination="true"] body {
+                  -webkit-column-axis: horizontal !important;
+                  -webkit-column-gap: calc(2 * var(--RS__pageGutter)) !important;
+                  column-fill: auto !important;
+                  width: 100vw !important;
+                  max-width: 100vw !important;
+                  height: 100vh !important;
+                  padding-left: var(--RS__pageGutter) !important;
+                  padding-right: var(--RS__pageGutter) !important;
+                }
+              }
+            `;
+            (document.head || root).appendChild(style);
+          };
+          apply();
+          if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', apply, { once: true });
+          }
+          return mode;
+        })()
+        """#
     }
 
     func navigator(
@@ -1238,10 +1362,7 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
         selectionUITestDiagnosticView = nil
         layoutUITestDiagnosticView?.removeFromSuperview()
         layoutUITestDiagnosticView = nil
-        translationUITestSelectionView?.removeFromSuperview()
-        translationUITestSelectionView = nil
-        translationUITestCardView?.removeFromSuperview()
-        translationUITestCardView = nil
+        clearTranslationUITestDiagnostics()
 
         var rubyWebView: WKWebView?
         for _ in 0 ..< 120 {
@@ -1381,10 +1502,8 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
     func installTranslationUITestSelection(frameInWindow: CGRect) {
         translationUITestSelectionView?.removeFromSuperview()
         translationUITestSelectionView = nil
-
-        let localFrame = view.convert(frameInWindow, from: nil)
-            .standardized
-            .intersection(view.bounds)
+        guard let window = view.window else { return }
+        let localFrame = window.convert(frameInWindow, from: nil).standardized
         guard !localFrame.isNull, !localFrame.isEmpty else { return }
 
         let marker = UIView(frame: localFrame)
@@ -1397,7 +1516,7 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
         marker.isAccessibilityElement = true
         marker.accessibilityIdentifier = "translation-source-diagnostic"
         marker.accessibilityLabel = "翻译原文测试区域"
-        view.addSubview(marker)
+        window.addSubview(marker)
         translationUITestSelectionView = marker
     }
 
@@ -1405,13 +1524,9 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
     /// geometry test can read it reliably. The view is transparent and cannot
     /// receive touches.
     func installTranslationUITestCard(frameInWindow: CGRect) {
-        guard ProcessInfo.processInfo.arguments.contains(where: {
-            $0.hasPrefix("--jerreader-translation-overlay-ui-test=")
-        }), frameInWindow.height >= 285 else { return }
-
-        let localFrame = view.convert(frameInWindow, from: nil)
-            .standardized
-            .intersection(view.bounds)
+        guard ProcessInfo.processInfo.arguments.contains("--jerreader-selection-ui-test"),
+              let window = view.window else { return }
+        let localFrame = window.convert(frameInWindow, from: nil).standardized
         guard !localFrame.isNull, !localFrame.isEmpty else { return }
 
         let marker = translationUITestCardView ?? UIView(frame: .zero)
@@ -1421,10 +1536,18 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
         marker.isAccessibilityElement = true
         marker.accessibilityIdentifier = "translation-card-diagnostic"
         marker.accessibilityLabel = "翻译浮窗测试区域"
-        if marker.superview == nil {
-            view.addSubview(marker)
+        if marker.superview !== window {
+            marker.removeFromSuperview()
+            window.addSubview(marker)
         }
         translationUITestCardView = marker
+    }
+
+    func clearTranslationUITestDiagnostics() {
+        translationUITestSelectionView?.removeFromSuperview()
+        translationUITestSelectionView = nil
+        translationUITestCardView?.removeFromSuperview()
+        translationUITestCardView = nil
     }
 
     private func updateSelectionUITestDiagnostic(_ message: String) {
@@ -1454,7 +1577,10 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
                       self.layoutUITestDiagnosticSequence == sequence
                 else { return }
 
-                if let value = await self.currentDocumentWritingMode() {
+                if let value = await self.currentDocumentWritingMode(),
+                   let servesVertical = await self.currentDocumentServesVerticalCSS(),
+                   servesVertical == self.rendersVerticalText {
+                    guard self.layoutUITestDiagnosticSequence == sequence else { return }
                     let progression =
                         self.submittedPreferences.readingProgression?.rawValue
                             ?? "auto"
@@ -1465,13 +1591,14 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
                     // from the computed writing mode: the policy pins the
                     // latter, so only the variant shows whether Readium's own
                     // reload produced the matching pagination module.
-                    let variant = switch await self.currentDocumentServesVerticalCSS() {
-                    case .some(true): "cjk-vertical"
-                    case .some(false): "cjk-horizontal"
-                    case nil: "unknown"
-                    }
+                    let variant = servesVertical ? "cjk-vertical" : "cjk-horizontal"
+                    let viewport = self.visibleContentWebViews().first?.scrollView
+                    let x = viewport?.contentOffset.x ?? -1
+                    let width = viewport?.bounds.width ?? 0
+                    let maximum = max((viewport?.contentSize.width ?? 0) - width, 0)
+                    let paging = viewport?.isPagingEnabled ?? false
                     self.layoutUITestDiagnosticView?.accessibilityValue =
-                        "\(self.appliedTextOrientation.rawValue)|\(value)|\(progression)|\(mode)|\(variant)"
+                        "\(self.appliedTextOrientation.rawValue)|\(value)|\(progression)|\(mode)|\(variant)|x=\(x)|w=\(width)|max=\(maximum)|paging=\(paging)"
                     return
                 }
             }
@@ -1482,8 +1609,13 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
             let progression =
                 self.submittedPreferences.readingProgression?.rawValue ?? "auto"
             let mode = self.navigator.settings.scroll ? "scroll" : "paginated"
+            let webView = self.visibleContentWebViews().first
+            let ready = try? await webView?.evaluateJavaScript("document.readyState") as? String
+            guard self.layoutUITestDiagnosticSequence == sequence else { return }
+            let resource = webView?.url?.lastPathComponent ?? "none"
+            let loading = webView?.isLoading ?? false
             self.layoutUITestDiagnosticView?.accessibilityValue =
-                "\(self.appliedTextOrientation.rawValue)|unavailable|\(progression)|\(mode)"
+                "\(self.appliedTextOrientation.rawValue)|unavailable|\(progression)|\(mode)|resource=\(resource)|loading=\(loading)|ready=\(ready ?? "none")"
         }
     }
 #endif
@@ -3203,6 +3335,7 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
     /// preventing the embedded page from drifting vertically or zooming.
     private func configureViewport() {
         enforceWritingModePolicy()
+        enforceVerticalPaginationPolicy()
         for webView in navigator.view.descendantWebViews {
             installSelectionPolicy(in: webView)
             let scrollView = webView.scrollView
@@ -3217,15 +3350,12 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
 
             pinVerticalContentOffset(in: scrollView)
             observeVerticalContentOffset(in: scrollView)
+            scheduleVerticalPageAlignment(in: scrollView)
 
-            // The vertical-text page turn. Readium keeps this spread scrolling
-            // (see `usesVerticalPageSnapping`), so paging is applied to the
-            // scroll view instead: one viewport width is one page of columns in
-            // `vertical-rl`, and snapping to it turns exactly one page per
-            // swipe. Left off for horizontal books, where Readium's own
-            // pagination is already doing the work and snapping a paginated
-            // spread would fight it.
-            scrollView.isPagingEnabled = usesVerticalPageSnapping
+            // Readium's horizontal paginator requires UIKit paging as well:
+            // EPUBReflowableSpreadView sets it to !viewModel.scroll. Turning
+            // it off here lets a drag stop between columns/pages.
+            maintainPageSnapping(in: scrollView)
             scrollView.decelerationRate = usesVerticalPageSnapping
                 ? .fast
                 : .normal
@@ -3299,6 +3429,11 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
                 // `contentOffset` write. `pinVerticalContentOffset` returns
                 // immediately once the offset is zero, so it settles in one step.
                 self?.pinVerticalContentOffset(in: scrollView)
+                self?.maintainPageSnapping(in: scrollView)
+                self?.scheduleVerticalPageAlignment(in: scrollView)
+#if DEBUG
+                self?.updateLayoutUITestDiagnosticAfterSettling()
+#endif
             }
         }
         let observations = ReaderScrollViewObservations(
@@ -3307,9 +3442,64 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
             },
             size: scrollView.observe(\.contentSize, options: [.new]) { view, change in
                 correct(view, change)
+            },
+            paging: scrollView.observe(\.isPagingEnabled, options: [.new]) { view, change in
+                correct(view, change)
             }
         )
         verticalOffsetObservations.setObject(observations, forKey: scrollView)
+    }
+
+    private func maintainPageSnapping(in scrollView: UIScrollView) {
+        let paging = resolvedIsPaginated
+        guard scrollView.isPagingEnabled != paging else { return }
+        // Readium re-applies its settings after the document finishes loading.
+        // Its forced vertical scroll mode must not undo the user's page mode.
+        // Keep its delegate intact; this observation also covers new spreads.
+        scrollView.isPagingEnabled = paging
+    }
+
+    private func scheduleVerticalPageAlignment(in scrollView: UIScrollView) {
+        guard let observation = verticalOffsetObservations.object(forKey: scrollView) else { return }
+        observation.pageAlignmentTask?.cancel()
+        guard usesVerticalPageSnapping else { observation.wasUserPaging = false; return }
+        if scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating {
+            observation.wasUserPaging = true
+        }
+        observation.pageAlignmentTask = Task { @MainActor [weak self, weak scrollView] in
+            do { try await Task.sleep(for: .milliseconds(180)) } catch { return }
+            guard let self, let scrollView,
+                  self.usesVerticalPageSnapping,
+                  !scrollView.isTracking, !scrollView.isDragging, !scrollView.isDecelerating,
+                  self.pendingSelectionRequestID == nil,
+                  self.selectionBridge.displayedRects.isEmpty,
+                  self.navigator.currentSelection == nil
+            else { return }
+            let width = scrollView.bounds.width
+            guard width > 1 else { return }
+            let maximum = max(scrollView.contentSize.width - width, 0)
+            // The final fragment can be shorter than the regular page stride.
+            // Both resource edges are already valid resting positions.
+            guard scrollView.contentOffset.x > 0.5,
+                  scrollView.contentOffset.x < maximum - 0.5
+            else {
+                self.verticalOffsetObservations.object(forKey: scrollView)?.wasUserPaging = false
+                return
+            }
+            let rtl = self.navigator.settings.readingProgression == .rtl
+            let distance = rtl ? maximum - scrollView.contentOffset.x : scrollView.contentOffset.x
+            // Readium restores vertical locators through its scroll branch,
+            // which can stop inside a page. Keep the anchor on that page;
+            // UIKit's own swipe/deceleration remains responsible during touch.
+            let observation = self.verticalOffsetObservations.object(forKey: scrollView)
+            let index = observation?.wasUserPaging == true
+                ? round(distance / width) : floor(distance / width + 0.001)
+            observation?.wasUserPaging = false
+            let offset = rtl ? maximum - index * width : index * width
+            let target = min(max(offset, 0), maximum)
+            guard abs(target - scrollView.contentOffset.x) > 0.5 else { return }
+            scrollView.setContentOffset(CGPoint(x: target, y: scrollView.contentOffset.y), animated: false)
+        }
     }
 
     private func installSelectionPolicy(in webView: WKWebView) {

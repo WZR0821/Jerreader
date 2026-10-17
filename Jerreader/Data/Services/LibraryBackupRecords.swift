@@ -16,7 +16,7 @@ enum LibraryBackupScope: String, CaseIterable, Codable, Identifiable, Sendable {
         switch self {
         case .library: return "书籍与封面"
         case .reading: return "进度、书签与批注"
-        case .learning: return "生词与翻译收藏"
+        case .learning: return "学习记录与练习"
         case .settings: return "阅读与翻译偏好"
         }
     }
@@ -25,7 +25,7 @@ enum LibraryBackupScope: String, CaseIterable, Codable, Identifiable, Sendable {
         switch self {
         case .library: return "包含书架元数据和实际 EPUB、PDF、DOCX/TXT 转换副本。"
         case .reading: return "包含每本书的阅读位置、排版、时长、书签和批注。"
-        case .learning: return "包含生词本、查词历史、AI 解析和译文收藏。"
+        case .learning: return "包含生词、复习进度、原句练习卡、语法知识库和译文收藏。"
         case .settings: return "包含非敏感的全局阅读与翻译设置，不包含 API Key。"
         }
     }
@@ -77,6 +77,7 @@ struct BackupRecords: Codable, Sendable {
     var annotations: [BackupAnnotation] = []
     var favorites: [BackupFavorite] = []
     var words: [BackupWord] = []
+    var grammarNotes: [GrammarNoteDraft]? = nil
 }
 
 /// A UserDefaults value restricted to the property-list types the reader uses.
@@ -118,6 +119,7 @@ enum BackupDefaultValue: Codable, Equatable, Sendable {
 }
 
 struct BackupBook: Codable, Sendable {
+    var activityData: Data? = nil
     var id: UUID
     var publicationIdentifier: String?
     var title: String
@@ -189,6 +191,7 @@ struct BackupAnnotation: Codable, Sendable {
 }
 
 struct BackupFavorite: Codable, Sendable {
+    var practiceData: Data? = nil
     var id: UUID
     var favoriteKey: String
     var sourceText: String
@@ -225,6 +228,7 @@ struct BackupWord: Codable, Sendable {
     var lastLookedUpAt: Date
     var isFavorite: Bool
     var isInHistory: Bool
+    var reviewData: Data? = nil
 }
 
 // MARK: - Snapshot & merge
@@ -234,6 +238,7 @@ extension LibraryBackupService {
     /// are deliberately absent.
     static func exportableDefaultKeys() -> [String] {
         [
+            ReadingActivity.enabledKey,
             ReaderAppearanceDefaults.fontPointSizeKey,
             ReaderAppearanceDefaults.themeKey,
             ReaderAppearanceDefaults.readingModeKey,
@@ -245,6 +250,10 @@ extension LibraryBackupService {
             ReaderAppearanceDefaults.customSelectionColorHexKey,
             ReaderAppearanceDefaults.appliesToExistingBooksKey,
             ReaderAppearanceDefaults.showsProgressKey,
+            ReaderInterfaceDefaults.topTransparencyKey,
+            ReaderInterfaceDefaults.bottomTransparencyKey,
+            ReaderInterfaceDefaults.japaneseFuriganaKey,
+            ReaderInterfaceDefaults.immersiveReadingKey,
             ReaderTextOrientationDefaults.storageKey,
             JerreaderThemePreferences.storageKey,
         ] + TranslationSettingsStore.backupDefaultKeys
@@ -289,6 +298,7 @@ extension LibraryBackupService {
             : []
         records.books = books.map {
             BackupBook(
+                activityData: options.includes(.reading) ? $0.activityData : nil,
                 id: $0.id,
                 publicationIdentifier: $0.publicationIdentifier,
                 title: $0.title,
@@ -390,10 +400,12 @@ extension LibraryBackupService {
         }
 
         if options.includes(.learning) {
+            records.grammarNotes = try context.fetch(FetchDescriptor<GrammarNoteRecord>()).map(\.draft)
             records.favorites = try context.fetch(
                 FetchDescriptor<TranslationFavoriteRecord>()
             ).map {
                 BackupFavorite(
+                    practiceData: $0.practiceData,
                     id: $0.id,
                     favoriteKey: $0.favoriteKey,
                     sourceText: $0.sourceText,
@@ -432,7 +444,8 @@ extension LibraryBackupService {
                     createdAt: $0.createdAt,
                     lastLookedUpAt: $0.lastLookedUpAt,
                     isFavorite: $0.isFavorite,
-                    isInHistory: $0.isInHistory
+                    isInHistory: $0.isInHistory,
+                    reviewData: $0.reviewData
                 )
             }
         }
@@ -442,7 +455,8 @@ extension LibraryBackupService {
             bookmarks: records.bookmarks.count,
             annotations: records.annotations.count,
             favorites: records.favorites.count,
-            words: records.words.count
+            words: records.words.count,
+            grammarNotes: records.grammarNotes?.count
         )
         return (records, summary)
     }
@@ -593,8 +607,7 @@ extension LibraryBackupService {
                 key = item.favoriteKey
             }
             guard favoriteKeys.insert(key).inserted else { continue }
-            context.insert(
-                TranslationFavoriteRecord(
+            let favoriteRecord = TranslationFavoriteRecord(
                     id: availableID(item.id, used: &usedFavoriteIDs),
                     favoriteKey: key,
                     sourceText: item.sourceText,
@@ -609,7 +622,8 @@ extension LibraryBackupService {
                     createdAt: item.createdAt,
                     updatedAt: item.updatedAt
                 )
-            )
+            favoriteRecord.practiceData = item.practiceData
+            context.insert(favoriteRecord)
             restored.favorites += 1
         }
 
@@ -650,12 +664,28 @@ extension LibraryBackupService {
             record.lookupKey = item.lookupKey
             record.definitionsData = item.definitionsData
             record.examplesData = item.examplesData
+            if let data = item.reviewData {
+                var review = WordReviewState.decode(data)
+                review.answers = review.answers.map { answer in
+                    var mapped = answer
+                    mapped.bookID = answer.bookID.flatMap { bookIDMap[$0] }
+                    return mapped
+                }
+                record.reviewData = try JSONEncoder().encode(review)
+            }
             record.aiAnalysis = item.aiAnalysis
             record.aiProviderIdentifier = item.aiProviderIdentifier
             context.insert(record)
             restored.words += 1
         }
 
+        let currentNotes = try context.fetch(FetchDescriptor<GrammarNoteRecord>())
+        var noteIDs = Set(currentNotes.map(\.id))
+        for var draft in records.grammarNotes ?? [] where draft.isValid && noteIDs.insert(draft.id).inserted {
+            draft.bookID = draft.bookID.flatMap { bookIDMap[$0] }
+            context.insert(GrammarNoteRecord(draft))
+            restored.grammarNotes = (restored.grammarNotes ?? 0) + 1
+        }
         return restored
     }
 
@@ -664,7 +694,7 @@ extension LibraryBackupService {
         id: UUID,
         includesReading: Bool
     ) -> BookRecord {
-        BookRecord(
+        let record = BookRecord(
             id: id,
             publicationIdentifier: book.publicationIdentifier,
             title: book.title,
@@ -710,6 +740,8 @@ extension LibraryBackupService {
                 ? book.readerDetectedPublicationLayout
                 : ""
         )
+        record.activityData = includesReading ? book.activityData : nil
+        return record
     }
 
     private static func shouldRestoreReading(
@@ -732,6 +764,7 @@ extension LibraryBackupService {
         record.lastReadLocatorJSON = book.lastReadLocatorJSON
         record.lastReadProgress = min(max(book.lastReadProgress, 0), 1)
         record.totalReadingSeconds = max(book.totalReadingSeconds, 0)
+        record.activityData = book.activityData ?? record.activityData
         record.readerFontSize = book.readerFontSize
         record.readerTheme = book.readerTheme
         record.readerScrollEnabled = book.readerScrollEnabled

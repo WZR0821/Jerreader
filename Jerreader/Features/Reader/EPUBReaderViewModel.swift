@@ -56,6 +56,7 @@ final class EPUBReaderViewModel: ObservableObject {
     @Published private(set) var disablesTapPageTurnsDuringQuickTranslation: Bool
     @Published private(set) var isPDFPaperModeEnabled: Bool
 
+    private let initialLocatorJSON: String?
     let book: BookRecord
     let translationSettings: TranslationSettingsStore
     static let maxTranslationCharacterCount = 2_000
@@ -142,6 +143,7 @@ final class EPUBReaderViewModel: ObservableObject {
     private var contextExplanationTask: Task<Void, Never>?
     private var contextExplanationWatchdogTask: Task<Void, Never>?
     private var crossPageExpansionTask: Task<Void, Never>?
+    @Published var isShowingContextualLookup = false
     private var vocabularyLookupTask: Task<Void, Never>?
     private var speechPlaybackID: UUID?
     private var contextExplanationCache: [String: ContextExplanationResult] = [:]
@@ -160,8 +162,9 @@ final class EPUBReaderViewModel: ObservableObject {
         modelContext: ModelContext,
         speechService: any SpeechService = SystemSpeechService.shared,
         lexicalLookupService: any LexicalLookupService =
-            WiktionaryLexicalLookupService(),
+            OfflineFirstLexicalLookupService(),
         translationSettings: TranslationSettingsStore? = nil,
+        initialLocatorJSON: String? = nil,
         publicationService: (any ReaderPublicationOpening)? = nil,
         loadTiming: ReaderLoadTiming = .standard,
         translationTiming: ReaderTranslationTiming = .standard,
@@ -171,6 +174,7 @@ final class EPUBReaderViewModel: ObservableObject {
                 BackendTranslationService(configuration: $0)
             }
     ) {
+        self.initialLocatorJSON = initialLocatorJSON
         self.book = book
         self.modelContext = modelContext
         self.speechService = speechService
@@ -262,6 +266,14 @@ final class EPUBReaderViewModel: ObservableObject {
         controlsVisible = arguments.contains(
             "--jerreader-selection-controls-visible"
         )
+        if arguments.contains("--jerreader-offline-translation-ui-test") {
+            translationSettings.provider = .apple
+            translationSettings.quickSentenceTranslationEnabled = true
+            translationSettings.quickTranslationUnit = .sentence
+            translationSettings.sourceLanguageChoice = .japanese
+            translationSettings.targetLanguage = .simplifiedChinese
+            UserDefaults.standard.set(false, forKey: ReaderInterfaceDefaults.japaneseFuriganaKey)
+        }
         try? await Task.sleep(for: .milliseconds(300))
         await controller.prepareSelectionUITestTarget()
         prepareTranslationOverlayUITestIfNeeded(using: controller)
@@ -288,9 +300,9 @@ final class EPUBReaderViewModel: ObservableObject {
                 height: 260
             )
 
-        let sourceFrame: CGRect
+        var sourceFrame: CGRect
         switch mode {
-        case "vertical":
+        case "vertical", "vertical-left", "vertical-right":
             let width = max(targetFrame.width, 24)
             let height = min(max(windowBounds.height * 0.60, 420), 520)
             sourceFrame = CGRect(
@@ -302,15 +314,19 @@ final class EPUBReaderViewModel: ObservableObject {
                 width: width,
                 height: min(height, windowBounds.height - 148)
             )
+            if mode == "vertical-left" { sourceFrame = CGRect(x: 24, y: 180, width: 24, height: 360) }
+            else if mode == "vertical-right" { sourceFrame = CGRect(x: windowBounds.width - 48, y: 180, width: 24, height: 360) }
             publicationLayout = .verticalRTL
             textOrientation = .publication
-        case "paragraph":
+        case "paragraph", "paragraph-top", "paragraph-bottom":
             sourceFrame = CGRect(
                 x: 28,
                 y: windowBounds.height * 0.56,
                 width: max(windowBounds.width - 56, 1),
                 height: min(170, windowBounds.height * 0.22)
             )
+            if mode == "paragraph-top" { sourceFrame = CGRect(x: 28, y: 100, width: windowBounds.width - 56, height: 60) }
+            else if mode == "paragraph-bottom" { sourceFrame = CGRect(x: 28, y: windowBounds.height - 220, width: windowBounds.width - 56, height: 60) }
             textOrientation = .horizontal
         default:
             return
@@ -338,7 +354,7 @@ final class EPUBReaderViewModel: ObservableObject {
             annotationLocatorJSON: nil,
             annotationAnchorJSON: nil,
             selectionFrame: sourceFrame,
-            focusFrame: mode == "vertical" ? targetFrame : nil,
+            focusFrame: mode.hasPrefix("vertical") ? sourceFrame : nil,
             trigger: .quickSentence,
             createdAt: Date()
         )
@@ -353,7 +369,8 @@ final class EPUBReaderViewModel: ObservableObject {
         )
 
         quickTranslationUnit = .paragraph
-        controlsVisible = false
+        controlsVisible = arguments.contains("--jerreader-selection-controls-visible")
+        UserDefaults.standard.set(arguments.contains("--jerreader-furigana-ui-test"), forKey: ReaderInterfaceDefaults.japaneseFuriganaKey)
         translationConfiguration = nil
         translationAnchorFrame = sourceFrame
         translationState = .success(
@@ -411,7 +428,7 @@ final class EPUBReaderViewModel: ObservableObject {
             }
             activePublicationService = publicationService
             let initialLocation: Locator?
-            if let json = book.lastReadLocatorJSON {
+            if let json = initialLocatorJSON ?? book.lastReadLocatorJSON {
                 let saved = try? Locator(jsonString: json)
                 if let saved,
                    publication.readingOrder.contains(where: {
@@ -428,8 +445,12 @@ final class EPUBReaderViewModel: ObservableObject {
                     // back to the first valid page and discard only the stale
                     // position, never the book itself.
                     initialLocation = nil
-                    book.lastReadLocatorJSON = nil
-                    book.lastReadProgress = 0
+                    if initialLocatorJSON == nil {
+                        book.lastReadLocatorJSON = nil
+                        book.lastReadProgress = 0
+                    } else {
+                        readerAlertMessage = "保存的原句位置已失效，已打开书籍首页。"
+                    }
                 }
             } else {
                 initialLocation = nil
@@ -1608,6 +1629,13 @@ final class EPUBReaderViewModel: ObservableObject {
         }
     }
 
+    func grammarNoteDraft(request: ReaderContextExplanationRequest, result: ContextExplanationResult) -> GrammarNoteDraft {
+        GrammarNoteDraft(title: String(request.focusedText.prefix(40)), sentence: request.focusedText,
+            explanation: result.explanation, language: request.sourceLanguage?.rawValue ?? "auto",
+            bookID: book.id, bookTitle: book.title,
+            locatorJSON: currentLocator?.readerJSONString)
+    }
+
     func retryContextExplanation() {
         requestContextExplanation(ignoreCache: true)
     }
@@ -1645,6 +1673,9 @@ final class EPUBReaderViewModel: ObservableObject {
         translationRetryCooldownTask = nil
         isTranslationRetryCoolingDown = false
         stopTranslationSpeech()
+#if DEBUG
+        (controller as? EPUBReaderViewController)?.clearTranslationUITestDiagnostics()
+#endif
         controller?.clearSelection()
     }
 
@@ -1846,6 +1877,11 @@ final class EPUBReaderViewModel: ObservableObject {
         // Scene phase and reader dismissal normally bound a session. The cap
         // prevents an unexpected lifecycle callback gap from inflating stats.
         book.totalReadingSeconds += min(elapsed, 6 * 60 * 60)
+        if UserDefaults.standard.object(forKey: ReadingActivity.enabledKey) as? Bool ?? true {
+            var activity = ReadingActivity.decode(book.activityData)
+            activity.record(from: startedAt, to: Date())
+            book.activityData = try? JSONEncoder().encode(activity)
+        }
         saveModelChanges()
     }
 
@@ -1969,6 +2005,26 @@ final class EPUBReaderViewModel: ObservableObject {
               let sourceLanguage = request.sourceLanguage
         else { return }
 
+#if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--jerreader-selection-ui-test") {
+            translationConfiguration = nil
+            if let frame = request.selectionFrame {
+                (controller as? EPUBReaderViewController)?
+                    .installTranslationUITestSelection(frameInWindow: frame)
+            }
+            backendTranslationTask = Task { [weak self] in
+                await self?.performPendingTranslation(using: MockTranslationService())
+            }
+            return
+        }
+#endif
+
+        if UserDefaults.standard.object(forKey: ReadingActivity.enabledKey) as? Bool ?? true {
+            var activity = ReadingActivity.decode(book.activityData)
+            activity.query(at: Date())
+            book.activityData = try? JSONEncoder().encode(activity)
+            saveModelChanges()
+        }
         if !ignoreCache,
            let result = translationCache.result(
                for: request.sourceText,

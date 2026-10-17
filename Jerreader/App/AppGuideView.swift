@@ -45,7 +45,7 @@ struct AppGuideView: View {
                 detail: "可用 Finder 或 Windows Apple Devices 的文件共享把文件放入Jerreader，再从系统“文件”中选择。",
                 systemImage: "laptopcomputer.and.iphone"
             )
-            Label("导入时只复制到 App 的本地沙盒，不会自动上传书籍。", systemImage: "lock.shield.fill")
+            JerreaderLabel(title: "导入时只复制到 App 的本地沙盒，不会自动上传书籍。", icon: "lock")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -88,15 +88,15 @@ struct AppGuideView: View {
 
     private var featureSection: some View {
         Section("功能介绍") {
-            GuideItem(title: "界面主题", detail: "设置 → 界面主题可选择海洋、森林、紫藤、琥珀或莓果色系；按钮、卡片和背景会一起变化，并自动适配系统浅色或深色外观。", systemImage: "paintpalette.fill")
+            GuideItem(title: "界面主题", detail: "设置 → 界面主题可选择海蓝、森林、紫藤、琥珀或莓红色系；按钮、卡片和背景会一起变化，并自动适配系统浅色或深色外观。", systemImage: "paintpalette.fill")
             GuideItem(title: "阅读设置与选区色", detail: "每本书可独立保存字体、字号、背景、页边距、行距、段距、翻页模式和选区颜色。浅色、护眼、冷灰、深色会自动采用适配的选区色；自定义背景可另选选区色。设置 → 默认阅读排版可决定新书样式，并用开关持续同步或立即应用到现有全部书籍。", systemImage: "textformat.size")
             GuideItem(title: "目录、进度与书签", detail: "阅读器顶部的目录按钮集中提供章节目录、全文搜索、书签和批注；底部进度条可直接拖到整本书的任意位置。", systemImage: "list.bullet.rectangle")
             GuideItem(title: "悬浮译文", detail: "译文框会与完整选区留出安全距离，框内则按实际译文收紧，不会为了段落模式强行留出大块空白；长译文达到高度上限后可在框内上下滑动。原版竖排时优先放在原文左侧或右侧；也可拖动顶部手柄手动调整。", systemImage: "rectangle.inset.filled.and.person.filled")
             GuideItem(title: "词典与生词本", detail: "“学习 → 翻译”的词语模式已合并词典功能。翻译日语或英语词语后，会继续显示词典形、读音、词性、释义和例句，自动记入历史，并可直接收藏到生词本。阅读正文中长按完整词语，翻译后也可直接加入。", systemImage: "character.book.closed.fill")
-            GuideItem(title: "独立翻译", detail: "“学习 → 翻译”提供词语和句子两种模式。原文可自动识别或手动选择中文、英语、日语，译文也可在三种语言间选择；页面顶部可单独选择 Apple 系统翻译、AI API 或 AI 代理，不会改动阅读器的翻译设置。词语模式会补充词典详情；句子译成日文时，汉字上方会显示小字假名注音。", systemImage: "character.bubble.fill")
+            GuideItem(title: "独立翻译", detail: "“学习 → 翻译”提供词语和句子两种模式。原文可自动识别或手动选择中文、英语、日语，译文也可在三种语言间选择；页面顶部可单独选择 Apple 系统翻译、AI API 或 AI 代理，不会改动阅读器的翻译设置。词语模式会补充词典详情；日语原文或译文可开启“日语注音”，读音在本机生成，不改写原书。", systemImage: "character.bubble.fill")
             GuideItem(title: "日语学习增强", detail: "日语词条会显示词典形、假名、词性、常见活用和例句；配置 AI 后可结合书中原句继续分析词语的语法角色与语境义。", systemImage: "text.book.closed.fill")
             GuideItem(title: "AI 句子结构分析", detail: "译文卡片“更多”可分析句子主干、成分、从句或修饰关系，以及英语时态、日语助词和活用等语法点；需要先配置 AI API 或代理。", systemImage: "text.line.magnify")
-            GuideItem(title: "学习内容导出", detail: "在“学习 → 生词本与收藏”右上角选择 CSV、Markdown 或 Anki TSV，导出到“文件”或其他 App。", systemImage: "square.and.arrow.up")
+            GuideItem(title: "学习内容导出", detail: "在“学习 → 生词本”右上角选择 CSV、Markdown 或 Anki TSV，导出到“文件”或其他 App。", systemImage: "square.and.arrow.up")
             GuideItem(title: "书籍管理与统计", detail: "书架显示累计阅读时长和进度；每本书的更多菜单可更换封面，修改书名、作者、语言、系列、文件夹和标签。顶部批量整理可一次处理多本书，文件夹卡片可快速筛选。", systemImage: "chart.bar.doc.horizontal")
             GuideItem(title: "离线能力", detail: "阅读、书架与已缓存的查询结果可离线使用；新翻译是否离线取决于所选服务和语言包。", systemImage: "wifi.slash")
         }
@@ -203,10 +203,10 @@ struct AppGuideView: View {
     }
 
     private var backupSection: some View {
-        Section("备份与重新签名") {
+        Section("备份与恢复") {
             GuideItem(
                 title: "选择备份文件夹",
-                detail: "设置 → 备份中心 → 选择备份文件夹，可指定 iCloud Drive、“我的 iPhone”或其他文件提供商中的文件夹。自动备份与手动“保存到当前文件夹”都会写入这里，下方列表会直接显示其中可恢复的备份。",
+                detail: "设置 → 备份与恢复 → 选择备份文件夹，可指定 iCloud Drive、“我的 iPhone”或其他文件提供商中的文件夹。自动备份与“立即备份”都会写入这里，下方列表会直接显示其中可恢复的备份。",
                 systemImage: "folder.badge.plus"
             )
             GuideItem(
@@ -216,12 +216,12 @@ struct AppGuideView: View {
             )
             GuideItem(
                 title: "手动备份",
-                detail: "选择范围后点“保存到当前文件夹”可直接生成备份；“导出到其他位置”可临时另存一份。若当前使用 App 本地文件夹，卸载前应把备份导出到外部。",
+                detail: "点“立即备份”直接保存到所选文件夹；首次使用会先让你选择目录。“更多备份选项”可调整范围、间隔和保留策略，也可导出单独副本。",
                 systemImage: "square.and.arrow.up"
             )
             GuideItem(
                 title: "恢复与合并",
-                detail: "安装并签名新版本后，先重新选择原来的 iCloud Drive 等备份文件夹。备份会出现在下方列表，点每个文件右侧的“恢复”即可直接恢复；“从备份文件恢复”每次都会新建文件选择会话，也可浏览其他位置。为兼容 iCloud 暂时显示为通用文件类型的备份，文件可点选后再由Jerreader严格校验；不是有效备份时不会写入任何数据。",
+                detail: "重装或重签后点“从备份文件夹恢复”，选择原来的目录，确认恢复最新有效备份。恢复成功后会继续使用这个目录；也可展开“更多备份选项”选择单个备份文件。恢复只做合并，较新的本机进度会保留。",
                 systemImage: "arrow.counterclockwise"
             )
             Text("文件夹授权只保存在当前安装中，不进入备份；重装后需要再次选择同一文件夹。API Key 和代理访问凭据也不进入备份。自动备份受 iOS 生命周期限制，App 完全未运行时不能保证准点执行。")
@@ -262,6 +262,30 @@ private struct GuideItem: View {
     let detail: String
     let systemImage: String
 
+    private var sharedIcon: String {
+        switch systemImage {
+        case "folder.fill", "folder.badge.plus": "FOLDER"
+        case "square.and.arrow.down.fill": "DOWNLOAD"
+        case "laptopcomputer.and.iphone", "wifi.slash": "EXTERNAL_DRIVE"
+        case "rectangle.portrait.on.rectangle.portrait", "rectangle.split.2x1": "GRID"
+        case "character.bubble.fill", "rectangle.inset.filled.and.person.filled": "SPEECH_BUBBLE_FILLED"
+        case "selection.pin.in.out": "HAND"
+        case "lock.doc.fill", "lock.shield.fill": "LOCK"
+        case "doc.richtext", "doc.text", "doc.text.fill": "NOTE"
+        case "paintpalette.fill": "PALETTE"
+        case "textformat.size", "text.alignleft": "TEXT_FORMAT"
+        case "list.bullet.rectangle": "TABLE_OF_CONTENTS"
+        case "character.book.closed", "character.book.closed.fill": "DICTIONARY"
+        case "text.book.closed.fill": "BOOKS"
+        case "text.line.magnify": "SEARCH"
+        case "square.and.arrow.up": "SHARE"
+        case "chart.bar.doc.horizontal": "CHART"
+        case "clock.arrow.circlepath", "externaldrive.badge.timemachine": "CLOCK"
+        case "arrow.counterclockwise": "RESTORE"
+        default: "INFO"
+        }
+    }
+
     var body: some View {
         Label {
             VStack(alignment: .leading, spacing: 3) {
@@ -273,7 +297,8 @@ private struct GuideItem: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         } icon: {
-            Image(systemName: systemImage)
+            JerreaderSymbol(name: sharedIcon, size: 24)
+                .frame(width: 28, height: 28)
                 .foregroundStyle(JerreaderTheme.accent)
         }
         .padding(.vertical, 2)

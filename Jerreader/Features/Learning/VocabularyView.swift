@@ -103,7 +103,7 @@ struct VocabularyView: View {
         .frame(maxWidth: .infinity)
         .padding(.horizontal, JerreaderTheme.pagePadding)
         .padding(.vertical, 10)
-        .background(.ultraThinMaterial)
+        .background(JerreaderTheme.mutedSurface)
     }
 
     private var filteredWordFavorites: [WordLookupRecord] {
@@ -313,7 +313,7 @@ private struct TranslationFavoriteRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Label(languagePair, systemImage: "character.book.closed")
+                JerreaderLabel(title: languagePair, icon: "character.book.closed", size: 18)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(JerreaderTheme.accent)
                 Spacer()
@@ -333,7 +333,7 @@ private struct TranslationFavoriteRow: View {
                 .lineLimit(3)
 
             if let bookTitle = record.bookTitle, !bookTitle.isEmpty {
-                Label(bookTitle, systemImage: "book.closed")
+                JerreaderLabel(title: bookTitle, icon: "book.closed", size: 16)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)

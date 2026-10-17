@@ -34,13 +34,19 @@ struct LibraryBackupSettingsView: View {
 
     @ObservedObject var translationSettings: TranslationSettingsStore
     /// Set by the empty-library entry point, so a fresh installation lands
-    /// directly on the file picker instead of having to find the restore row.
+    /// directly on the folder picker instead of having to find the restore row.
     var automaticallyPresentsImport = false
 
     @StateObject private var policy = LibraryBackupPolicyStore()
     @StateObject private var operationCoordinator =
         LibraryBackupOperationCoordinator.shared
 
+    private enum FolderAction: Equatable { case configure, backup, restore }
+    @State private var folderAction: FolderAction = .configure
+    @State private var deferredFolderResult: Result<URL, Error>?
+    @State private var pendingRestoreFolder: URL?
+    @State private var restoreFolderAccess: LibraryBackupDirectoryAccess?
+    @State private var showsAdvancedOptions = false
     @State private var manualScopes = LibraryBackupOptions.full.scopes
     @State private var backups: [LibraryBackupArchiveInfo] = []
     @State private var state: BackupUIState = .idle
@@ -91,11 +97,19 @@ struct LibraryBackupSettingsView: View {
         Form {
             backupLocationSection
             automaticStatusSection
-            automaticPolicySection
-                .disabled(!policy.automaticEnabled)
-            automaticScopeSection
-                .disabled(!policy.automaticEnabled)
-            manualBackupSection
+            Section {
+                Button("立即备份") { Task { await saveManualBackupToCurrentFolder() } }
+                    .disabled(isBusy || manualScopes.isEmpty)
+                DisclosureGroup("更多备份选项", isExpanded: $showsAdvancedOptions) {
+                    Text("按需调整备份范围、保留策略或导出单独副本。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            if showsAdvancedOptions {
+                automaticPolicySection.disabled(!policy.automaticEnabled)
+                automaticScopeSection.disabled(!policy.automaticEnabled)
+                manualBackupSection
+            }
             restoreSection
             managedBackupsSection
             safetySection
@@ -143,22 +157,11 @@ struct LibraryBackupSettingsView: View {
             .id(request.id)
             .ignoresSafeArea()
         }
-        .sheet(isPresented: $isShowingFolderPicker) {
+        .sheet(isPresented: $isShowingFolderPicker, onDismiss: finishFolderPickerPresentation) {
             BackupFolderPicker(startDirectory: folderPickerStart) { result in
+                deferredFolderResult = result
                 isShowingFolderPicker = false
-                switch result {
-                case let .success(url):
-                    Task { await selectBackupFolder(url) }
-                case let .failure(error) where error is CancellationError:
-                    break
-                case let .failure(error):
-                    message = BackupMessage(
-                        title: "没有选择文件夹",
-                        body: error.localizedDescription
-                    )
-                }
-            }
-            .ignoresSafeArea()
+            }.ignoresSafeArea()
         }
         .sheet(item: $sharedFile, onDismiss: discardSharedTemporaryFile) {
             BackupShareSheet(fileURL: $0.url)
@@ -181,13 +184,17 @@ struct LibraryBackupSettingsView: View {
             Button("开始恢复") {
                 guard let url = pendingRestoreURL else { return }
                 pendingRestoreURL = nil
-                Task { await restoreBackup(from: url) }
+                let folder = pendingRestoreFolder
+                pendingRestoreFolder = nil
+                Task { await restoreBackup(from: url, folder: folder) }
             }
             Button("取消", role: .cancel) {
                 pendingRestoreURL = nil
+                pendingRestoreFolder = nil
+                restoreFolderAccess = nil
             }
         } message: {
-            Text("恢复会校验文件并补齐缺少的数据。同一本书会按文件指纹合并，较新的本机阅读进度不会被较旧备份覆盖。")
+            Text((pendingRestoreFolder == nil ? "将恢复所选备份文件。" : "将恢复所选文件夹中最新的有效备份，并继续备份到同一目录。") + "恢复会校验文件并补齐缺少的数据；较新的本机阅读进度不会被较旧备份覆盖。")
         }
         .confirmationDialog(
             "删除这份备份？",
@@ -213,7 +220,7 @@ struct LibraryBackupSettingsView: View {
     private var backupLocationSection: some View {
         Section {
             LabeledContent("当前文件夹") {
-                Text(backupLocationName)
+                Text(hasCustomBackupLocation ? backupLocationName : "尚未选择外部文件夹")
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.trailing)
             }
@@ -235,6 +242,7 @@ struct LibraryBackupSettingsView: View {
 
                     Button {
                         folderPickerStart = suggestedFolder.url
+                        folderAction = .configure
                         isShowingFolderPicker = true
                     } label: {
                         Label("继续备份到这个文件夹", systemImage: "folder.badge.gearshape")
@@ -244,10 +252,11 @@ struct LibraryBackupSettingsView: View {
             }
 
             Button {
-                folderPickerStart = nil
+                folderAction = .configure
+                folderPickerStart = try? LibraryBackupDirectoryStore().selectedDirectoryAccess()?.url
                 isShowingFolderPicker = true
             } label: {
-                Label("选择备份文件夹", systemImage: "folder.badge.plus")
+                JerreaderLabel(title: "选择备份文件夹", icon: "folder", size: 20)
             }
             .disabled(isBusy)
 
@@ -255,14 +264,14 @@ struct LibraryBackupSettingsView: View {
                 Button {
                     useDefaultBackupFolder()
                 } label: {
-                    Label("改回 App 本地文件夹", systemImage: "iphone")
+                    Label("停止使用此文件夹", systemImage: "folder")
                 }
                 .disabled(isBusy)
             }
         } header: {
             Text("备份位置")
         } footer: {
-            Text("可选择 iCloud Drive、“我的 iPhone”或其他文件提供商中的文件夹。自动备份和“保存到当前文件夹”都会写入这里；切换位置不会移动或删除旧文件。重装后重新选择同一文件夹，即可在下方直接看到并恢复备份。")
+            Text("选择你自己的文件夹，备份直接保存在那里。重装或重签后点‘从备份文件夹恢复’，选择同一文件夹即可恢复并继续使用。")
         }
     }
 
@@ -294,23 +303,12 @@ struct LibraryBackupSettingsView: View {
                         .foregroundStyle(.orange)
                 }
 
-                Button {
-                    Task { await createLocalBackup() }
-                } label: {
-                    HStack {
-                        Label("立即备份到当前文件夹", systemImage: "externaldrive.badge.plus")
-                        Spacer()
-                        if state == .creatingLocal {
-                            ProgressView()
-                        }
-                    }
-                }
-                .disabled(isBusy)
+
             }
         } header: {
             Text("自动备份")
         } footer: {
-            Text("iOS 会在 App 启动、回到前台或进入后台且备份已到期时补做；系统不保证 App 完全未运行时准点唤醒。")
+            Text("在 App 运行时检查是否到期并补做；系统不保证 App 未运行时准点执行。")
         }
     }
 
@@ -400,39 +398,32 @@ struct LibraryBackupSettingsView: View {
     }
 
     private var restoreSection: some View {
-        Section {
-            Button {
-                deferredBackupImportResult = nil
-                restoreImportRequest = BackupImportRequest()
-            } label: {
-                HStack {
-                    Label("从备份文件恢复", systemImage: "square.and.arrow.down")
-                    Spacer()
-                    if state == .importing {
-                        ProgressView()
-                    }
-                }
+        Section("恢复") {
+            Button("从备份文件夹恢复") {
+                folderAction = .restore
+                folderPickerStart = try? LibraryBackupDirectoryStore().selectedDirectoryAccess()?.url
+                isShowingFolderPicker = true
+            }.disabled(isBusy)
+            if showsAdvancedOptions {
+                Button("选择单个备份文件") {
+                    deferredBackupImportResult = nil
+                    restoreImportRequest = BackupImportRequest()
+                }.disabled(isBusy)
             }
-            .disabled(isBusy)
-        } header: {
-            Text("恢复")
-        } footer: {
-            Text("可恢复完整备份或部分备份。损坏、版本过新、文件缺失或摘要不一致的备份会在写入书架前被拒绝。")
         }
     }
 
     private var managedBackupsSection: some View {
         Section {
             if backups.isEmpty {
-                ContentUnavailableView(
-                    "当前文件夹还没有备份",
-                    systemImage: "externaldrive",
-                    description: Text("可立即备份，或重新选择以前保存备份的文件夹。")
-                )
-                .frame(maxWidth: .infinity)
+                Text(hasCustomBackupLocation ? "当前文件夹还没有备份。" : "先选择一个备份文件夹。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             } else {
                 ForEach(backups) { backup in
                     ManagedBackupRow(backup: backup) {
+                        restoreFolderAccess = try? LibraryBackupDirectoryStore().selectedDirectoryAccess()
+                        pendingRestoreFolder = restoreFolderAccess?.url
                         pendingRestoreURL = backup.url
                     } onShare: {
                         shareBackup(backup)
@@ -443,7 +434,7 @@ struct LibraryBackupSettingsView: View {
             }
         } header: {
             HStack {
-                Text("当前文件夹中的备份")
+                Text(hasCustomBackupLocation || backups.isEmpty ? "当前文件夹中的备份" : "本机旧备份（可导出）")
                 Spacer()
                 if state == .pruning {
                     ProgressView()
@@ -512,6 +503,12 @@ struct LibraryBackupSettingsView: View {
 
     @MainActor
     private func saveManualBackupToCurrentFolder() async {
+        guard LibraryBackupDirectoryStore().hasCustomDirectory else {
+            folderAction = .backup
+            folderPickerStart = nil
+            isShowingFolderPicker = true
+            return
+        }
         state = .creatingManual
         defer { state = .idle }
         do {
@@ -540,48 +537,14 @@ struct LibraryBackupSettingsView: View {
     }
 
     @MainActor
-    private func createLocalBackup() async {
-        state = .creatingLocal
-        defer { state = .idle }
-        do {
-            let output = try await operationCoordinator.perform(.creatingAutomatic) {
-                let vault = LibraryBackupVault()
-                let info = try await vault.createBackup(
-                    context: modelContext,
-                    options: policy.policy.options
-                )
-                policy.markAutomaticSuccess(at: info.createdAt)
-                let result = try await vault.prune(using: policy.policy)
-                return (info, result)
-            }
-            let (info, result) = output
-            await refreshBackups()
-            var body = "已保存 \(info.summary.description)，文件大小 \(byteCount(info.fileSize))。"
-            if result.removedCount > 0 {
-                body += " 同时清理了 \(result.removedCount) 份旧备份。"
-            }
-            if result.isOverLimit {
-                body += " 最新一份自身已超过容量上限，因此仍被保留。"
-            }
-            message = BackupMessage(title: "备份完成", body: body)
-        } catch {
-            policy.markAutomaticFailure(backupErrorMessage(error))
-            message = BackupMessage(
-                title: "备份没有完成",
-                body: backupErrorMessage(error)
-            )
-        }
-    }
-
-    @MainActor
-    private func restoreBackup(from url: URL) async {
+    private func restoreBackup(from url: URL, folder: URL? = nil) async {
         state = .importing
-        defer { state = .idle }
+        defer { state = .idle; restoreFolderAccess = nil }
         do {
-            let directoryAccess = try LibraryBackupDirectoryStore()
+            let directoryAccess = folder != nil ? restoreFolderAccess : try LibraryBackupDirectoryStore()
                 .accessIfNeeded(for: url)
             let result = try await operationCoordinator.perform(.restoring) { [directoryAccess] in
-                _ = directoryAccess
+                defer { withExtendedLifetime(directoryAccess) {} }
                 return try await LibraryBackupService().importArchive(
                     from: url,
                     context: modelContext
@@ -593,7 +556,17 @@ struct LibraryBackupSettingsView: View {
             // The regimen travels in the manifest whether or not the settings
             // scope was included, so the store is reloaded either way.
             policy.reloadPreferences()
-            let folderText = inheritBackupFolder(from: result.inheritedProfile)
+            let folderText: String
+            if let folder {
+                if LibraryBackupDirectoryStore().adoptDirectory(folder) {
+                    suggestedFolder = nil
+                    folderText = " 后续备份将继续保存到所选文件夹。"
+                } else {
+                    folderText = " 数据已恢复，但此文件夹无法继续写入，请重新选择备份位置。"
+                }
+            } else {
+                folderText = inheritBackupFolder(from: result.inheritedProfile)
+            }
             await refreshBackups()
             let restoredText = result.restored.isEmpty
                 ? "备份中的数据已存在，没有产生重复记录。"
@@ -627,8 +600,9 @@ struct LibraryBackupSettingsView: View {
         didPresentInitialImport = true
         try? await Task.sleep(for: .milliseconds(400))
         guard restoreImportRequest == nil, !isBusy else { return }
-        deferredBackupImportResult = nil
-        restoreImportRequest = BackupImportRequest()
+        folderAction = .restore
+        folderPickerStart = nil
+        isShowingFolderPicker = true
     }
 
     /// Tries to continue backing up where the archive came from, and returns
@@ -660,11 +634,49 @@ struct LibraryBackupSettingsView: View {
         return " 这份备份原本存放在「\(name)」，可在上方“备份位置”里一键继续用它。"
     }
 
+    private func finishFolderPickerPresentation() {
+        guard let result = deferredFolderResult else { return }
+        deferredFolderResult = nil
+        switch result {
+        case let .success(url):
+            let action = folderAction
+            Task {
+                if action == .restore {
+                    do {
+                        restoreFolderAccess = LibraryBackupDirectoryAccess(url: url, startsSecurityScopedAccess: true)
+                        let candidates = try await LibraryBackupVault(backupDirectoryURL: url).listBackups()
+                        guard let newest = candidates.first else {
+                            restoreFolderAccess = nil
+                            message = BackupMessage(title: "没有找到备份", body: "请选择实际保存 Jerreader 备份的文件夹。")
+                            return
+                        }
+                        pendingRestoreFolder = url
+                        pendingRestoreURL = newest.url
+                    } catch {
+                        restoreFolderAccess = nil
+                        message = BackupMessage(title: "无法读取备份文件夹", body: backupErrorMessage(error))
+                    }
+                } else {
+                    await selectBackupFolder(url, notify: action != .backup)
+                    if action == .backup && backupLocationError == nil {
+                        message = nil
+                        await saveManualBackupToCurrentFolder()
+                    }
+                }
+            }
+        case .failure(let error) where error is CancellationError: break
+        case .failure(let error):
+            message = BackupMessage(title: "没有选择文件夹", body: error.localizedDescription)
+        }
+    }
+
     private func finishBackupImportPresentation() {
         guard let result = deferredBackupImportResult else { return }
         deferredBackupImportResult = nil
         switch result {
         case let .success(url):
+            pendingRestoreFolder = nil
+            restoreFolderAccess = nil
             // A confirmation dialog cannot be presented while the document
             // picker sheet is still dismissing. Promote the selection only
             // from `onDismiss`, after UIKit has released that presentation.
@@ -728,14 +740,16 @@ struct LibraryBackupSettingsView: View {
     }
 
     @MainActor
-    private func selectBackupFolder(_ url: URL) async {
+    private func selectBackupFolder(_ url: URL, notify: Bool = true) async {
         folderPickerStart = nil
         do {
-            try LibraryBackupDirectoryStore().selectDirectory(url)
+            guard LibraryBackupDirectoryStore().adoptDirectory(url) else {
+                throw LibraryBackupError.backupFolderUnavailable
+            }
             suggestedFolder = nil
             reloadBackupLocationDescription()
             await refreshBackups()
-            guard backupLocationError == nil else { return }
+            guard backupLocationError == nil, notify else { return }
             message = BackupMessage(
                 title: "备份位置已更改",
                 body: "以后自动备份和保存到当前文件夹都会写入 \(backupLocationName)。"

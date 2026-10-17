@@ -81,6 +81,13 @@ struct LookupView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var lookupRecords: [WordLookupRecord]
 
+    @State private var lookupWatchdog = StandaloneTranslationWatchdog()
+    @State private var aiWatchdog = StandaloneTranslationWatchdog(timing: .init(network: .seconds(70)))
+    @State private var contextExpanded = false
+    @State private var aiExpanded = false
+    @State private var transientResult: WordLookupRecord?
+    @State private var localChoices: [JapaneseChineseLexicon.Entry] = []
+    @State private var aiRequestID: UUID?
     @State private var query = ""
     @State private var sentenceContext = ""
     @State private var selectedLanguage: LexicalLookupLanguageChoice = .automatic
@@ -96,44 +103,73 @@ struct LookupView: View {
     @State private var aiAnalysisTask: Task<Void, Never>?
     @FocusState private var focusedField: LookupField?
 
+    private let sourceBookID: UUID?
+    private let sourceBookTitle: String?
+    private let opensInReader: Bool
     private let lookupService: any LexicalLookupService
     @ObservedObject private var translationSettings: TranslationSettingsStore
 
     private var result: WordLookupRecord? {
-        guard let resultID else { return nil }
+        guard let resultID else { return transientResult }
         return lookupRecords.first { $0.id == resultID }
     }
 
     init(
         translationSettings: TranslationSettingsStore,
-        lookupService: any LexicalLookupService = WiktionaryLexicalLookupService()
+        lookupService: any LexicalLookupService = OfflineFirstLexicalLookupService(),
+        initialWord: String = "", initialContext: String = "",
+        language: LanguageCode? = nil, sourceBookID: UUID? = nil, sourceBookTitle: String? = nil
     ) {
         _translationSettings = ObservedObject(wrappedValue: translationSettings)
         self.lookupService = lookupService
+        self.sourceBookID = sourceBookID
+        self.sourceBookTitle = sourceBookTitle
+        self.opensInReader = sourceBookID != nil
+        _query = State(initialValue: initialWord.count <= 80 && !initialWord.contains(where: { "。！？!?".contains($0) }) ? initialWord : "")
+        _sentenceContext = State(initialValue: initialContext)
+        _selectedLanguage = State(initialValue: language == .english ? .english : sourceBookID != nil || language == .japanese ? .japanese : .automatic)
     }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                lookupHeader
-                    .jerreaderReveal()
-                lookupForm
-                    .jerreaderReveal(order: 1)
+            VStack(alignment: .leading, spacing: 12) {
+                if opensInReader {
+                    readerForm
+                } else {
+                    lookupHeader
+                    lookupForm
+                }
 
+                if !localChoices.isEmpty && result == nil && !isLoading {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("选择词条 / 释义").font(.headline)
+                        Text("词典可能包含同音词或多个义项，请结合原句选择。").font(.caption).foregroundStyle(.secondary)
+                        ForEach(Array(localChoices.enumerated()), id: \.offset) { _, entry in
+                            Button { performLookup(entry: entry) } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(entry.display).font(.body.weight(.semibold))
+                                    Text(entry.definition).font(.subheadline)
+                                }.frame(maxWidth: .infinity, alignment: .leading)
+                            }.buttonStyle(.bordered)
+                        }
+                    }.jerreaderPaperCard()
+                }
                 Group {
                     if isLoading {
                         loadingCard
                     } else if let result {
                         VStack(alignment: .leading, spacing: 12) {
-                            WordRecordCard(
-                                record: result,
-                                onSpeak: { speak(result) },
-                                onCopy: { copy(result) },
-                                onToggleFavorite: { toggleFavorite(result) }
-                            )
-
-                            if result.language == .japanese {
-                                aiAnalysisControls(for: result)
+                            if opensInReader {
+                                readerResult(result)
+                            } else {
+                                WordRecordCard(record: result, onSpeak: { speak(result) },
+                                    onCopy: { copy(result) }, onToggleFavorite: { toggleFavorite(result) })
+                            }
+                            aiAnalysisControls(for: result)
+                            if opensInReader, let analysis = result.aiAnalysis {
+                                DisclosureGroup("AI 语境建议", isExpanded: $aiExpanded) {
+                                    Text(analysis).font(.body).textSelection(.enabled)
+                                }.jerreaderPaperCard(padding: 16, radius: 16)
                             }
 
                             if result.usageNote?.contains("中文维基词典") == true {
@@ -144,13 +180,15 @@ struct LookupView: View {
                                 .padding(.horizontal, 4)
                             }
 
-                            Text("此结果已自动加入查词历史。重复查询同一基本形时会更新记录，而不会创建重复词条。")
+                            Text(recordStatusText(result))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 4)
                         }
-                    } else {
-                        introductionCard
+                    } else if localChoices.isEmpty {
+                        if opensInReader {
+                            Text("输入原句中的词语或短语后查询。").font(.subheadline).foregroundStyle(.secondary)
+                        } else { introductionCard }
                     }
                 }
                 .id(lookupContentIdentity)
@@ -159,9 +197,9 @@ struct LookupView: View {
                 )
                 .jerreaderReveal(order: 2)
             }
-            .frame(maxWidth: 760)
+            .frame(maxWidth: 720)
             .frame(maxWidth: .infinity)
-            .padding(.horizontal, JerreaderTheme.pagePadding)
+            .padding(.horizontal, 16)
             .padding(.top, 12)
             .padding(.bottom, 34)
             .contentShape(Rectangle())
@@ -188,19 +226,92 @@ struct LookupView: View {
                 dismissButton: .default(Text("好"))
             )
         }
+        .onAppear { if opensInReader && resultID == nil && !query.isEmpty { performLookup() } }
+        .onChange(of: query) { invalidateInput() }
+        .onChange(of: sentenceContext) { invalidateInput() }
         .onChange(of: selectedLanguage) {
             focusedField = nil
             cancelLookup()
             cancelAIAnalysis()
             resultID = nil
-            query = ""
-            sentenceContext = ""
+            transientResult = nil
+            localChoices = []
+            aiExpanded = false
+            if !opensInReader { query = ""; sentenceContext = "" }
         }
         .onDisappear {
             focusedField = nil
             cancelLookup()
             cancelAIAnalysis()
         }
+    }
+
+    private var readerForm: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Picker("查询语言", selection: $selectedLanguage) {
+                Text("日语").tag(LexicalLookupLanguageChoice.japanese)
+                Text("英语").tag(LexicalLookupLanguageChoice.english)
+            }.pickerStyle(.segmented).frame(minHeight: 48)
+            if !sentenceContext.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("书中语境").font(.subheadline.weight(.semibold))
+                    Text(sentenceContext).font(.body).lineLimit(contextExpanded ? nil : 3).textSelection(.enabled)
+                    if sentenceContext.count > 80 {
+                        Button(contextExpanded ? "收起语境" : "展开语境") { contextExpanded.toggle() }
+                            .font(.subheadline).frame(minHeight: 44)
+                    }
+                }.jerreaderPaperCard(padding: 16, radius: 16)
+            }
+            TextField("词语 / 修改选词", text: $query, axis: .vertical)
+                .font(.body).lineLimit(1...3).textInputAutocapitalization(.never).autocorrectionDisabled()
+                .focused($focusedField, equals: .query).submitLabel(.search).onSubmit { performLookup() }
+                .padding(12).frame(minHeight: 48)
+                .background(JerreaderTheme.paper, in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(JerreaderTheme.line, lineWidth: 0.75))
+                .accessibilityIdentifier("contextual-query")
+            Text("可粘贴原句中的词语或短语，最多 80 个字符。")
+                .font(.caption).foregroundStyle(.secondary)
+            Button("查询") { performLookup() }
+                .buttonStyle(.borderedProminent).frame(minHeight: 44)
+                .disabled(isLoading || !(1...80).contains(query.trimmingCharacters(in: .whitespacesAndNewlines).count))
+                .accessibilityIdentifier("contextual-submit")
+        }
+    }
+
+    private func readerResult(_ record: WordLookupRecord) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(record.surfaceForm).font(.title2.weight(.bold)).textSelection(.enabled)
+            Text([record.lemma.map { "词典形：" + $0 }, record.reading, record.partOfSpeech]
+                .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
+                .font(.subheadline).foregroundStyle(.secondary)
+            Text("词典释义 · 中文").font(.subheadline.weight(.semibold))
+            ForEach(Array(record.definitions.enumerated()), id: \.offset) { _, definition in
+                Text(definition).font(.body).textSelection(.enabled)
+            }
+            if let note = record.inflectionNote { Text("活用说明\n" + note).font(.subheadline) }
+            if let note = record.usageNote { Text("来源与用法\n" + note).font(.caption).foregroundStyle(.secondary) }
+            if !localChoices.isEmpty {
+                Button("更换词条 / 释义") {
+                    let choices = localChoices
+                    invalidateInput()
+                    localChoices = choices
+                }.buttonStyle(.bordered).frame(minHeight: 44)
+            }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { readerActions(record) }
+                VStack(alignment: .leading, spacing: 8) { readerActions(record) }
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading).jerreaderPaperCard(padding: 16, radius: 16)
+    }
+
+    @ViewBuilder private func readerActions(_ record: WordLookupRecord) -> some View {
+        Button("复制词条") { copy(record) }.buttonStyle(.bordered).frame(minHeight: 44)
+        Button(record.isFavorite ? "取消收藏" : "加入生词本") { toggleFavorite(record) }
+            .buttonStyle(.borderedProminent).frame(minHeight: 44)
+    }
+
+    private func recordStatusText(_ record: WordLookupRecord) -> String {
+        record.modelContext == nil ? "历史保存失败，释义仍可查看。" : "已保存查词历史与本次语境。"
     }
 
     private var lookupHeader: some View {
@@ -261,7 +372,7 @@ struct LookupView: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .submitLabel(.search)
-                .onSubmit(performLookup)
+                .onSubmit { performLookup() }
                 .padding(14)
                 .background(JerreaderTheme.canvas, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
                 .overlay {
@@ -271,10 +382,11 @@ struct LookupView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("上下文（可选）")
+                Text(opensInReader ? "书中原句" : "上下文（可选）")
                     .font(.subheadline.weight(.semibold))
 
                 TextField("输入词语所在的句子，有助于保留学习语境", text: $sentenceContext, axis: .vertical)
+                    .disabled(opensInReader)
                     .focused($focusedField, equals: .context)
                     .lineLimit(2...4)
                     .padding(14)
@@ -290,11 +402,10 @@ struct LookupView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                ForEach(sampleTerms, id: \.self) { sample in
+                ForEach(opensInReader ? [] : sampleTerms, id: \.self) { sample in
                     Button(sample) {
                         query = sample
                         sentenceContext = sampleContext(for: sample)
-                        performLookup()
                     }
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(JerreaderTheme.accent)
@@ -315,7 +426,7 @@ struct LookupView: View {
                 }
             }
 
-            Button(action: performLookup) {
+            Button(action: { performLookup() }) {
                 Label(
                     addToVocabulary ? "查询并加入生词本" : "查询词语",
                     systemImage: addToVocabulary ? "bookmark.fill" : "magnifyingglass"
@@ -327,7 +438,7 @@ struct LookupView: View {
                     .background(JerreaderTheme.primaryAction, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
             .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.985))
-            .disabled(isLoading || query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(isLoading || query.count > 80 || query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .opacity(isLoading || query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.45 : 1)
 
             Button(action: openSystemDictionary) {
@@ -371,7 +482,7 @@ struct LookupView: View {
                 .font(.headline)
                 .foregroundStyle(JerreaderTheme.accent)
 
-            Text("默认联网查询中文维基词典，并自动还原常见日语、英语词形。无网络时，可改用本机已安装的 iOS 系统词典。")
+            Text("优先查询内置中日词典和已安装的英语词库，未命中时联网查询中文维基词典。无网络时，也可使用本机已安装的 iOS 系统词典。")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
@@ -388,42 +499,20 @@ struct LookupView: View {
         }
     }
 
-    @ViewBuilder
     private func aiAnalysisControls(for record: WordLookupRecord) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                Image(systemName: "sparkles")
-                    .foregroundStyle(JerreaderTheme.accent)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("AI 日语深度解析")
-                        .font(.subheadline.weight(.semibold))
-                    Text(aiConfigurationDescription)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer(minLength: 8)
-
-                if isLoadingAIAnalysis {
-                    ProgressView()
-                } else {
-                    Button(record.aiAnalysis == nil ? "开始解析" : "重新解析") {
-                        requestAIAnalysis(for: record)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(resolvedAIExplanationService == nil)
-                }
+        VStack(alignment: .leading, spacing: 12) {
+            Text("AI 语境建议").font(.headline)
+            Text("按需分析本句；建议与词典释义分开保存。").font(.caption).foregroundStyle(.secondary)
+            if isLoadingAIAnalysis { ProgressView("解析中…") }
+            else {
+                Button(record.aiAnalysis == nil ? "开始解析" : "重新解析") { requestAIAnalysis(for: record) }
+                    .buttonStyle(.bordered).frame(minHeight: 44)
+                    .disabled(resolvedAIExplanationService == nil || record.modelContext == nil)
             }
-
             if resolvedAIExplanationService == nil {
-                Label("在“设置 → 翻译与 AI”中选择 GPT、Claude、Kimi 等服务并输入 API Key 后即可使用。", systemImage: "key")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text("请先在设置中配置 AI 服务。").font(.caption).foregroundStyle(.secondary)
             }
-        }
-        .jerreaderPaperCard(padding: 15, radius: 17)
+        }.frame(maxWidth: .infinity, alignment: .leading).jerreaderPaperCard(padding: 16, radius: 16)
     }
 
     private var sampleTerms: [String] {
@@ -441,19 +530,35 @@ struct LookupView: View {
         }
     }
 
-    private func performLookup() {
+    private func invalidateInput() {
+        cancelLookup()
+        cancelAIAnalysis()
+        resultID = nil
+        transientResult = nil
+        aiExpanded = false
+        localChoices = []
+    }
+
+    private func performLookup(entry: JapaneseChineseLexicon.Entry? = nil) {
         focusedField = nil
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalizedQuery.isEmpty else {
-            alert = LearningAlert(title: "请输入词语", message: "输入一个日语或英语词语后再查询。")
+        guard !normalizedQuery.isEmpty, normalizedQuery.count <= 80 else {
+            alert = LearningAlert(title: "请输入词语", message: "请输入 1–80 个字符的词语或短语。")
             return
         }
 
+        cancelAIAnalysis()
         lookupTask?.cancel()
         let currentRequestID = UUID()
         requestID = currentRequestID
         isLoading = true
         resultID = nil
+        transientResult = nil
+        lookupWatchdog.start(id: currentRequestID, systemTranslation: false, restart: {}) { _ in
+            guard requestID == currentRequestID else { return }
+            cancelLookup()
+            alert = LearningAlert(title: "查词等待超时", message: "请检查网络后重试，本地词典仍可使用。")
+        }
 
         let normalizedContext = sentenceContext.trimmingCharacters(in: .whitespacesAndNewlines)
         let context = normalizedContext.isEmpty ? nil : normalizedContext
@@ -469,30 +574,50 @@ struct LookupView: View {
         lookupTask = Task { @MainActor in
             defer {
                 if requestID == currentRequestID {
+                    lookupWatchdog.complete(id: currentRequestID)
                     isLoading = false
                     lookupTask = nil
                 }
             }
 
             do {
-                let explanation = try await service.lookup(
-                    word: normalizedQuery,
-                    sentenceContext: context,
-                    language: language
-                )
+                let matches = language == .japanese ? await Task.detached(priority: .userInitiated) {
+                    JapaneseChineseLexicon.shared.matches(normalizedQuery)
+                }.value : []
+                try Task.checkCancellation()
+                guard requestID == currentRequestID else { return }
+                localChoices = matches.count > 1 ? matches : []
+                if entry == nil && Set(matches.map(\.term)).count > 1 { return }
+                if let entry, !matches.contains(where: {
+                    $0.term == entry.term && $0.reading == entry.reading && $0.definition == entry.definition
+                }) { return }
+                let explanation: WordExplanation
+                if let chosen = entry ?? matches.first {
+                    explanation = WordExplanation(surfaceForm: normalizedQuery, lemma: chosen.term,
+                        reading: chosen.reading, language: language, partOfSpeech: chosen.partOfSpeech,
+                        definitions: [chosen.definition],
+                        inflectionNote: JapaneseChineseLexicon.shared.inflectionNote(normalizedQuery, entry: chosen),
+                        usageNote: chosen.attribution + " · 离线释义", sentenceContext: context)
+                } else {
+                    explanation = try await service.lookup(word: normalizedQuery, sentenceContext: context, language: language)
+                }
                 try Task.checkCancellation()
                 guard requestID == currentRequestID else { return }
 
-                let savedRecord = try WordLookupStore.record(explanation, in: modelContext)
+                transientResult = WordLookupRecord(explanation: explanation, sourceBookID: sourceBookID, sourceBookTitle: sourceBookTitle)
+                let savedRecord = try WordLookupStore.record(explanation, sourceBookID: sourceBookID, sourceBookTitle: sourceBookTitle, in: modelContext)
                 if shouldAddToVocabulary, !savedRecord.isFavorite {
                     try WordLookupStore.setFavorite(true, for: savedRecord, in: modelContext)
                 }
                 resultID = savedRecord.id
+                transientResult = nil
             } catch is CancellationError {
                 return
             } catch {
                 guard requestID == currentRequestID else { return }
-                if UIReferenceLibraryViewController.dictionaryHasDefinition(forTerm: normalizedQuery) {
+                if transientResult != nil {
+                    alert = LearningAlert(title: "历史保存失败", message: "释义仍可查看；可点击收藏重试保存。")
+                } else if UIReferenceLibraryViewController.dictionaryHasDefinition(forTerm: normalizedQuery) {
                     referenceDictionaryTerm = ReferenceDictionaryTerm(term: normalizedQuery)
                 } else {
                     alert = LearningAlert(
@@ -519,6 +644,7 @@ struct LookupView: View {
     }
 
     private func cancelLookup() {
+        lookupWatchdog.cancel()
         lookupTask?.cancel()
         lookupTask = nil
         requestID = nil
@@ -526,6 +652,9 @@ struct LookupView: View {
     }
 
     private var resolvedAIExplanationService: (any ContextExplanationService)? {
+        if translationSettings.provider == .backendProxy, let configuration = translationSettings.backendConfiguration {
+            return BackendTranslationService(configuration: configuration)
+        }
         if let configuration = translationSettings.directAPIConfiguration {
             return DirectAITranslationService(configuration: configuration)
         }
@@ -535,47 +664,67 @@ struct LookupView: View {
         return nil
     }
 
-    private var aiConfigurationDescription: String {
-        if translationSettings.directAPIConfiguration != nil {
-            return "使用 \(translationSettings.directAPIProvider.title) 分析活用、语法角色和语境"
-        }
-        if translationSettings.backendConfiguration != nil {
-            return "使用已配置的 AI 代理进行语法与活用分析"
-        }
-        return "需要先配置一个 AI 接口"
-    }
-
     private func requestAIAnalysis(for record: WordLookupRecord) {
         guard let service = resolvedAIExplanationService else { return }
         cancelAIAnalysis()
         isLoadingAIAnalysis = true
+        let token = UUID()
+        aiRequestID = token
         let recordID = record.id
         let context = record.sentenceContext
         let focusedText = record.surfaceForm
+        let revision = record.lastLookedUpAt
+        let snapshot = record.wordExplanation
+        let dictionaryEntry = snapshot.contextualDictionaryEntry
+        aiWatchdog.start(id: token, systemTranslation: false, restart: {}) { _ in
+            guard aiRequestID == token else { return }
+            cancelAIAnalysis()
+            alert = LearningAlert(title: "AI 解析等待超时", message: "请检查网络后重试。词典释义仍可查看。")
+        }
         aiAnalysisTask = Task { @MainActor in
             defer {
-                isLoadingAIAnalysis = false
-                aiAnalysisTask = nil
+                if aiRequestID == token {
+                    aiWatchdog.complete(id: token)
+                    isLoadingAIAnalysis = false
+                    aiAnalysisTask = nil
+                }
             }
             do {
                 let rawResult = try await service.explain(
                     ContextExplanationRequest(
                         focusedText: focusedText,
                         contextText: context,
-                        sourceLanguage: .japanese,
-                        responseLanguage: .simplifiedChinese
+                        sourceLanguage: snapshot.language,
+                        responseLanguage: .simplifiedChinese,
+                        isWordLookup: true, dictionaryEntry: dictionaryEntry
                     )
                 )
                 try Task.checkCancellation()
-                guard resultID == recordID,
-                      let result = ContextExplanationOutputPolicy.validated(rawResult)
+                guard aiRequestID == token, resultID == recordID,
+                      lookupRecords.contains(where: { $0.id == recordID }),
+                      record.wordExplanation == snapshot, record.lastLookedUpAt == revision
                 else { return }
+                guard let result = ContextExplanationOutputPolicy.validated(rawResult) else {
+                    alert = LearningAlert(title: "AI 解析未完成", message: "AI 返回了空白解释，请重试。")
+                    return
+                }
+                let previousAnalysis = record.aiAnalysis
+                let previousProvider = record.aiProviderIdentifier
                 record.aiAnalysis = result.explanation
                 record.aiProviderIdentifier = result.providerIdentifier
-                try modelContext.save()
+                do {
+                    try modelContext.save()
+                } catch {
+                    // Restore this operation only; unrelated reading progress may
+                    // still be pending in the shared context.
+                    record.aiAnalysis = previousAnalysis
+                    record.aiProviderIdentifier = previousProvider
+                    throw error
+                }
             } catch is CancellationError {
                 return
             } catch {
+                guard aiRequestID == token, resultID == recordID else { return }
                 alert = LearningAlert(
                     title: "AI 解析未完成",
                     message: (error as? LocalizedError)?.errorDescription
@@ -586,6 +735,8 @@ struct LookupView: View {
     }
 
     private func cancelAIAnalysis() {
+        aiWatchdog.cancel()
+        aiRequestID = nil
         aiAnalysisTask?.cancel()
         aiAnalysisTask = nil
         isLoadingAIAnalysis = false
@@ -614,7 +765,12 @@ struct LookupView: View {
 
     private func toggleFavorite(_ record: WordLookupRecord) {
         do {
-            try WordLookupStore.setFavorite(!record.isFavorite, for: record, in: modelContext)
+            let saved = record.modelContext == nil
+                ? try WordLookupStore.record(record.wordExplanation, sourceBookID: sourceBookID, sourceBookTitle: sourceBookTitle, in: modelContext)
+                : record
+            try WordLookupStore.setFavorite(!saved.isFavorite, for: saved, in: modelContext)
+            resultID = saved.id
+            transientResult = nil
         } catch {
             alert = LearningAlert(
                 title: "无法更新收藏",

@@ -28,6 +28,10 @@ struct WordExplanation: Equatable, Sendable {
     let usageNote: String?
     let sentenceContext: String?
 
+    var contextualDictionaryEntry: String {
+        "词典形：\(lemma ?? surfaceForm)\n读音：\(reading ?? "")\n词性：\(partOfSpeech ?? "")\n释义：\(definitions.joined(separator: "；"))"
+    }
+
     init(
         surfaceForm: String,
         lemma: String?,

@@ -455,7 +455,8 @@ struct LibraryBackupDirectoryStore: @unchecked Sendable {
     /// of that leaves the previous selection exactly as it was.
     @discardableResult
     func adoptDirectory(_ url: URL) -> Bool {
-        if isSelectedDirectory(url) { return true }
+        // A fresh picker URL can renew an expired provider grant even when
+        // its path matches the old bookmark. Always replace the bookmark.
         let previousBookmark = defaults.data(forKey: Keys.bookmark)
         let previousName = defaults.string(forKey: Keys.displayName)
         let previousPath = defaults.string(forKey: Keys.path)
@@ -568,6 +569,10 @@ struct LibraryBackupDirectoryStore: @unchecked Sendable {
     func accessIfNeeded(
         for fileURL: URL
     ) throws -> LibraryBackupDirectoryAccess? {
+        if let path = customDirectoryPath {
+            let filePath = fileURL.standardizedFileURL.path
+            if filePath != path && !filePath.hasPrefix(path + "/") { return nil }
+        }
         guard let access = try selectedDirectoryAccess() else { return nil }
         let directoryPath = access.url.standardizedFileURL.path
         let filePath = fileURL.standardizedFileURL.path
@@ -658,18 +663,23 @@ struct LibraryBackupVault: @unchecked Sendable {
 
     func listBackups() async throws -> [LibraryBackupArchiveInfo] {
         let access = try directoryAccess(create: true)
-        return await listBackups(in: access.url)
+        defer { withExtendedLifetime(access) {} }
+        return try await listBackups(in: access.url)
     }
 
     private func listBackups(
         in directory: URL
-    ) async -> [LibraryBackupArchiveInfo] {
-        guard let urls = try? FileManager.default.contentsOfDirectory(
+    ) async throws -> [LibraryBackupArchiveInfo] {
+        let urls: [URL]
+        do {
+            urls = try FileManager.default.contentsOfDirectory(
                   at: directory,
                   includingPropertiesForKeys: [.fileSizeKey],
                   options: []
               )
-        else { return [] }
+        } catch {
+            throw LibraryBackupError.backupFolderUnavailable
+        }
 
         // Interrupted exports use a hidden `.partial` suffix and are never
         // presented as restorable backups. Clear only stale files so an active
@@ -702,6 +712,7 @@ struct LibraryBackupVault: @unchecked Sendable {
         kind: LibraryBackupCreationKind = .automatic
     ) async throws -> LibraryBackupArchiveInfo {
         let access = try directoryAccess(create: true)
+        defer { withExtendedLifetime(access) {} }
         let destination = access.url.appendingPathComponent(
             "\(kind.fileNamePrefix)-\(Self.fileStamp(for: Date()))-\(UUID().uuidString.prefix(6))."
                 + LibraryBackupService.fileExtension,
@@ -719,6 +730,7 @@ struct LibraryBackupVault: @unchecked Sendable {
 
     func delete(_ backup: LibraryBackupArchiveInfo) throws {
         let access = try directoryAccess(create: true)
+        defer { withExtendedLifetime(access) {} }
         let directory = access.url.standardizedFileURL
         let target = backup.url.standardizedFileURL
         guard target.deletingLastPathComponent() == directory,
@@ -734,7 +746,8 @@ struct LibraryBackupVault: @unchecked Sendable {
         using policy: LibraryBackupPolicy
     ) async throws -> LibraryBackupPruneResult {
         let access = try directoryAccess(create: true)
-        var backups = await listBackups(in: access.url)
+        defer { withExtendedLifetime(access) {} }
+        var backups = try await listBackups(in: access.url)
         guard !backups.isEmpty else {
             return LibraryBackupPruneResult(
                 removedCount: 0,
@@ -780,7 +793,7 @@ struct LibraryBackupVault: @unchecked Sendable {
 
         // Re-read the directory so a file-system deletion failure is reflected
         // in the reported total instead of pretending the file disappeared.
-        let remainingBackups = await listBackups(in: access.url)
+        let remainingBackups = try await listBackups(in: access.url)
         let remainingBytes = remainingBackups.reduce(0) { $0 + $1.fileSize }
         let isOverLimit = policy.maximumTotalBytes > 0
             && remainingBytes > policy.maximumTotalBytes
@@ -905,6 +918,10 @@ final class LibraryBackupAutomation {
         let settings = LibraryBackupPolicyStore()
         let policy = settings.policy
         guard policy.isDue() else { return }
+        guard LibraryBackupDirectoryStore().hasCustomDirectory else {
+            settings.markAutomaticFailure("请选择外部备份文件夹，自动备份才会开始。")
+            return
+        }
 
         let result = await LibraryBackupOperationCoordinator.shared.performIfAvailable(
             .creatingAutomatic

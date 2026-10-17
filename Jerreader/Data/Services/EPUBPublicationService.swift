@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 @preconcurrency import ReadiumShared
 @preconcurrency import ReadiumStreamer
 
@@ -23,14 +24,21 @@ extension ReaderPublicationOpening {
 /// protects older writable copies during the first open after this upgrade.
 struct LibraryPublicationReadOnlyAccess {
     private let url: URL
-    private let modificationDate: Date?
-    private let fileManager: FileManager
+    private let modificationTime: timespec
 
     static func prepare(
         url: URL,
         fileManager: FileManager = .default
     ) throws -> Self {
         let attributes = try fileManager.attributesOfItem(atPath: url.path)
+        var metadata = stat()
+        let status = url.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return Int32(-1) }
+            return Darwin.lstat(path, &metadata)
+        }
+        guard status == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
         let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue
             ?? 0o644
         let readOnlyPermissions = permissions & ~0o222
@@ -42,17 +50,25 @@ struct LibraryPublicationReadOnlyAccess {
         }
         return Self(
             url: url,
-            modificationDate: attributes[.modificationDate] as? Date,
-            fileManager: fileManager
+            modificationTime: metadata.st_mtimespec
         )
     }
 
     func restoreModificationDate() {
-        guard let modificationDate else { return }
-        try? fileManager.setAttributes(
-            [.modificationDate: modificationDate],
-            ofItemAtPath: url.path
-        )
+        var current = stat()
+        url.withUnsafeFileSystemRepresentation { path in
+            guard let path, Darwin.lstat(path, &current) == 0 else { return }
+            // NSDate/TimeInterval round trips lose filesystem nanoseconds.
+            // Do not touch unchanged metadata; repair actual framework writes
+            // using the original POSIX timestamp and leave access time alone.
+            guard current.st_mtimespec.tv_sec != modificationTime.tv_sec
+                || current.st_mtimespec.tv_nsec != modificationTime.tv_nsec
+            else { return }
+            let times = [timespec(tv_sec: 0, tv_nsec: Int(UTIME_OMIT)), modificationTime]
+            times.withUnsafeBufferPointer {
+                _ = Darwin.utimensat(AT_FDCWD, path, $0.baseAddress, 0)
+            }
+        }
     }
 }
 

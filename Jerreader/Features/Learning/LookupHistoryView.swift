@@ -78,7 +78,7 @@ struct LookupHistoryView: View {
         .frame(maxWidth: .infinity)
         .padding(.horizontal, JerreaderTheme.pagePadding)
         .padding(.vertical, 10)
-        .background(.ultraThinMaterial)
+        .background(JerreaderTheme.mutedSurface)
     }
 
     private var filteredHistory: [WordLookupRecord] {

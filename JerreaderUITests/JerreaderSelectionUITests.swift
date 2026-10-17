@@ -1,6 +1,245 @@
 import UIKit
 import XCTest
 
+/// Uses an in-memory SwiftData store. No book or learning data is overwritten.
+@MainActor
+final class JerreaderLearningUITests: XCTestCase {
+    private let tools = ["生词复习", "原句练习卡", "语法知识库", "阅读成长报告"]
+
+    private func launch(empty: Bool = false, large: Bool = false) -> XCUIApplication {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--jerreader-learning-ui-fixture", "--jerreader-standalone-translator-ui-test",
+            "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN", "-ApplePersistenceIgnoreState", "YES"]
+        if empty { app.launchArguments += ["--jerreader-learning-ui-empty"] }
+        if large { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityM", "--jerreader-learning-ui-dark"] }
+        app.launch()
+        XCTAssertTrue(app.navigationBars["学习"].waitForExistence(timeout: 20))
+        if large { assertDarkAppearance(app) }
+        return app
+    }
+
+    private func assertDarkAppearance(_ app: XCUIApplication) {
+        guard let image = app.screenshot().image.cgImage,
+              let margin = image.cropping(to: CGRect(
+                x: (5 * CGFloat(image.width) / app.windows.firstMatch.frame.width).rounded(.down),
+                y: CGFloat(image.height / 2), width: 1, height: 1
+              )) else { XCTFail("Missing rendered appearance sample"); return }
+        var pixel = [UInt8](repeating: 0, count: 4)
+        let rendered = pixel.withUnsafeMutableBytes { bytes -> Bool in
+            guard let context = CGContext(data: bytes.baseAddress, width: 1, height: 1,
+                bitsPerComponent: 8, bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return false }
+            context.draw(margin, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            return true
+        }
+        XCTAssertTrue(rendered)
+        XCTAssertGreaterThan(pixel[3], 200)
+        XCTAssertLessThan(pixel.prefix(3).max() ?? 255, 80, "Dark mode must be present in the rendered canvas")
+    }
+
+    private func open(_ title: String, app: XCUIApplication) {
+        app.buttons["练习与工具"].tap()
+        let action = title == "生词复习" ? "开始复习" : title
+        let item = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", action)).firstMatch
+        for _ in 0..<6 {
+            if item.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(item.waitForExistence(timeout: 5)); item.tap()
+        XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5))
+    }
+
+    private func capture(_ name: String, app: XCUIApplication) {
+        // A SwiftUI transition can still be rendering after its new AX nodes
+        // exist. Preserve a settled frame rather than a blend of two pages.
+        var screenshot = app.screenshot()
+        var previousPixels = screenshot.pngRepresentation
+        var stableFrames = 0
+        let deadline = Date().addingTimeInterval(5)
+        while stableFrames < 2 && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.2)
+            screenshot = app.screenshot()
+            let pixels = screenshot.pngRepresentation
+            stableFrames = pixels == previousPixels ? stableFrames + 1 : 0
+            previousPixels = pixels
+        }
+        XCTAssertEqual(stableFrames, 2, "The page must settle before its visual reference is captured")
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
+    }
+
+    private func showPractice(_ app: XCUIApplication) {
+        let practice = app.buttons["练习与工具"]
+        practice.tap()
+        XCTAssertTrue(app.staticTexts["今日练习"].waitForExistence(timeout: 5))
+        expectation(for: NSPredicate(format: "isSelected == true"), evaluatedWith: practice)
+        waitForExpectations(timeout: 5)
+    }
+
+    func testJapaneseLearningWorkflow() {
+        let app = launch()
+        XCTAssertFalse(app.buttons["日语 → 中文"].exists)
+        XCTAssertFalse(app.buttons["中文 → 日语"].exists)
+        XCTAssertFalse(app.navigationBars["学习"].buttons["练习与工具"].exists)
+        let vocabularyX = app.buttons["生词本"].frame.midX
+        let practiceX = app.buttons["练习与工具"].frame.midX
+        XCTAssertGreaterThan(practiceX, vocabularyX)
+        XCTAssertLessThan(practiceX, app.buttons["历史"].frame.midX)
+        capture("ios-learning-hub", app: app)
+        app.buttons["生词本"].tap()
+        XCTAssertTrue(app.staticTexts["食べる"].waitForExistence(timeout: 5))
+        capture("ios-vocabulary", app: app)
+        let savedWord = app.staticTexts["食べる"].firstMatch
+        XCTAssertTrue(savedWord.waitForExistence(timeout: 5)); savedWord.tap()
+        XCTAssertTrue(app.navigationBars["词条详情"].waitForExistence(timeout: 5))
+        capture("ios-word-detail", app: app)
+        app.buttons["复制"].tap()
+        XCTAssertTrue(app.alerts["已复制"].waitForExistence(timeout: 5)); app.alerts.buttons["好"].tap()
+        app.buttons["已收藏"].tap()
+        XCTAssertTrue(app.buttons["收藏"].waitForExistence(timeout: 5)); app.buttons["收藏"].tap()
+        XCTAssertTrue(app.buttons["已收藏"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.firstMatch.tap()
+        app.buttons["历史"].tap()
+        XCTAssertTrue(app.staticTexts["食べる"].waitForExistence(timeout: 5))
+        capture("ios-history", app: app)
+        app.buttons["翻译"].tap()
+        app.tabBars.buttons["书架"].tap()
+        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "所有书籍")).firstMatch.waitForExistence(timeout: 5))
+        capture("ios-library-populated", app: app)
+        let bookMenu = app.buttons["中日阅读练习的更多操作"].firstMatch
+        XCTAssertTrue(bookMenu.waitForExistence(timeout: 5))
+        bookMenu.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(app.buttons["编辑书籍信息"].waitForExistence(timeout: 5))
+        app.buttons["编辑书籍信息"].tap()
+        XCTAssertTrue(app.navigationBars["管理书籍"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["更换封面"].exists)
+        capture("ios-book-editor", app: app)
+        app.buttons["取消"].tap(); app.tabBars.buttons["学习"].tap()
+        app.buttons["练习与工具"].tap()
+        XCTAssertTrue(app.staticTexts["今日练习"].waitForExistence(timeout: 5))
+        capture("ios-practice", app: app)
+        app.buttons["开始复习"].tap()
+        XCTAssertTrue(app.navigationBars[tools[0]].waitForExistence(timeout: 5))
+        app.buttons["开始复习"].tap()
+        app.buttons["显示释义"].tap()
+        XCTAssertTrue(app.staticTexts["たべる"].exists)
+        capture("ios-review-answer", app: app)
+        app.buttons["认识"].tap()
+        XCTAssertTrue(app.staticTexts["本组复习完成"].exists)
+        app.navigationBars.buttons.firstMatch.tap()
+        open(tools[1], app: app)
+        capture("ios-sentences", app: app)
+        app.buttons.containing(.staticText, identifier: "毎日、日本語の本を読む。").firstMatch.tap()
+        app.buttons["显示答案与译文"].tap()
+        XCTAssertTrue(app.staticTexts["每天读日语书。"].exists)
+        capture("ios-sentence-answer", app: app)
+        app.navigationBars.buttons.firstMatch.tap()
+        app.navigationBars.buttons.firstMatch.tap()
+        open(tools[2], app: app)
+        capture("ios-grammar", app: app)
+        app.buttons["编辑"].tap()
+        XCTAssertTrue(app.navigationBars["保存语法"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["音楽を聞きながら、本を読む。"].exists)
+        capture("ios-grammar-editor", app: app)
+        app.buttons["取消"].tap()
+        app.buttons["删除"].tap()
+        XCTAssertTrue(app.alerts["删除这条语法收藏？"].waitForExistence(timeout: 5))
+        app.alerts.buttons["取消"].tap()
+        XCTAssertTrue(app.staticTexts["〜ながら：同时进行的动作"].exists)
+        app.navigationBars.buttons.firstMatch.tap()
+        open(tools[3], app: app)
+        capture("ios-growth", app: app)
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertFalse(app.buttons["离线学习包"].exists)
+        app.terminate()
+    }
+
+    func testEmptyLearningPages() {
+        let app = launch(empty: true)
+        showPractice(app)
+        capture("ios-empty-practice", app: app)
+        app.buttons["生词本"].tap(); capture("ios-empty-vocabulary", app: app)
+        app.buttons["历史"].tap(); capture("ios-empty-history", app: app)
+        for (index, title) in tools.enumerated() {
+            open(title, app: app)
+            capture("ios-empty-\(index)", app: app)
+            app.navigationBars.buttons.firstMatch.tap()
+        }
+        app.terminate()
+    }
+
+    func testSettingsSecondaryPages() {
+        let app = launch(empty: true)
+        let draftInput = app.descendants(matching: .any).matching(identifier: "standalone-translation-input").firstMatch
+        XCTAssertTrue(draftInput.waitForExistence(timeout: 5))
+        draftInput.tap(); draftInput.typeText("practice draft")
+        app.buttons["生词本"].tap(); app.buttons["翻译"].tap()
+        XCTAssertEqual(draftInput.value as? String, "practice draft")
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.keyboards.firstMatch)
+        waitForExpectations(timeout: 5)
+        app.tabBars.buttons["设置"].tap()
+        XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 5))
+        capture("ios-settings-root", app: app)
+        let routes = [("界面主题", "界面主题", "theme"), ("默认阅读排版", "默认阅读排版", "reader"),
+                      ("翻译与 AI", "翻译与 AI", "translation"), ("操作指南", "操作指南", "guide"),
+                      ("备份与恢复", "备份中心", "backup"), ("数据与隐私", "数据与隐私", "privacy")]
+        for (label, title, name) in routes {
+            let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", label)).firstMatch
+            XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
+            XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.tabBars.buttons["学习"].exists)
+            capture("ios-settings-" + name, app: app)
+            if name == "reader" {
+                for _ in 0..<5 {
+                    if app.staticTexts["日文原版排版"].isHittable { break }
+                    app.swipeUp()
+                }
+                capture("ios-settings-reader-lower", app: app)
+            }
+            app.navigationBars.buttons.firstMatch.tap()
+            XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 5))
+        }
+        app.tabBars.buttons["学习"].tap()
+        XCTAssertTrue(draftInput.waitForExistence(timeout: 5))
+        XCTAssertEqual(draftInput.value as? String, "practice draft")
+        capture("ios-draft-restored", app: app)
+        app.terminate()
+    }
+
+    func testOfflineResourcesHaveOneSettingsEntry() {
+        let app = launch(empty: true)
+        app.tabBars.buttons["设置"].tap()
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "翻译与 AI")).firstMatch.tap()
+        let resources = app.buttons["离线资源"].firstMatch
+        for _ in 0..<12 { if resources.isHittable { break }; app.swipeUp() }
+        XCTAssertTrue(resources.waitForExistence(timeout: 5)); resources.tap()
+        XCTAssertTrue(app.staticTexts["英语扩展词典"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["下载"].exists)
+        XCTAssertTrue(app.buttons["卸载"].exists)
+        XCTAssertFalse(app.buttons["查看完整许可（离线可用）"].exists)
+        XCTAssertFalse(app.buttons["查词"].exists)
+        XCTAssertFalse(app.textFields["输入日语、假名或中文词语"].exists)
+        capture("ios-offline-resources", app: app)
+        app.terminate()
+    }
+
+    func testLargeTextDarkLearningPages() {
+        let app = launch(large: true)
+        showPractice(app)
+        capture("ios-large-dark-practice", app: app)
+        app.buttons["生词本"].tap(); capture("ios-large-dark-vocabulary", app: app)
+        app.buttons["历史"].tap(); capture("ios-large-dark-history", app: app)
+        for (index, title) in tools.enumerated() {
+            open(title, app: app)
+            capture("ios-large-dark-\(index)", app: app)
+            app.navigationBars.buttons.firstMatch.tap()
+        }
+        app.terminate()
+    }
+}
+
 @MainActor
 final class JerreaderSelectionUITests: XCTestCase {
     override func setUpWithError() throws {
@@ -10,6 +249,8 @@ final class JerreaderSelectionUITests: XCTestCase {
     func testStandaloneTranslatorShowsDirectionModeAndProviderControls() {
         let app = XCUIApplication()
         app.launchArguments = [
+            "-translation.sourceLanguageChoice", "automatic",
+            "-translation.targetLanguage", "zh-Hans",
             "-ApplePersistenceIgnoreState",
             "YES"
         ]
@@ -143,8 +384,9 @@ final class JerreaderSelectionUITests: XCTestCase {
 
         let app = XCUIApplication()
         app.launchArguments = [
-            "-ApplePersistenceIgnoreState",
-            "YES"
+            "--jerreader-learning-ui-fixture", "--jerreader-learning-ui-empty",
+            "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN",
+            "-AppleInterfaceStyle", "Light", "-ApplePersistenceIgnoreState", "YES"
         ]
         app.launch()
 
@@ -156,6 +398,11 @@ final class JerreaderSelectionUITests: XCTestCase {
         XCTAssertTrue(window.exists)
         XCTAssertEqual(window.frame.minX, 0, accuracy: 1)
         XCTAssertEqual(window.frame.minY, 0, accuracy: 1)
+
+        let libraryAttachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        libraryAttachment.name = "iphone-library-refined-ui"
+        libraryAttachment.lifetime = .keepAlways
+        add(libraryAttachment)
 
         let learningTab = app.tabBars.buttons["学习"]
         XCTAssertTrue(learningTab.waitForExistence(timeout: 5))
@@ -188,6 +435,20 @@ final class JerreaderSelectionUITests: XCTestCase {
         settingsAttachment.name = "iphone-settings-refined-ui"
         settingsAttachment.lifetime = .keepAlways
         add(settingsAttachment)
+
+        let author = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "Jerry Wong")
+        ).firstMatch
+        for _ in 0..<4 {
+            if author.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(author.waitForExistence(timeout: 5))
+        XCTAssertTrue(author.isHittable)
+        let aboutAttachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        aboutAttachment.name = "iphone-about-refined-ui"
+        aboutAttachment.lifetime = .keepAlways
+        add(aboutAttachment)
 
         XCTAssertEqual(window.frame.minX, 0, accuracy: 1)
         XCTAssertEqual(window.frame.minY, 0, accuracy: 1)
@@ -224,6 +485,9 @@ final class JerreaderSelectionUITests: XCTestCase {
 
         let automaticSwitch = app.switches["自动备份"]
         XCTAssertTrue(automaticSwitch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["立即备份"].exists)
+        XCTAssertFalse(app.staticTexts["自动策略"].exists)
+        app.buttons["更多备份选项"].tap()
         let policyHeader = app.staticTexts["自动策略"]
         scrollToElement(policyHeader, in: app)
         XCTAssertTrue(policyHeader.waitForExistence(timeout: 5))
@@ -243,12 +507,15 @@ final class JerreaderSelectionUITests: XCTestCase {
         }
         for label in [
             "备份位置", "自动备份范围", "手动备份", "恢复",
-            "当前文件夹中的备份",
         ] {
             let element = app.staticTexts[label]
             scrollToElement(element, in: app)
             XCTAssertTrue(element.waitForExistence(timeout: 5))
         }
+        let managedHeader = app.staticTexts.matching(NSPredicate(format: "label IN %@",
+            ["当前文件夹中的备份", "本机旧备份（可导出）"])).firstMatch
+        scrollToElement(managedHeader, in: app)
+        XCTAssertTrue(managedHeader.waitForExistence(timeout: 5))
 
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = "iphone-backup-center"
@@ -262,21 +529,20 @@ final class JerreaderSelectionUITests: XCTestCase {
     /// a backup to bring back and no reason to go looking in 设置 for it.
     func testEmptyShelfOffersRestoringFromABackup() throws {
         let app = XCUIApplication()
-        app.launchArguments = [
-            "-ApplePersistenceIgnoreState",
-            "YES"
-        ]
+        app.launchArguments = ["--jerreader-learning-ui-fixture", "--jerreader-learning-ui-empty",
+            "--jerreader-standalone-translator-ui-test", "-AppleLanguages", "(zh-Hans)",
+            "-AppleLocale", "zh_CN", "-ApplePersistenceIgnoreState", "YES"]
         app.launch()
+        XCTAssertTrue(app.navigationBars["学习"].waitForExistence(timeout: 20))
+        app.tabBars.buttons["书架"].tap()
 
         XCTAssertTrue(
             app.navigationBars["书架"].waitForExistence(timeout: 15)
         )
         let restore = app.buttons["library-restore-backup"]
-        guard restore.waitForExistence(timeout: 5) else {
-            throw XCTSkip("书架里已经有书，空书架入口不会出现")
-        }
+        XCTAssertTrue(restore.waitForExistence(timeout: 5))
         XCTAssertTrue(
-            app.staticTexts["装过 Jerreader 的话，选中以前的备份文件即可恢复书架、进度和备份计划。"]
+            app.staticTexts["装过 Jerreader 的话，选择以前的备份文件夹即可恢复书架、进度和备份计划。"]
                 .exists
         )
 
@@ -286,11 +552,24 @@ final class JerreaderSelectionUITests: XCTestCase {
         add(attachment)
 
         restore.tap()
-        // The backup centre opens the file picker by itself, and that picker is
-        // another process; asserting the centre is up is what this owns.
+        let cancel = app.buttons.matching(NSPredicate(format: "label IN %@", ["取消", "Cancel"])).firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 15), "The system folder picker must open")
+        Thread.sleep(forTimeInterval: 0.5)
+        let pickerAttachment = XCTAttachment(screenshot: app.screenshot())
+        pickerAttachment.name = "ios-backup-folder-picker"
+        pickerAttachment.lifetime = .keepAlways
+        add(pickerAttachment)
+        cancel.tap()
         XCTAssertTrue(
             app.navigationBars["备份中心"].waitForExistence(timeout: 8)
         )
+        let reopen = app.buttons["从备份文件夹恢复"]
+        scrollToElement(reopen, in: app)
+        XCTAssertTrue(reopen.isHittable)
+        reopen.tap()
+        XCTAssertTrue(cancel.waitForExistence(timeout: 10), "Cancelling must not break the next picker session")
+        cancel.tap()
+        XCTAssertTrue(app.navigationBars["备份中心"].waitForExistence(timeout: 8))
 
         app.terminate()
     }
@@ -301,6 +580,9 @@ final class JerreaderSelectionUITests: XCTestCase {
     ) {
         for _ in 0..<5 where !element.exists || !element.isHittable {
             app.swipeUp()
+        }
+        for _ in 0..<10 where !element.exists || !element.isHittable {
+            app.swipeDown()
         }
     }
 
@@ -360,6 +642,7 @@ final class JerreaderSelectionUITests: XCTestCase {
             diagnostic,
             prefix: "horizontal|horizontal-tb|ltr|paginated|cjk-horizontal"
         )
+        verifyPageSwipe(in: app, diagnostic: diagnostic, rightToLeft: false)
 
         openReaderSettings(in: app)
         XCTAssertTrue(app.buttons["原版"].waitForExistence(timeout: 5))
@@ -369,6 +652,7 @@ final class JerreaderSelectionUITests: XCTestCase {
             diagnostic,
             prefix: "publication|vertical-rl|rtl|"
         )
+        verifyPageSwipe(in: app, diagnostic: diagnostic, rightToLeft: true)
 
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = "reader-original-horizontal-switch-roundtrip"
@@ -397,18 +681,35 @@ final class JerreaderSelectionUITests: XCTestCase {
         XCTAssertTrue(
             app.otherElements["selection-ruby-target"].waitForExistence(timeout: 35)
         )
-        let moreActions = app.buttons["更多阅读操作"]
-        XCTAssertTrue(moreActions.waitForExistence(timeout: 5))
-        tapVisibleControlByCoordinate(moreActions, in: app)
         let readerSettings = app.buttons["阅读设置"]
         XCTAssertTrue(readerSettings.waitForExistence(timeout: 5))
-        readerSettings.tap()
+        tapVisibleControlByCoordinate(readerSettings, in: app)
         XCTAssertTrue(
             app.navigationBars["阅读与翻译"].waitForExistence(timeout: 5)
         )
         XCTAssertTrue(
             app.buttons["逐页"].exists || app.buttons["滚动"].exists
         )
+        let topOpacity = app.sliders["顶部栏透明度"]
+        revealReaderSetting(topOpacity, in: app)
+        XCTAssertTrue(topOpacity.waitForExistence(timeout: 5))
+        topOpacity.adjust(toNormalizedSliderPosition: 0.35)
+        let bottomOpacity = app.sliders["底部栏透明度"]
+        revealReaderSetting(bottomOpacity, in: app)
+        XCTAssertTrue(bottomOpacity.waitForExistence(timeout: 5))
+        bottomOpacity.adjust(toNormalizedSliderPosition: 0.75)
+        let immersion = app.switches["沉浸阅读（隐藏状态栏）"]
+        revealReaderSetting(immersion, in: app)
+        XCTAssertTrue(immersion.exists)
+        let initialImmersionValue = try XCTUnwrap(immersion.value as? String)
+        tapReaderSwitch(immersion, in: app)
+        let immersionChanged = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value != %@", initialImmersionValue), object: immersion)
+        XCTAssertEqual(XCTWaiter.wait(for: [immersionChanged], timeout: 5), .completed)
+        XCTAssertTrue(app.switches["日语注音"].exists)
+        let controlsAttachment = XCTAttachment(screenshot: app.screenshot())
+        controlsAttachment.name = "reader-interface-controls"
+        controlsAttachment.lifetime = .keepAlways
+        add(controlsAttachment)
         let customBackground = app.switches["自定义背景颜色"]
         for _ in 0 ..< 3 where !customBackground.exists {
             app.swipeUp()
@@ -423,15 +724,32 @@ final class JerreaderSelectionUITests: XCTestCase {
         add(settingsAttachment)
 
         app.buttons["完成"].tap()
+        let statusOption = XCTAttachment(screenshot: app.screenshot())
+        statusOption.name = "reader-status-bar-option"
+        statusOption.lifetime = .keepAlways
+        add(statusOption)
+        tapVisibleControlByCoordinate(app.buttons["阅读设置"], in: app)
+        let restoreImmersion = app.switches["沉浸阅读（隐藏状态栏）"]
+        revealReaderSetting(restoreImmersion, in: app)
+        XCTAssertTrue(restoreImmersion.waitForExistence(timeout: 5))
+        tapReaderSwitch(restoreImmersion, in: app)
+        let immersionRestored = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", initialImmersionValue), object: restoreImmersion)
+        XCTAssertEqual(XCTWaiter.wait(for: [immersionRestored], timeout: 5), .completed)
+        app.buttons["完成"].tap()
         let closeReader = app.buttons["关闭阅读器"]
         XCTAssertTrue(closeReader.waitForExistence(timeout: 5))
         tapVisibleControlByCoordinate(closeReader, in: app)
         XCTAssertTrue(app.navigationBars["书架"].waitForExistence(timeout: 8))
-        XCTAssertTrue(app.buttons["批量整理书籍"].exists)
+        let libraryMore = app.buttons["书架更多操作"]
+        XCTAssertTrue(libraryMore.waitForExistence(timeout: 5))
+        libraryMore.tap()
+        XCTAssertTrue(app.buttons["批量整理书籍"].waitForExistence(timeout: 3))
+        app.navigationBars["书架"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
 
         let managementMenus = app.buttons.matching(
             NSPredicate(format: "label ENDSWITH '的更多操作'")
         )
+        XCTAssertTrue(managementMenus.firstMatch.waitForExistence(timeout: 5))
         XCTAssertGreaterThan(managementMenus.count, 0)
         managementMenus.firstMatch.tap()
         XCTAssertTrue(app.buttons["编辑书籍信息"].waitForExistence(timeout: 3))
@@ -496,7 +814,58 @@ final class JerreaderSelectionUITests: XCTestCase {
         try verifyTranslationFloatingWindow(mode: "vertical")
     }
 
-    private func verifyTranslationFloatingWindow(mode: String) throws {
+    func testTranslationAvoidanceAcrossEdgesWithFurigana() throws {
+        executionTimeAllowance = 180
+        for mode in ["paragraph-top", "paragraph-bottom", "vertical-left", "vertical-right"] {
+            try verifyTranslationFloatingWindow(mode: mode, showsControlsAndFurigana: true)
+        }
+    }
+
+    func testActualHorizontalAndVerticalTapTranslationAvoidsOriginalWithFurigana() throws {
+        guard ProcessInfo.processInfo.environment["JERREADER_RUN_REAL_RUBY_UI_TESTS"] == "1" else {
+            throw XCTSkip("Inject the synthetic EPUB for actual Readium tap geometry")
+        }
+        for orientation in ["horizontal", "publication"] {
+            let app = XCUIApplication()
+            app.launchArguments = ["--jerreader-selection-ui-test", "--jerreader-selection-test-href=part0005",
+                "--jerreader-selection-orientation=\(orientation)", "--jerreader-offline-translation-ui-test",
+                "-ApplePersistenceIgnoreState", "YES"]
+            app.launch()
+            let target = app.otherElements["selection-ruby-target"]
+            XCTAssertTrue(target.waitForExistence(timeout: 40))
+            let base = try XCTUnwrap(target.value as? String)
+            let text = app.staticTexts[base].firstMatch
+            XCTAssertTrue(text.waitForExistence(timeout: 5))
+            let tappedTextFrame = text.frame
+            tapVisibleControlByCoordinate(text, in: app)
+            let result = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Mock 翻译结果")).firstMatch
+            XCTAssertTrue(result.waitForExistence(timeout: 15), "Offline Mock must finish through the real tap pipeline")
+            let card = app.descendants(matching: .any).matching(identifier: "translation-card-diagnostic").firstMatch
+            let original = app.otherElements["translation-source-diagnostic"]
+            XCTAssertTrue(card.waitForExistence(timeout: 8)); XCTAssertTrue(original.exists)
+            Thread.sleep(forTimeInterval: 0.5)
+            XCTAssertTrue(original.frame.contains(CGPoint(x: tappedTextFrame.midX, y: tappedTextFrame.midY)),
+                          "The real request rectangle must contain the actual tapped DOM glyph")
+            XCTAssertFalse(card.frame.intersects(original.frame), "Actual \(orientation) result covers the selected original")
+            XCTAssertFalse(card.frame.intersects(tappedTextFrame), "The real DOM glyph must remain visible")
+            let plain = XCTAttachment(screenshot: app.screenshot()); plain.name = "translation-actual-\(orientation)-plain"; plain.lifetime = .keepAlways; add(plain)
+            tapVisibleControlByCoordinate(app.buttons["更多翻译操作"], in: app)
+            let toggle = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@ OR label == %@", "reader-furigana-toggle", "日语注音")).firstMatch
+            XCTAssertTrue(toggle.waitForExistence(timeout: 5)); toggle.tap()
+            let furigana = app.descendants(matching: .any).matching(NSPredicate(
+                format: "identifier == %@ OR label == %@", "japanese-source-furigana", "原文注音")).firstMatch
+            XCTAssertTrue(furigana.waitForExistence(timeout: 8))
+            Thread.sleep(forTimeInterval: 0.6)
+            XCTAssertFalse(card.frame.intersects(original.frame), "Furigana height must be remeasured and avoided")
+            XCTAssertFalse(card.frame.intersects(tappedTextFrame), "Furigana must not cover the real DOM glyph")
+            XCTAssertGreaterThanOrEqual(card.frame.minX, 0)
+            XCTAssertLessThanOrEqual(card.frame.maxX, app.windows.firstMatch.frame.maxX + 1)
+            let ruby = XCTAttachment(screenshot: app.screenshot()); ruby.name = "translation-actual-\(orientation)-furigana"; ruby.lifetime = .keepAlways; add(ruby)
+            app.terminate()
+        }
+    }
+
+    private func verifyTranslationFloatingWindow(mode: String, showsControlsAndFurigana: Bool = false) throws {
         guard ProcessInfo.processInfo.environment["JERREADER_RUN_REAL_RUBY_UI_TESTS"] == "1"
         else {
             throw XCTSkip("Inject UITestRubyBook.epub and enable the real-ruby UI test")
@@ -506,11 +875,15 @@ final class JerreaderSelectionUITests: XCTestCase {
         app.launchArguments = [
             "--jerreader-selection-ui-test",
             "--jerreader-selection-test-href=part0005",
-            "--jerreader-selection-orientation=\(mode == "vertical" ? "publication" : "horizontal")",
+            "--jerreader-selection-orientation=\(mode.hasPrefix("vertical") ? "publication" : "horizontal")",
             "--jerreader-translation-overlay-ui-test=\(mode)",
             "-ApplePersistenceIgnoreState",
             "YES"
         ]
+        if showsControlsAndFurigana {
+            app.launchArguments += ["--jerreader-selection-controls-visible", "--jerreader-furigana-ui-test",
+                "-translation.displayMode", "topBanner"]
+        }
         app.launch()
 
         let original = app.descendants(matching: .any)
@@ -533,7 +906,7 @@ final class JerreaderSelectionUITests: XCTestCase {
             "The translation window covers the original text: window=\(windowFrame) original=\(originalFrame)"
         )
 
-        if mode == "vertical" {
+        if mode.hasPrefix("vertical") {
             let isLeft = windowFrame.maxX <= originalFrame.minX + 1
             let isRight = windowFrame.minX >= originalFrame.maxX - 1
             XCTAssertTrue(
@@ -574,13 +947,39 @@ final class JerreaderSelectionUITests: XCTestCase {
             .tap()
     }
 
+    private func tapReaderSwitch(_ element: XCUIElement, in app: XCUIApplication) {
+        let frame = element.frame
+        XCTAssertFalse(frame.isEmpty)
+        guard !frame.isEmpty else { return }
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+            dx: frame.maxX - min(frame.width / 2, 22), dy: frame.midY
+        )).tap()
+    }
+
+    private func revealReaderSetting(_ element: XCUIElement, in app: XCUIApplication) {
+        let viewport = app.windows.firstMatch.frame.insetBy(dx: 12, dy: 110)
+        for attempt in 0 ..< 12 {
+            if element.exists {
+                let frame = element.frame
+                if element.isHittable && viewport.contains(
+                    CGPoint(x: frame.midX, y: frame.midY)
+                ) { return }
+                if !frame.isEmpty && frame.midY < viewport.minY {
+                    app.swipeDown()
+                    continue
+                }
+            }
+            // A reopened Form can retain its previous scroll position. Search
+            // both directions when an offscreen lazy row has no frame yet.
+            if attempt < 4 { app.swipeUp() } else { app.swipeDown() }
+        }
+        XCTAssertTrue(element.isHittable, "Reader setting could not be revealed: \(element.label)")
+    }
+
     private func openReaderSettings(in app: XCUIApplication) {
-        let moreActions = app.buttons["更多阅读操作"]
-        XCTAssertTrue(moreActions.waitForExistence(timeout: 5))
-        tapVisibleControlByCoordinate(moreActions, in: app)
         let readerSettings = app.buttons["阅读设置"]
         XCTAssertTrue(readerSettings.waitForExistence(timeout: 5))
-        readerSettings.tap()
+        tapVisibleControlByCoordinate(readerSettings, in: app)
         XCTAssertTrue(
             app.navigationBars["阅读与翻译"].waitForExistence(timeout: 5)
         )
@@ -602,6 +1001,51 @@ final class JerreaderSelectionUITests: XCTestCase {
             .completed,
             "Unexpected layout state: \(diagnostic.value ?? "nil")"
         )
+    }
+
+    private func verifyPageSwipe(in app: XCUIApplication, diagnostic: XCUIElement, rightToLeft: Bool) {
+        func viewport() -> (x: Double, width: Double, maximum: Double, paging: Bool)? {
+            guard let value = diagnostic.value as? String else { return nil }
+            let fields = Dictionary(uniqueKeysWithValues: value.split(separator: "|").compactMap { field -> (String, String)? in
+                let parts = field.split(separator: "=", maxSplits: 1)
+                guard parts.count == 2 else { return nil }
+                return (String(parts[0]), String(parts[1]))
+            })
+            guard let x = fields["x"].flatMap(Double.init),
+                  let width = fields["w"].flatMap(Double.init), width > 1,
+                  let maximum = fields["max"].flatMap(Double.init)
+            else { return nil }
+            return (x, width, maximum, fields["paging"] == "true")
+        }
+        guard let before = viewport() else { XCTFail("Missing live viewport diagnostics"); return }
+        XCTAssertTrue(before.paging)
+        let frame = app.windows.firstMatch.frame
+        let start = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+            dx: frame.width * (rightToLeft ? 0.22 : 0.78), dy: frame.height * 0.52))
+        let end = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+            dx: frame.width * (rightToLeft ? 0.78 : 0.22), dy: frame.height * 0.52))
+        start.press(forDuration: 0.05, thenDragTo: end)
+        var settled = false
+        var stable = 0
+        var previous: Double?
+        for _ in 0..<40 {
+            Thread.sleep(forTimeInterval: 0.25)
+            guard let after = viewport(), after.paging else { continue }
+            let moved = rightToLeft ? before.x - after.x : after.x - before.x
+            let distance = rightToLeft ? after.maximum - after.x : after.x
+            let aligned = abs(distance - (distance / after.width).rounded() * after.width) < 0.6
+                || abs(after.x) < 0.6 || abs(after.x - after.maximum) < 0.6
+            if moved > after.width * 0.5 && aligned {
+                stable = previous.map { abs($0 - after.x) < 0.6 } == true ? stable + 1 : 1
+                previous = after.x
+                if stable >= 2 { settled = true; break }
+            }
+        }
+        XCTAssertTrue(settled, "A physical swipe must settle on a page: \(diagnostic.value ?? "nil")")
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = rightToLeft ? "reader-vertical-swipe-pinned" : "reader-horizontal-swipe-pinned"
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     private func verifyPhysicalRubyLongPress(
