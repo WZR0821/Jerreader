@@ -15,6 +15,8 @@
 ## 版本规则
 
 - 双端版本保持同步。小版本修复递增末位（如 1.4.0 → 1.4.1）；大版本更新递增中间位并将末位归零（如 1.4.1 → 1.5.0）。每次可分发构建的内部 build / versionCode 同步递增。
+- 内部 build / versionCode 必须大于本机任何一条线发过的包。`JerreaderUnified` 与本仓库共用 Android `applicationId`（`com.jerreader.android`），统一版已发到 versionCode 66；装过统一版的手机拒绝安装更小的 versionCode。所以 1.4.1 (60) 之后的下一个可分发构建直接用 67，之后逐次 +1。
+- iOS bundle ID 自 2026-11-11 起为 `com.raydon.Jerreader`（此前为占位的 `com.example.Jerreader`）。换 ID 后手机上是另一个 App：旧书库用“备份 → 恢复”迁移；API Key 只存在旧 App 的钥匙串里，不进备份，需要重新填写。
 
 ## 构建保护规则（适用于所有 AI 代理）
 
