@@ -1,0 +1,613 @@
+{
+  "version": 1,
+  "viewBox": [
+    0,
+    0,
+    24,
+    24
+  ],
+  "strokeWidth": 1.65,
+  "license": "Original Jerreader artwork; same source used by both native apps.",
+  "icons": {
+    "CLOSE": {
+      "ios": [
+        "xmark"
+      ],
+      "paths": [
+        {
+          "d": "M 6 6 L 18 18 M 18 6 L 6 18",
+          "fill": false
+        }
+      ]
+    },
+    "TABLE_OF_CONTENTS": {
+      "ios": [
+        "list.bullet"
+      ],
+      "paths": [
+        {
+          "d": "M 8 5 L 21 5 M 8 12 L 21 12 M 8 19 L 21 19 M 3 5 L 3.1 5 M 3 12 L 3.1 12 M 3 19 L 3.1 19",
+          "fill": false
+        }
+      ]
+    },
+    "BOOKMARK_OUTLINE": {
+      "ios": [
+        "bookmark"
+      ],
+      "paths": [
+        {
+          "d": "M 6 3 Q 6 2 7 2 L 17 2 Q 18 2 18 3 L 18 22 L 12 18 L 6 22 Z",
+          "fill": false
+        }
+      ]
+    },
+    "BOOKMARK_FILLED": {
+      "ios": [
+        "bookmark.fill"
+      ],
+      "paths": [
+        {
+          "d": "M 6 3 Q 6 2 7 2 L 17 2 Q 18 2 18 3 L 18 22 L 12 18 L 6 22 Z",
+          "fill": true
+        }
+      ]
+    },
+    "TEXT_FORMAT": {
+      "ios": [
+        "textformat.size",
+        "textformat"
+      ],
+      "paths": [
+        {
+          "d": "M 2 18 L 7 5 L 12 18 M 4 13 L 10 13 M 14 18 L 17.5 9 L 21 18 M 15.5 15 L 19.5 15",
+          "fill": false
+        }
+      ]
+    },
+    "CHEVRON_LEFT": {
+      "ios": [
+        "chevron.left"
+      ],
+      "paths": [
+        {
+          "d": "M 15 3 L 6 12 L 15 21",
+          "fill": false
+        }
+      ]
+    },
+    "CHEVRON_RIGHT": {
+      "ios": [
+        "chevron.right"
+      ],
+      "paths": [
+        {
+          "d": "M 9 3 L 18 12 L 9 21",
+          "fill": false
+        }
+      ]
+    },
+    "CHEVRON_FORWARD": {
+      "ios": [
+        "chevron.forward"
+      ],
+      "paths": [
+        {
+          "d": "M 9 5 L 16 12 L 9 19",
+          "fill": false
+        }
+      ]
+    },
+    "CHEVRON_DOWN": {
+      "ios": [
+        "chevron.down"
+      ],
+      "paths": [
+        {
+          "d": "M 5 9 L 12 16 L 19 9",
+          "fill": false
+        }
+      ]
+    },
+    "CHEVRON_UP_DOWN": {
+      "ios": [
+        "chevron.up.chevron.down"
+      ],
+      "paths": [
+        {
+          "d": "M 7 8 L 12 3 L 17 8 M 7 16 L 12 21 L 17 16",
+          "fill": false
+        }
+      ]
+    },
+    "CHEVRON_DOUBLE_LEFT": {
+      "ios": [
+        "chevron.backward.2"
+      ],
+      "paths": [
+        {
+          "d": "M 11 4 L 3 12 L 11 20 M 21 4 L 13 12 L 21 20",
+          "fill": false
+        }
+      ]
+    },
+    "CHEVRON_DOUBLE_RIGHT": {
+      "ios": [
+        "chevron.forward.2"
+      ],
+      "paths": [
+        {
+          "d": "M 3 4 L 11 12 L 3 20 M 13 4 L 21 12 L 13 20",
+          "fill": false
+        }
+      ]
+    },
+    "SPEECH_BUBBLE": {
+      "ios": [
+        "character.bubble",
+        "text.bubble",
+        "text.bubble.fill"
+      ],
+      "paths": [
+        {
+          "d": "M 5 3 L 19 3 Q 22 3 22 6 L 22 15 Q 22 18 19 18 L 11 18 L 6 22 L 6 18 L 5 18 Q 2 18 2 15 L 2 6 Q 2 3 5 3 Z M 7 7 L 17 7 M 12 6 L 12 13 M 9 10 L 15 10 M 7 14 L 12 10 L 17 14",
+          "fill": false
+        }
+      ]
+    },
+    "SPEECH_BUBBLE_FILLED": {
+      "ios": [
+        "bubble.left.fill"
+      ],
+      "paths": [
+        {
+          "d": "M 5 3 L 19 3 Q 22 3 22 6 L 22 15 Q 22 18 19 18 L 11 18 L 6 22 L 6 18 L 5 18 Q 2 18 2 15 L 2 6 Q 2 3 5 3 Z",
+          "fill": true
+        }
+      ]
+    },
+    "MORE": {
+      "ios": [
+        "ellipsis"
+      ],
+      "paths": [
+        {
+          "d": "M 6.7 12 C 6.7 12.9388845 5.9388845 13.7 5 13.7 C 4.0611155 13.7 3.3 12.9388845 3.3 12 C 3.3 11.0611155 4.0611155 10.3 5 10.3 C 5.9388845 10.3 6.7 11.0611155 6.7 12 Z M 13.7 12 C 13.7 12.9388845 12.9388845 13.7 12 13.7 C 11.0611155 13.7 10.3 12.9388845 10.3 12 C 10.3 11.0611155 11.0611155 10.3 12 10.3 C 12.9388845 10.3 13.7 11.0611155 13.7 12 Z M 20.7 12 C 20.7 12.9388845 19.9388845 13.7 19 13.7 C 18.0611155 13.7 17.3 12.9388845 17.3 12 C 17.3 11.0611155 18.0611155 10.3 19 10.3 C 19.9388845 10.3 20.7 11.0611155 20.7 12 Z",
+          "fill": true
+        }
+      ]
+    },
+    "MORE_CIRCLE": {
+      "ios": [
+        "ellipsis.circle"
+      ],
+      "paths": [
+        {
+          "d": "M 22 12 C 22 17.52285 17.52285 22 12 22 C 6.47715 22 2 17.52285 2 12 C 2 6.47715 6.47715 2 12 2 C 17.52285 2 22 6.47715 22 12 Z",
+          "fill": false
+        },
+        {
+          "d": "M 6.7 12 C 6.7 12.9388845 5.9388845 13.7 5 13.7 C 4.0611155 13.7 3.3 12.9388845 3.3 12 C 3.3 11.0611155 4.0611155 10.3 5 10.3 C 5.9388845 10.3 6.7 11.0611155 6.7 12 Z M 13.7 12 C 13.7 12.9388845 12.9388845 13.7 12 13.7 C 11.0611155 13.7 10.3 12.9388845 10.3 12 C 10.3 11.0611155 11.0611155 10.3 12 10.3 C 12.9388845 10.3 13.7 11.0611155 13.7 12 Z M 20.7 12 C 20.7 12.9388845 19.9388845 13.7 19 13.7 C 18.0611155 13.7 17.3 12.9388845 17.3 12 C 17.3 11.0611155 18.0611155 10.3 19 10.3 C 19.9388845 10.3 20.7 11.0611155 20.7 12 Z",
+          "fill": true
+        }
+      ]
+    },
+    "TREND": {
+      "ios": [
+        "chart.line.uptrend.xyaxis"
+      ],
+      "paths": [
+        {
+          "d": "M 3 17 L 9 11 L 13 14 L 21 5 M 15 5 L 21 5 L 21 11",
+          "fill": false
+        }
+      ]
+    },
+    "GRID": {
+      "ios": [
+        "square.grid.2x2.fill",
+        "square.grid.2x2"
+      ],
+      "paths": [
+        {
+          "d": "M 3 3 L 10 3 L 10 10 L 3 10 Z M 14 3 L 21 3 L 21 10 L 14 10 Z M 3 14 L 10 14 L 10 21 L 3 21 Z M 14 14 L 21 14 L 21 21 L 14 21 Z",
+          "fill": true
+        }
+      ]
+    },
+    "CLOCK": {
+      "ios": [
+        "clock.arrow.circlepath",
+        "clock"
+      ],
+      "paths": [
+        {
+          "d": "M 3 9 C 4 4 8 2 12 2 C 18 2 22 6 22 12 C 22 18 18 22 12 22 C 7 22 3 19 2 15 M 2 4 L 2 10 L 8 10 M 12 6 L 12 12 L 16 15",
+          "fill": false
+        }
+      ]
+    },
+    "PLUS": {
+      "ios": [
+        "plus"
+      ],
+      "paths": [
+        {
+          "d": "M 12 3 L 12 21 M 3 12 L 21 12",
+          "fill": false
+        }
+      ]
+    },
+    "SORT": {
+      "ios": [
+        "arrow.up.arrow.down"
+      ],
+      "paths": [
+        {
+          "d": "M 7 3 L 7 21 M 3 7 L 7 3 L 11 7 M 17 3 L 17 21 M 13 17 L 17 21 L 21 17",
+          "fill": false
+        }
+      ]
+    },
+    "CHECKLIST": {
+      "ios": [
+        "checklist"
+      ],
+      "paths": [
+        {
+          "d": "M 2 5 L 4 7 L 7 3 M 11 5 L 22 5 M 2 13 L 4 15 L 7 11 M 11 13 L 22 13 M 11 21 L 22 21",
+          "fill": false
+        }
+      ]
+    },
+    "SEARCH": {
+      "ios": [
+        "magnifyingglass"
+      ],
+      "paths": [
+        {
+          "d": "M 17 10 C 17 13.865995 13.865995 17 10 17 C 6.134005 17 3 13.865995 3 10 C 3 6.134005 6.134005 3 10 3 C 13.865995 3 17 6.134005 17 10 Z M 15 15 L 22 22",
+          "fill": false
+        }
+      ]
+    },
+    "INFO": {
+      "ios": [
+        "info.circle"
+      ],
+      "paths": [
+        {
+          "d": "M 22 12 C 22 17.52285 17.52285 22 12 22 C 6.47715 22 2 17.52285 2 12 C 2 6.47715 6.47715 2 12 2 C 17.52285 2 22 6.47715 22 12 Z M 12 11 L 12 17 M 12 7 L 12 7.1",
+          "fill": false
+        }
+      ]
+    },
+    "SLIDERS": {
+      "ios": [
+        "slider.horizontal.3"
+      ],
+      "paths": [
+        {
+          "d": "M 2 5 L 6 5 M 10 5 L 22 5 M 2 12 L 14 12 M 18 12 L 22 12 M 2 19 L 5 19 M 9 19 L 22 19 M 10 5 C 10 6.10457 9.10457 7 8 7 C 6.89543 7 6 6.10457 6 5 C 6 3.89543 6.89543 3 8 3 C 9.10457 3 10 3.89543 10 5 ZM 18 12 C 18 13.10457 17.10457 14 16 14 C 14.89543 14 14 13.10457 14 12 C 14 10.89543 14.89543 10 16 10 C 17.10457 10 18 10.89543 18 12 ZM 9 19 C 9 20.10457 8.10457 21 7 21 C 5.89543 21 5 20.10457 5 19 C 5 17.89543 5.89543 17 7 17 C 8.10457 17 9 17.89543 9 19 Z",
+          "fill": false
+        }
+      ]
+    },
+    "PALETTE": {
+      "ios": [
+        "paintpalette"
+      ],
+      "paths": [
+        {
+          "d": "M 12 2 C 6 2 2 6 2 12 C 2 18 6 22 12 22 C 16 22 16 18 14 17 C 12 15 14 13 17 13 L 19 13 C 25 13 21 2 12 2 Z M 8 8 C 8 8.552285 7.552285 9 7 9 C 6.447715 9 6 8.552285 6 8 C 6 7.447715 6.447715 7 7 7 C 7.552285 7 8 7.447715 8 8 ZM 13 6 C 13 6.552285 12.552285 7 12 7 C 11.447715 7 11 6.552285 11 6 C 11 5.447715 11.447715 5 12 5 C 12.552285 5 13 5.447715 13 6 ZM 18 8 C 18 8.552285 17.552285 9 17 9 C 16.447715 9 16 8.552285 16 8 C 16 7.447715 16.447715 7 17 7 C 17.552285 7 18 7.447715 18 8 ZM 7 13 C 7 13.552285 6.552285 14 6 14 C 5.447715 14 5 13.552285 5 13 C 5 12.447715 5.447715 12 6 12 C 6.552285 12 7 12.447715 7 13 Z",
+          "fill": false
+        }
+      ]
+    },
+    "QUESTION": {
+      "ios": [
+        "questionmark.circle"
+      ],
+      "paths": [
+        {
+          "d": "M 22 12 C 22 17.52285 17.52285 22 12 22 C 6.47715 22 2 17.52285 2 12 C 2 6.47715 6.47715 2 12 2 C 17.52285 2 22 6.47715 22 12 Z M 9 8 C 9 4 17 5 15 10 C 14 12 12 11 12 14 M 12 18 L 12 18.1",
+          "fill": false
+        }
+      ]
+    },
+    "SHIELD": {
+      "ios": [
+        "checkmark.shield"
+      ],
+      "paths": [
+        {
+          "d": "M 12 2 L 21 6 L 21 12 C 21 17 16 21 12 23 C 8 21 3 17 3 12 L 3 6 Z M 7 12 L 11 16 L 17 9",
+          "fill": false
+        }
+      ]
+    },
+    "EXTERNAL_DRIVE": {
+      "ios": [
+        "externaldrive"
+      ],
+      "paths": [
+        {
+          "d": "M 6 3 L 18 3 Q 20 3 20 5 L 23 17 Q 23 21 20 21 L 4 21 Q 1 21 1 17 L 4 5 Q 4 3 6 3 Z M 2 15 L 22 15 M 17 18 L 19 18",
+          "fill": false
+        }
+      ]
+    },
+    "HAND": {
+      "ios": [
+        "hand.raised"
+      ],
+      "paths": [
+        {
+          "d": "M 8 12 L 8 5 C 8 2 11 2 11 5 L 11 11 M 11 5 L 11 3 C 11 0 14 0 14 3 L 14 11 M 14 5 C 14 2 17 2 17 5 L 17 12 M 17 8 C 17 5 20 6 20 8 L 20 15 C 20 24 9 24 7 19 L 3 12 C 2 10 5 9 6 11 L 8 14",
+          "fill": false
+        }
+      ]
+    },
+    "BOOKS": {
+      "ios": [
+        "books.vertical.fill",
+        "books.vertical"
+      ],
+      "paths": [
+        {
+          "d": "M 2 3 L 6 3 L 6 22 L 2 22 Z M 8 1 L 13 1 L 13 22 L 8 22 Z M 15 4 L 19 3 L 24 21 L 20 22 Z",
+          "fill": true
+        }
+      ]
+    },
+    "DICTIONARY": {
+      "ios": [
+        "character.book.closed.fill",
+        "character.book.closed"
+      ],
+      "paths": [
+        {
+          "d": "M 6 2 L 21 2 L 21 22 L 6 22 Q 3 22 3 19 L 3 5 Q 3 2 6 2 Z M 7 2 L 7 22 M 3 18 L 7 18 M 11 7 L 18 7 M 14.5 5 L 14.5 7 M 12 10 L 17 10 L 13 14 M 10 14 L 19 14 M 14 14 L 14 18 L 12 18",
+          "fill": false
+        }
+      ]
+    },
+    "GEAR": {
+      "ios": [
+        "gearshape.fill",
+        "gearshape"
+      ],
+      "paths": [
+        {
+          "d": "M 12.0 3.1 L 13.436 1.094 L 14.847 1.375 L 15.406 3.777 L 16.45 4.292 L 18.696 3.273 L 19.778 4.222 L 19.061 6.582 L 19.708 7.55 L 22.163 7.79 L 22.625 9.153 L 20.824 10.838 L 20.9 12.0 L 22.906 13.436 L 22.625 14.847 L 20.223 15.406 L 19.708 16.45 L 20.727 18.696 L 19.778 19.778 L 17.418 19.061 L 16.45 19.708 L 16.21 22.163 L 14.847 22.625 L 13.162 20.824 L 12.0 20.9 L 10.564 22.906 L 9.153 22.625 L 8.594 20.223 L 7.55 19.708 L 5.304 20.727 L 4.222 19.778 L 4.939 17.418 L 4.292 16.45 L 1.837 16.21 L 1.375 14.847 L 3.176 13.162 L 3.1 12.0 L 1.094 10.564 L 1.375 9.153 L 3.777 8.594 L 4.292 7.55 L 3.273 5.304 L 4.222 4.222 L 6.582 4.939 L 7.55 4.292 L 7.79 1.837 L 9.153 1.375 L 10.838 3.176 Z M 16 12 C 16 14.20914 14.20914 16 12 16 C 9.79086 16 8 14.20914 8 12 C 8 9.79086 9.79086 8 12 8 C 14.20914 8 16 9.79086 16 12 Z",
+          "fill": true
+        }
+      ]
+    },
+    "STAR_OUTLINE": {
+      "ios": [
+        "star"
+      ],
+      "paths": [
+        {
+          "d": "M 12 2 L 15 8 L 22 9 L 17 14 L 18 21 L 12 18 L 6 21 L 7 14 L 2 9 L 9 8 Z",
+          "fill": false
+        }
+      ]
+    },
+    "STAR_FILLED": {
+      "ios": [
+        "star.fill"
+      ],
+      "paths": [
+        {
+          "d": "M 12 2 L 15 8 L 22 9 L 17 14 L 18 21 L 12 18 L 6 21 L 7 14 L 2 9 L 9 8 Z",
+          "fill": true
+        }
+      ]
+    },
+    "DOWNLOAD": {
+      "ios": [
+        "arrow.down.to.line",
+        "square.and.arrow.down"
+      ],
+      "paths": [
+        {
+          "d": "M 12 2 L 12 16 M 7 11 L 12 16 L 17 11 M 3 16 L 3 22 L 21 22 L 21 16",
+          "fill": false
+        }
+      ]
+    },
+    "RESTORE": {
+      "ios": [
+        "arrow.clockwise",
+        "arrow.counterclockwise"
+      ],
+      "paths": [
+        {
+          "d": "M 3 10 C 4 4 9 2 14 3 C 22 4 24 16 17 20 C 12 23 6 21 4 18 M 2 4 L 2 11 L 9 11",
+          "fill": false
+        }
+      ]
+    },
+    "LOCK": {
+      "ios": [
+        "lock",
+        "lock.fill"
+      ],
+      "paths": [
+        {
+          "d": "M 6 10 L 18 10 Q 20 10 20 12 L 20 21 L 4 21 L 4 12 Q 4 10 6 10 Z M 7 10 L 7 7 C 7 0 17 0 17 7 L 17 10 M 12 15 L 12 17",
+          "fill": false
+        }
+      ]
+    },
+    "SWAP": {
+      "ios": [
+        "arrow.left.arrow.right"
+      ],
+      "paths": [
+        {
+          "d": "M 3 7 L 21 7 M 7 3 L 3 7 L 7 11 M 3 17 L 21 17 M 17 13 L 21 17 L 17 21",
+          "fill": false
+        }
+      ]
+    },
+    "COPY": {
+      "ios": [
+        "doc.on.doc"
+      ],
+      "paths": [
+        {
+          "d": "M 8 7 L 21 7 L 21 22 L 8 22 Z M 16 3 L 3 3 L 3 17",
+          "fill": false
+        }
+      ]
+    },
+    "WARNING": {
+      "ios": [
+        "exclamationmark.triangle"
+      ],
+      "paths": [
+        {
+          "d": "M 12 2 L 23 21 L 1 21 Z M 12 8 L 12 13 M 12 17 L 12 17.1",
+          "fill": false
+        }
+      ]
+    },
+    "CHECK_CIRCLE": {
+      "ios": [
+        "checkmark.circle.fill",
+        "checkmark.circle"
+      ],
+      "paths": [
+        {
+          "d": "M 22 12 C 22 17.52285 17.52285 22 12 22 C 6.47715 22 2 17.52285 2 12 C 2 6.47715 6.47715 2 12 2 C 17.52285 2 22 6.47715 22 12 Z M 6 12 L 10 16 L 18 8",
+          "fill": false
+        }
+      ]
+    },
+    "TRASH": {
+      "ios": [
+        "trash"
+      ],
+      "paths": [
+        {
+          "d": "M 3 5 L 21 5 M 8 5 L 8 2 L 16 2 L 16 5 M 5 5 L 6 22 L 18 22 L 19 5 M 10 9 L 10 18 M 14 9 L 14 18",
+          "fill": false
+        }
+      ]
+    },
+    "SHARE": {
+      "ios": [
+        "square.and.arrow.up"
+      ],
+      "paths": [
+        {
+          "d": "M 7 9 L 3 9 L 3 22 L 21 22 L 21 9 L 17 9 M 12 15 L 12 1 M 7 6 L 12 1 L 17 6",
+          "fill": false
+        }
+      ]
+    },
+    "REVIEW": {
+      "ios": [
+        "rectangle.on.rectangle"
+      ],
+      "paths": [
+        {
+          "d": "M 3 6 L 19 6 L 19 22 L 3 22 Z M 7 2 L 23 2 L 23 18 M 7 14 L 10 17 L 16 11",
+          "fill": false
+        }
+      ]
+    },
+    "SENTENCES": {
+      "ios": [
+        "text.quote"
+      ],
+      "paths": [
+        {
+          "d": "M 3 3 L 21 3 L 21 19 L 7 19 L 3 23 Z M 7 8 L 17 8 M 7 13 L 14 13",
+          "fill": false
+        }
+      ]
+    },
+    "NOTE": {
+      "ios": [
+        "note.text"
+      ],
+      "paths": [
+        {
+          "d": "M 5 2 L 19 2 L 19 22 L 5 22 Z M 9 7 L 15 7 M 9 12 L 15 12 M 9 17 L 13 17",
+          "fill": false
+        }
+      ]
+    },
+    "CHART": {
+      "ios": [
+        "chart.bar"
+      ],
+      "paths": [
+        {
+          "d": "M 3 13 L 7 13 L 7 21 L 3 21 Z M 10 8 L 14 8 L 14 21 L 10 21 Z M 17 3 L 21 3 L 21 21 L 17 21 Z",
+          "fill": false
+        }
+      ]
+    },
+    "CHECK": {
+      "ios": [
+        "checkmark"
+      ],
+      "paths": [
+        {
+          "d": "M 3 12 L 9 18 L 21 5",
+          "fill": false
+        }
+      ]
+    },
+    "FOLDER": {
+      "ios": [
+        "folder",
+        "folder.fill"
+      ],
+      "paths": [
+        {
+          "d": "M 2 6 L 2 4 Q 2 2 4 2 L 9 2 L 12 6 L 20 6 Q 22 6 22 8 L 22 20 L 2 20 Z",
+          "fill": false
+        }
+      ]
+    },
+    "PHOTO": {
+      "ios": [
+        "photo"
+      ],
+      "paths": [
+        {
+          "d": "M 5 4 L 19 4 Q 21 4 21 6 L 21 18 Q 21 20 19 20 L 5 20 Q 3 20 3 18 L 3 6 Q 3 4 5 4 Z M 3 16 L 9 10 L 14 15 L 17 12 L 21 16 M 17 7.5 C 17 8.33 16.33 9 15.5 9 C 14.67 9 14 8.33 14 7.5 C 14 6.67 14.67 6 15.5 6 C 16.33 6 17 6.67 17 7.5 Z"
+        }
+      ]
+    },
+    "BOOK_CLOSED": {
+      "ios": [
+        "book.closed",
+        "book.closed.fill"
+      ],
+      "paths": [
+        {
+          "d": "M 6 3 L 20 3 L 20 21 L 6 21 Q 3 21 3 18 L 3 6 Q 3 3 6 3 Z M 6 3 L 6 17 M 6 17 L 20 17",
+          "fill": false
+        }
+      ]
+    },
+    "TRANSLATION_BUBBLE_FILLED": {
+      "ios": [
+        "character.bubble.fill"
+      ],
+      "paths": [
+        {
+          "d": "M 5 3 L 19 3 Q 22 3 22 6 L 22 15 Q 22 18 19 18 L 11 18 L 6 22 L 6 18 L 5 18 Q 2 18 2 15 L 2 6 Q 2 3 5 3 Z M 11 5 L 13 5 L 13 6 L 11 6 Z M 7 7 L 17 7 L 17 10 L 15.5 10 L 15.5 8.5 L 8.5 8.5 L 8.5 10 L 7 10 Z M 9 9.5 L 15 9.5 L 15 11 L 12.8 12.5 L 12.8 13 L 17 13 L 17 14.5 L 12.8 14.5 L 12.8 16 L 11.2 16 L 11.2 14.5 L 7 14.5 L 7 13 L 11.2 13 L 11.2 11.8 L 13 11 L 9 11 Z",
+          "fill": true
+        }
+      ]
+    }
+  }
+}

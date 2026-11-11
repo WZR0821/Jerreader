@@ -15,6 +15,9 @@ Jerreader.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 .tools/
 local.properties
 **/build/
+# Local aliases to generated Android output caches are not source files.
+/androidApp/build
+/shared/build
 captures/
 *.apk
 *.aab

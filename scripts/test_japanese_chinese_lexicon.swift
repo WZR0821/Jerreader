@@ -1,0 +1,52 @@
+import Foundation
+import CryptoKit
+
+@main
+enum JapaneseChineseLexiconTests {
+    static func main() throws {
+        let rules = JapaneseLookupInflection.rules.map { [$0.0, $0.1, $0.2].joined(separator: "\t") }.joined(separator: "\n")
+        let digest = SHA256.hash(data: Data(rules.utf8)).map { String(format: "%02x", $0) }.joined()
+        precondition(digest == "cc9579c6178c6f57aa03b3abbaf096fa9673ccd9427ab642550f122ae8019c10", "Inflection behavior or ambiguity priority changed")
+        let lexicon = JapaneseChineseLexicon(tsv: try String(contentsOfFile: "shared/dictionaries/ja-zh-core.tsv", encoding: .utf8))
+        precondition(lexicon.entries.count >= 100)
+        precondition(Set(lexicon.entries.map(\.term)).count == lexicon.entries.count)
+        precondition(lexicon.japanese("食べる")?.definition == "吃")
+        precondition(lexicon.japanese(" たべる ")?.term == "食べる")
+        precondition(lexicon.japanese("読んだ", candidates: ["読む"])?.term == "読む")
+        precondition(lexicon.chinese("阅读") == "読む（よむ）")
+        precondition(lexicon.japanese(lexicon.chinese("阅读")!)?.term == "読む")
+        precondition(lexicon.chinese("阅读书籍") == nil)
+        precondition(lexicon.japanese("毎日、本を読む。") == nil)
+        precondition(lexicon.japanese("unknown") == nil)
+        let full = JapaneseChineseLexicon(tsv: try String(contentsOfFile: "shared/dictionaries/ja-zh-core.tsv", encoding: .utf8),
+            supplement: try String(contentsOfFile: "shared/dictionaries/ja-zh-wiktionary.tsv", encoding: .utf8))
+        precondition(full.headwordCount > 3000)
+        precondition(full.japanese("曖昧")!.definition.contains("含糊"))
+        precondition(full.matches("含糊", chinese: true).contains { $0.term == "曖昧" })
+        precondition(full.matches("頑張った").contains { $0.term == "頑張る" })
+        precondition(full.japanese("曖昧")!.sourceURL != nil)
+        let ambiguous = JapaneseChineseLexicon(tsv: "", supplement: "校正\tこうせい\t名词\t校对\t校对\t\t校正\n構成\tこうせい\t名词\t构成\t构成\t\t構成")
+        precondition(ambiguous.japanese("こうせい") == nil)
+        precondition(ambiguous.matches("こうせい").map(\.term) == ["校正", "構成"])
+        precondition(full.matches("食べさせられた").contains { $0.term == "食べる" }, "食べさせられた")
+        precondition(JapaneseLookupInflection.note("食べさせられた", lemma: "食べる")?.contains("使役被动") == true)
+        precondition(full.matches("食べさせられませんでした").contains { $0.term == "食べる" }, "食べさせられませんでした")
+        precondition(JapaneseLookupInflection.note("食べさせられませんでした", lemma: "食べる")?.contains("否定") == true)
+        precondition(full.matches("読まなかった").contains { $0.term == "読む" }, "読まなかった")
+        precondition(JapaneseLookupInflection.note("読まなかった", lemma: "読む")?.contains("否定") == true)
+        precondition(full.matches("読んでいる").contains { $0.term == "読む" }, "読んでいる")
+        precondition(JapaneseLookupInflection.note("読んでいる", lemma: "読む")?.contains("结果状态") == true)
+        precondition(full.matches("高くなかった").contains { $0.term == "高い" }, "高くなかった")
+        precondition(JapaneseLookupInflection.note("高くなかった", lemma: "高い")?.contains("形容词") == true)
+        precondition(full.matches("しました").contains { $0.term == "する" }, "しました")
+        precondition(JapaneseLookupInflection.note("しました", lemma: "する")?.contains("礼貌体") == true)
+        precondition(full.matches("行った").contains { $0.term == "行く" }, "行った")
+        precondition(JapaneseLookupInflection.note("行った", lemma: "行く")?.contains("过去") == true)
+        precondition(full.matches("食べられた").contains { $0.term == "食べる" }, "食べられた")
+        precondition(JapaneseLookupInflection.note("食べられた", lemma: "食べる")?.contains("可能 / 被动") == true)
+        precondition(full.matches("架空語させられた").isEmpty)
+        precondition(JapaneseLookupInflection.note("食べる", lemma: "食べる") == nil)
+        precondition(JapaneseLookupInflection.candidates(String(repeating: "あ", count: 81) + "ました").isEmpty)
+        print("Japanese–Chinese dictionary: \(full.headwordCount) headwords; bilingual, kana, inflection, ambiguity and miss checks passed.")
+    }
+}

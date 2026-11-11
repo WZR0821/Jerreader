@@ -9,11 +9,7 @@ TARGET_APK="$OUTPUT_DIR/Jerreader-Android-M4-TapLookup-installable.apk"
 CHECKSUM_FILE="$TARGET_APK.sha256"
 
 cd "$PROJECT_ROOT"
-./gradlew --no-daemon \
-    :shared:testAndroidHostTest \
-    :androidApp:testDebugUnitTest \
-    :androidApp:lintDebug \
-    :androidApp:assembleDebug
+scripts/safe_android_build.sh
 
 mkdir -p "$OUTPUT_DIR"
 install -m 0644 "$SOURCE_APK" "$TARGET_APK"
