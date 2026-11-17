@@ -200,9 +200,9 @@
   - 只有切换布局会让 Readium 重新分页。沉浸下显示、隐藏上下栏都不会。
   - 沉浸下系统状态栏始终隐藏。原来的“沉浸阅读”开关改称“隐藏状态栏”，只在标准布局下显示，存储键仍是 `reader.immersiveReading`。上一节说的“正文始终保留相同上下空间”，现在只适用于标准布局。
 - 修了“选一句却翻成整段”：
-  - 系统选区回退后，再拖手柄一律按精确选区处理，不再被智能补全扩大。
-  - 智能补全的句子最长 220 字（`ReaderSmartSelection.maximumCompletedSentenceLength`）。超过时说明附近找不到句界，保留原选区。
-  - 日文对白「」后面即使没有句号也算句末，跨段落的对白不再连成一句。共享规则在 `ReaderCrossPageExpansion.kt`。
+  - iOS：系统选区回退后，再拖手柄一律按精确选区处理，不再被智能补全扩大。
+  - iOS：智能补全的句子最长 220 字（`ReaderSmartSelection.maximumCompletedSentenceLength`）。超过时说明附近找不到句界，保留原选区。
+  - 日文对白「」后面即使没有句号也算句末，跨段落的对白不再连成一句。两端规则相同：安卓在共享的 `ReaderCrossPageExpansion.kt`，iOS 在 `ReaderSentenceSegmentation.swift`。
   - iOS 直连 AI 的提示用 `<source>` / `<context>` 分开原文和上下文，缓存身份升为 `jerreader-direct-api-v2`，旧的整段结果不再命中。安卓的翻译请求不带上下文，不涉及这一条。
 - 导入弹层可先选格式（全部、EPUB、PDF、Word、TXT）。选定某种格式后只把它交给系统选择器（iOS 传内容类型，安卓传 MIME 类型），其他格式不能选；选“全部”时仍可选所有支持的格式。导入弹层全高显示。
 - iOS「默认阅读排版 → 间距」里的「分别设置」（上 / 下 / 左右边距）删了。这三个值（`reader.defaults.pageMarginTop` 等）只存不读，阅读器一直只用统一的「页边距」，安卓也从没有这一项。旧安装里残留的值不再读写，不影响使用。

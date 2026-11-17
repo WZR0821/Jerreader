@@ -12,9 +12,9 @@
 
 - **按格式导入**：书架的导入弹层先选格式（全部、EPUB、PDF、Word、TXT）。选定某种格式后只把它交给系统选择器（iOS 传内容类型，安卓传 MIME 类型），系统「文件」里其他格式是灰的、点不了；选“全部”时仍可选所有支持的格式。导入弹层全高显示。
 - **选一句不再翻成整段**：
-  - 系统选区回退后，再拖手柄一律按精确选区处理，不再被智能补全扩大。
-  - 智能补全的句子最长 220 字（`ReaderSmartSelection.maximumCompletedSentenceLength`），超过时保留原选区。
-  - 日文对白「」后面即使没有句号也算句末，跨段落的对白不再连成一句（共享规则在 `ReaderCrossPageExpansion.kt`）。
+  - iOS：系统选区回退后，再拖手柄一律按精确选区处理，不再被智能补全扩大。
+  - iOS：智能补全的句子最长 220 字（`ReaderSmartSelection.maximumCompletedSentenceLength`），超过时保留原选区。
+  - 日文对白「」后面即使没有句号也算句末，跨段落的对白不再连成一句（两端规则相同：安卓在共享的 `ReaderCrossPageExpansion.kt`，iOS 在 `ReaderSentenceSegmentation.swift`）。
   - iOS 直连 AI 的提示用 `<source>` / `<context>` 分开原文和上下文，缓存身份升为 `jerreader-direct-api-v2`，旧的整段结果不再命中。
 - **两种阅读布局**，在 阅读设置 → 阅读界面 → 界面布局 切换，对所有书生效，随备份导出和恢复（`reader.layoutMode`）：
   - 「标准」（默认）：上下栏变小、常驻，翻页键融进页面，正文排在两栏之间。
