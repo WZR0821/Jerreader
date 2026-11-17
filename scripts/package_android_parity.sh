@@ -4,7 +4,7 @@ set -eu
 
 PROJECT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 OUTPUT_DIR="$PROJECT_ROOT/dist/Android"
-SOURCE_APK="$PROJECT_ROOT/androidApp/build/outputs/apk/debug/androidApp-debug.apk"
+SOURCE_APK="$PROJECT_ROOT/androidApp/build/outputs/apk/debug/androidApp-arm64-v8a-debug.apk"
 
 cd "$PROJECT_ROOT"
 
@@ -26,8 +26,9 @@ import re
 from pathlib import Path
 
 metadata = json.loads(Path('androidApp/build/outputs/apk/debug/output-metadata.json').read_text())
-elements = metadata['elements']
-assert len(elements) == 1 and elements[0]['outputFile'] == 'androidApp-debug.apk'
+# Debug is split by ABI as well; phones take the arm64-v8a split.
+elements = [e for e in metadata['elements'] if e['outputFile'] == 'androidApp-arm64-v8a-debug.apk']
+assert len(elements) == 1
 element = elements[0]
 version = element['versionName']
 assert re.fullmatch(r'[A-Za-z0-9._-]+', version), 'Invalid artifact version'

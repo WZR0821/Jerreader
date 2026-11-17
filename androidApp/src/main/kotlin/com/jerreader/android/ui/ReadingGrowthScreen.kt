@@ -50,7 +50,9 @@ fun ReadingGrowthScreen(graph: AppGraph) {
           item {
            LearningCard {
             Box {
-                LearningButton(onClick = { bookMenu = true }) { Text(books.firstOrNull { it.id == selected }?.title ?: "全部书籍");
+                // A menu `Picker` on iOS: 34 points tall, its label set 12 points in.
+                LearningButton(onClick = { bookMenu = true }, compact = true) {
+                    Text(books.firstOrNull { it.id == selected }?.title ?: "全部书籍", Modifier.padding(start = 12.4.dp));
                     com.jerreader.shared.ui.JerreaderGlyph(com.jerreader.shared.ui.JerreaderIcon.CHEVRON_UP_DOWN, MaterialTheme.colorScheme.primary, Modifier.padding(start = 6.dp).size(12.dp)) }
                 DropdownMenu(bookMenu, { bookMenu = false }) {
                     DropdownMenuItem(text = { Text("全部书籍") }, onClick = { selected = null; bookMenu = false })

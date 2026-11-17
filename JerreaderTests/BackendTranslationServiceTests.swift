@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import XCTest
 @testable import Jerreader
@@ -190,7 +191,12 @@ final class BackendTranslationServiceTests: XCTestCase {
         )
         XCTAssertEqual(body["model"] as? String, "gpt-test")
         XCTAssertTrue((body["instructions"] as? String)?.contains("只输出译文") == true)
-        XCTAssertTrue((body["input"] as? String)?.contains("The night was quiet.") == true)
+        let input = try XCTUnwrap(body["input"] as? String)
+        // The sentence and its paragraph are told apart in the request itself,
+        // so a custom prompt cannot get the paragraph translated as well.
+        XCTAssertTrue(input.contains("<source>\nThe night was quiet.\n</source>"))
+        XCTAssertTrue(input.contains("<context>\nThe lamps were lit. The night was quiet.\n</context>"))
+        XCTAssertTrue(input.contains("不要翻译它"))
         XCTAssertEqual(result.translatedText, "夜晚很安静。")
         XCTAssertEqual(result.providerIdentifier, "direct-ai-openAI")
     }
@@ -543,6 +549,149 @@ final class BackendTranslationServiceTests: XCTestCase {
             ) as? [String: Any]
         )
         XCTAssertEqual(body["instructions"] as? String, "CUSTOM 英语 TO 日语")
+    }
+
+    func testProviderVersionKeepsLegacyIdentityUntilFormatOrReasoningIsChosen() throws {
+        let endpoint = try XCTUnwrap(URL(string: "https://api.openai.com/v1/responses"))
+        let legacy = DirectAITranslationConfiguration(
+            provider: .openAI,
+            endpoint: endpoint,
+            model: "gpt-test",
+            apiKey: "local-secret"
+        )
+        let sameFormat = DirectAITranslationConfiguration(
+            provider: .openAI,
+            endpoint: endpoint,
+            model: "gpt-test",
+            apiKey: "local-secret",
+            style: .responses,
+            reasoning: nil
+        )
+        // The formula used before formats could be chosen, so cached
+        // translations of an existing setup are still found.
+        let before = [
+            "openAI",
+            endpoint.absoluteString,
+            "gpt-test",
+            AIPromptTemplateDefaults.translation,
+            AIPromptTemplateDefaults.grammarAnalysis,
+            "jerreader-direct-api-v2",
+        ].joined(separator: "\u{001F}")
+        let beforeVersion = SHA256.hash(data: Data(before.utf8))
+            .prefix(12).map { String(format: "%02x", $0) }.joined()
+
+        XCTAssertEqual(legacy.style, .responses)
+        XCTAssertEqual(DirectAITranslationService.providerVersion(for: legacy), beforeVersion)
+        XCTAssertEqual(DirectAITranslationService.providerVersion(for: sameFormat), beforeVersion)
+        XCTAssertNotEqual(
+            DirectAITranslationService.providerVersion(
+                for: DirectAITranslationConfiguration(
+                    provider: .openAI, endpoint: endpoint, model: "gpt-test",
+                    apiKey: "local-secret", style: .chatCompletions
+                )
+            ),
+            beforeVersion
+        )
+        XCTAssertNotEqual(
+            DirectAITranslationService.providerVersion(
+                for: DirectAITranslationConfiguration(
+                    provider: .openAI, endpoint: endpoint, model: "gpt-test",
+                    apiKey: "local-secret", reasoning: .high
+                )
+            ),
+            beforeVersion
+        )
+        XCTAssertEqual(
+            DirectAITranslationConfiguration(
+                provider: .gemini, endpoint: endpoint, model: "gemini-test", apiKey: "k"
+            ).style,
+            .geminiNative
+        )
+    }
+
+    func testDeepSeekFlashTranslatesWithoutThinkingAndExplainsWithLowEffort() async throws {
+        let endpoint = try XCTUnwrap(URL(string: "https://api.deepseek.com/chat/completions"))
+        let configuration = DirectAITranslationConfiguration(
+            provider: .deepSeek,
+            endpoint: endpoint,
+            model: "deepseek-flash",
+            apiKey: "deepseek-test-key"
+        )
+        let translationClient = BackendHTTPClientStub(
+            statusCode: 200,
+            body: #"{"choices":[{"message":{"content":"你好。"}}]}"#.data(using: .utf8)!
+        )
+        _ = try await DirectAITranslationService(
+            configuration: configuration,
+            client: translationClient
+        ).translate(text: "Hello.", sourceLanguage: .english, targetLanguage: .simplifiedChinese)
+        let translationRequest = await translationClient.lastRequest()
+        let translation = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: try XCTUnwrap(translationRequest?.httpBody)
+            ) as? [String: Any]
+        )
+        XCTAssertEqual((translation["thinking"] as? [String: Any])?["type"] as? String, "disabled")
+        XCTAssertNil(translation["reasoning_effort"])
+        XCTAssertEqual(translation["stream"] as? Bool, false)
+        XCTAssertEqual(translation["model"] as? String, "deepseek-flash")
+
+        let explanationClient = BackendHTTPClientStub(
+            statusCode: 200,
+            body: #"{"choices":[{"message":{"content":"这是主系表结构。"}}]}"#.data(using: .utf8)!
+        )
+        _ = try await DirectAITranslationService(
+            configuration: configuration,
+            client: explanationClient
+        ).explain(
+            ContextExplanationRequest(
+                focusedText: "It was light.",
+                contextText: nil,
+                sourceLanguage: .english,
+                responseLanguage: .simplifiedChinese
+            )
+        )
+        let explanationRequest = await explanationClient.lastRequest()
+        let explanation = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: try XCTUnwrap(explanationRequest?.httpBody)
+            ) as? [String: Any]
+        )
+        XCTAssertEqual((explanation["thinking"] as? [String: Any])?["type"] as? String, "enabled")
+        XCTAssertEqual(explanation["reasoning_effort"] as? String, "low")
+    }
+
+    func testChosenFormatAndReasoningShapeTheRequest() async throws {
+        // A DeepSeek model called through its Claude-compatible address.
+        let endpoint = try XCTUnwrap(URL(string: "https://api.deepseek.com/anthropic/messages"))
+        let client = BackendHTTPClientStub(
+            statusCode: 200,
+            body: #"{"content":[{"type":"text","text":"你好。"}]}"#.data(using: .utf8)!
+        )
+        let result = try await DirectAITranslationService(
+            configuration: DirectAITranslationConfiguration(
+                provider: .deepSeek,
+                endpoint: endpoint,
+                model: "deepseek-v4-pro",
+                apiKey: "deepseek-test-key",
+                style: .anthropicMessages,
+                reasoning: .high
+            ),
+            client: client
+        ).translate(text: "Hello.", sourceLanguage: .english, targetLanguage: .simplifiedChinese)
+        let capturedRequest = await client.lastRequest()
+        let request = try XCTUnwrap(capturedRequest)
+        let body = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: try XCTUnwrap(request.httpBody)) as? [String: Any]
+        )
+
+        XCTAssertEqual(request.url, endpoint)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "x-api-key"), "deepseek-test-key")
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertEqual((body["thinking"] as? [String: Any])?["type"] as? String, "enabled")
+        XCTAssertEqual((body["output_config"] as? [String: Any])?["effort"] as? String, "high")
+        XCTAssertNotNil(body["max_tokens"])
+        XCTAssertEqual(result.translatedText, "你好。")
     }
 
     private func assertServiceError(

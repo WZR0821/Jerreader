@@ -6,6 +6,10 @@ import Foundation
 /// translation, selection, vocabulary or persistence code.
 enum SpeechFeatureAvailability {
     static let isEnabled = false
+    /// Speech is reopened only inside the word review card (hear the word,
+    /// then the real sentence, and say it back); reading and translation
+    /// stay silent.
+    static let learningReviewIsEnabled = true
 }
 
 @MainActor

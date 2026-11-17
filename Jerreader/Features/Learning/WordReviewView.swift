@@ -34,6 +34,18 @@ struct WordReviewView: View {
                     if let book = word.sourceBookTitle { Text(book).font(.caption).foregroundStyle(.secondary) }
                     if revealed {
                         if let reading = word.reading { Text(reading) }
+                        if word.language == .japanese,
+                           SpeechFeatureAvailability.learningReviewIsEnabled
+                        {
+                            LearningActions {
+                                Button("朗读单词") { speak(word.surfaceForm) }
+                                if let sentence = word.sentenceContext,
+                                   !ReadingCompanionText.isBlank(sentence)
+                                {
+                                    Button("朗读原句·跟读") { speak(sentence) }
+                                }
+                            }.buttonStyle(LearningActionStyle(kind: .tinted))
+                        }
                         Text(word.definitions.joined(separator: "；"))
                         LearningActions {
                           ForEach(ReviewGrade.allCases, id: \.rawValue) { grade in
@@ -88,6 +100,7 @@ struct WordReviewView: View {
         }
         .navigationTitle("生词复习")
         .onChange(of: current?.id) { _, _ in revealed = false }
+        .onDisappear { SystemSpeechService.shared.stop() }
         .task(id: inputs) {
             let worker = Task.detached(priority: .userInitiated) {
                 try WordReviewSnapshot(inputs: inputs, checkpoint: { try Task.checkCancellation() })
@@ -97,6 +110,20 @@ struct WordReviewView: View {
             } onCancel: { worker.cancel() }
             guard !Task.isCancelled, let result else { return }
             prepared = (inputs, result)
+        }
+    }
+
+    private func speak(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        Task { @MainActor in
+            do {
+                try await SystemSpeechService.shared.speak(trimmed, language: .japanese)
+            } catch is CancellationError {
+                return
+            } catch {
+                self.error = "系统语音暂时不可用，请根据读音继续复习。"
+            }
         }
     }
 

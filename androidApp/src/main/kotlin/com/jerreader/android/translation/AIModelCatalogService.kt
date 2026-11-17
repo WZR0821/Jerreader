@@ -1,6 +1,5 @@
 package com.jerreader.android.translation
 
-import com.jerreader.shared.translation.DirectAIProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -13,29 +12,41 @@ import java.time.Instant
 
 data class AIModelOption(val id: String, val displayName: String, val created: Long = 0)
 data class AIModelCatalog(val models: List<AIModelOption>, val source: String, val refreshedAt: Long, val truncated: Boolean)
-data class AIModelCatalogConfiguration(val provider: DirectAIProvider, val endpoint: String, val key: String) {
+/**
+ * A model-list request. [endpoint] is the full request URL of the format the
+ * provider is called with; the list sits beside it.
+ */
+data class AIModelCatalogConfiguration(val api: AIModelCatalogAPI, val endpoint: String, val key: String) {
     fun request(cursor: String? = null): Pair<String, Map<String, String>> {
         val uri = runCatching { URI(endpoint.trim()) }.getOrNull()
         if (uri == null || uri.scheme != "https" || uri.host.isNullOrEmpty() || uri.userInfo != null ||
             uri.rawQuery != null || uri.rawFragment != null || key.isBlank()) throw AIModelCatalogException.configuration()
         var path = uri.path.trimEnd('/')
-        if (provider != DirectAIProvider.GEMINI) {
+        if (api != AIModelCatalogAPI.GEMINI) {
             val suffix = listOf("/chat/completions", "/responses", "/messages").firstOrNull { path.endsWith(it) }
                 ?: throw AIModelCatalogException.configuration()
             path = path.removeSuffix(suffix)
         }
-        val query = when (provider) {
-            DirectAIProvider.ANTHROPIC -> "limit=1000" + (cursor?.let { "&after_id=" + URLEncoder.encode(it, "UTF-8") } ?: "")
-            DirectAIProvider.GEMINI -> "pageSize=1000" + (cursor?.let { "&pageToken=" + URLEncoder.encode(it, "UTF-8") } ?: "")
-            else -> null
+        val query = when (api) {
+            AIModelCatalogAPI.ANTHROPIC -> "limit=1000" + (cursor?.let { "&after_id=" + URLEncoder.encode(it, "UTF-8") } ?: "")
+            AIModelCatalogAPI.GEMINI -> "pageSize=1000" + (cursor?.let { "&pageToken=" + URLEncoder.encode(it, "UTF-8") } ?: "")
+            AIModelCatalogAPI.STANDARD -> null
         }
         val base = URI("https", null, uri.host, uri.port, "$path/models", null, null).toASCIIString()
-        val headers = when (provider) {
-            DirectAIProvider.ANTHROPIC -> mapOf("x-api-key" to key.trim(), "anthropic-version" to "2023-06-01")
-            DirectAIProvider.GEMINI -> mapOf("x-goog-api-key" to key.trim())
-            else -> mapOf("Authorization" to "Bearer ${key.trim()}")
+        val headers = when (api) {
+            AIModelCatalogAPI.ANTHROPIC -> mapOf("x-api-key" to key.trim(), "anthropic-version" to "2023-06-01")
+            AIModelCatalogAPI.GEMINI -> mapOf("x-goog-api-key" to key.trim())
+            AIModelCatalogAPI.STANDARD -> mapOf("Authorization" to "Bearer ${key.trim()}")
         }
         return (base + (query?.let { "?$it" } ?: "")) to headers
+    }
+
+    companion object {
+        /** The model list of a provider's address, asked the way its format is. */
+        fun forProvider(baseURL: String, style: AIAPIStyle, key: String): AIModelCatalogConfiguration {
+            val endpoint = AIEndpoint.url(baseURL, style) ?: throw AIProviderSettingsError.InvalidAddress()
+            return AIModelCatalogConfiguration(AIModelCatalogAPI.forStyle(style), endpoint, key)
+        }
     }
 }
 class AIModelCatalogException(message: String) : Exception(message) {
@@ -93,7 +104,7 @@ class RemoteAIModelCatalogService(private val transport: AIModelCatalogTransport
                 throw AIModelCatalogException("模型列表验证失败，请检查此服务商的 API Key 和权限。")
             if (response.statusCode !in 200..299)
                 throw AIModelCatalogException("无法获取模型列表；可稍后刷新或手动填写模型 ID。")
-            val parsed = parse(response.body, configuration.provider)
+            val parsed = parse(response.body, configuration.api)
             parsed.first.forEach {
                 if (it.id !in options) {
                     if (options.size < 5000) options[it.id] = it else truncated = true
@@ -108,10 +119,10 @@ class RemoteAIModelCatalogService(private val transport: AIModelCatalogTransport
             source, System.currentTimeMillis(), truncated)
     }
     companion object {
-        internal fun parse(body: String, provider: DirectAIProvider): Pair<List<AIModelOption>, String?> {
+        internal fun parse(body: String, api: AIModelCatalogAPI): Pair<List<AIModelOption>, String?> {
             if (body.toByteArray(Charsets.UTF_8).size > 2_097_152) throw AIModelCatalogException.invalid()
             val json = runCatching { JSONObject(body) }.getOrElse { throw AIModelCatalogException.invalid() }
-            val gemini = provider == DirectAIProvider.GEMINI
+            val gemini = api == AIModelCatalogAPI.GEMINI
             val rows = json.optJSONArray(if (gemini) "models" else "data") ?: throw AIModelCatalogException.invalid()
             val options = (0 until rows.length()).mapNotNull { index ->
                 val row = rows.optJSONObject(index) ?: throw AIModelCatalogException.invalid()
@@ -129,7 +140,7 @@ class RemoteAIModelCatalogService(private val transport: AIModelCatalogTransport
                 AIModelOption(id, name, created)
             }
             var cursor = if (gemini) json.optString("nextPageToken").takeIf { it.isNotEmpty() } else null
-            if (provider == DirectAIProvider.ANTHROPIC && json.optBoolean("has_more")) {
+            if (api == AIModelCatalogAPI.ANTHROPIC && json.optBoolean("has_more")) {
                 cursor = (json.opt("last_id") as? String)?.takeIf { it.isNotEmpty() } ?: throw AIModelCatalogException.invalid()
             }
             return options to cursor

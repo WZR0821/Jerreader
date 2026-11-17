@@ -49,7 +49,7 @@ class AppGraph(application: Application, val database: JerreaderDatabase = Jerre
     val offlineDictionary = com.jerreader.android.lexical.OfflineDictionaryPackageStore(application)
     val localTranslationService = com.jerreader.android.translation.OnDeviceTranslationService(
         basicTranslation = com.jerreader.android.translation.BasicOfflineTranslation(offlineDictionary)::translate)
-    private val configuredTranslationService = ConfiguredTranslationService(translationSettings, localTranslationService)
+    val configuredTranslationService = ConfiguredTranslationService(translationSettings, localTranslationService)
     val translationCache = TranslationCacheRepository(database.translationCacheDao())
     /** Typed so the translate page can pass its own provider for one request. */
     val cachedTranslationService = CachedTranslationService(

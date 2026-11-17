@@ -1,8 +1,6 @@
 package com.jerreader.android.learning
 
 import android.os.Bundle
-import androidx.compose.foundation.layout.padding
-import androidx.compose.ui.unit.dp
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.CompositionLocalProvider
@@ -78,13 +76,21 @@ class LearningUiFixtureActivity : ComponentActivity() {
                                 onAnalysis = { snapshot, result -> graph.learningRecords.updateContextualAnalysis(snapshot, result) },
                                 onFavorite = { snapshot, favorite -> graph.learningRecords.setContextualFavorite(snapshot.lookupKey, favorite) },
                                 onDismiss = { finish() })
-                        } else if (intent.getBooleanExtra("catalog", false)) {
-                            val selected = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("existing-model") }
-                            androidx.compose.foundation.layout.Column(androidx.compose.ui.Modifier.padding(24.dp)) {
-                                AIModelPicker(com.jerreader.android.translation.AIModelCatalogConfiguration(
-                                    com.jerreader.shared.translation.DirectAIProvider.OPENAI, "https://example.test/v1/responses", "fixture"),
-                                    selected.value, { selected.value = it }, com.jerreader.android.translation.MockAIModelCatalogService())
+                        } else if (intent.getBooleanExtra("aiModels", false)) {
+                            // The AI 大模型 pages on their own settings and a
+                            // key store in memory; requests never leave the device.
+                            val store = androidx.compose.runtime.remember {
+                                this@LearningUiFixtureActivity.deleteSharedPreferences(FIXTURE_AI_PREFERENCES)
+                                com.jerreader.android.translation.AndroidTranslationSettingsStore(
+                                    this@LearningUiFixtureActivity,
+                                    FixtureKeyStore(),
+                                    FIXTURE_AI_PREFERENCES
+                                )
                             }
+                            val requests = androidx.compose.runtime.remember {
+                                AIProviderRequests(check = { 0.4 }, models = { _, _, _ -> listOf("mock-text-latest") })
+                            }
+                            AIModelsScreen(store, requests, backTitle = "设置", onBack = { finish() })
                         } else {
                             val fixtureTab = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(AndroidAppTab.LEARNING) }
                             val shelf by androidx.compose.runtime.remember(graph) { graph.repository.observeBooks() }.collectAsStateWithLifecycle(emptyList())
@@ -102,5 +108,18 @@ class LearningUiFixtureActivity : ComponentActivity() {
                 }
             }
         }
+    }
+}
+
+private const val FIXTURE_AI_PREFERENCES = "fixture_ai_providers"
+
+/** Keys for the AI 大模型 fixture, kept in memory only. */
+private class FixtureKeyStore : com.jerreader.android.translation.TranslationCredentialStore {
+    private val values = mutableMapOf<String, String>()
+
+    override fun read(account: String): String? = values[account]
+
+    override fun save(account: String, secret: String?) {
+        if (secret == null) values.remove(account) else values[account] = secret
     }
 }

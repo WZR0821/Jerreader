@@ -6,218 +6,177 @@ struct AppSettingsView: View {
     @ObservedObject var translationSettings: TranslationSettingsStore
     @AppStorage(JerreaderThemePreferences.storageKey)
     private var themeColorRawValue = JerreaderThemeColorChoice.ocean.rawValue
+    @AppStorage(ReaderAppearanceDefaults.themeKey)
+    private var readerThemeRawValue = ReaderThemeChoice.light.rawValue
+    @AppStorage(ReaderAppearanceDefaults.readingModeKey)
+    private var readingModeRawValue = ReaderReadingMode.paginated.rawValue
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     private var themeColor: JerreaderThemeColorChoice {
         JerreaderThemeColorChoice(rawValue: themeColorRawValue) ?? .ocean
     }
 
+    /// The home page fills one screen exactly: its rows share whatever height
+    /// a taller phone leaves over, so nothing scrolls and no gap is left above
+    /// the tab bar. A system list cannot do that, so the groups are drawn here
+    /// to look like one. Large text or a short screen still scrolls.
     var body: some View {
         NavigationStack {
-            ZStack {
-                JerreaderCanvasBackground()
-
-                ScrollView {
-                    settingsContent
-                    .padding(.horizontal, JerreaderTheme.pagePadding)
-                    .padding(.vertical, 20)
-                    .frame(maxWidth: 800, alignment: .top)
-                    .frame(maxWidth: .infinity, alignment: .top)
+            OneScreenPage(identifier: "settingsHome") { size in
+                // The margin the system gives a grouped list at this width.
+                let margin: CGFloat = size.width >= 400 ? 20 : 16
+                FillStack {
+                    brand
+                    Group {
+                        groupTitle("阅读")
+                        row("界面主题", value: themeColor.title, icon: "paintpalette.fill",
+                            color: JerreaderTheme.accent(for: themeColor), id: "themeSettingsLink",
+                            position: .first, edge: margin) {
+                            AppThemeColorSettingsView()
+                        }
+                        row("默认阅读排版", value: readerDefaultsSummary, icon: "textformat.size",
+                            color: .indigo, id: "readerDefaultsLink", position: .last, edge: margin) {
+                            GlobalReaderDefaultsView()
+                        }
+                    }
+                    Group {
+                        groupTitle("翻译")
+                        row("翻译与 AI", value: translationSettings.provider.title,
+                            icon: "character.bubble.fill", color: .blue, id: "translationSettingsLink",
+                            position: .first, edge: margin) {
+                            TranslationSettingsDetailView(
+                                settings: translationSettings,
+                                quickSentenceEnabled: quickSentenceBinding,
+                                disablesTapPageTurnsDuringQuickTranslation:
+                                    disablesTapPageTurnsDuringQuickTranslationBinding,
+                                showsQuickSentenceToggle: true
+                            )
+                        }
+                        row("AI 大模型", value: aiModelsSummary, warn: aiModelsNeedKey, icon: "sparkles",
+                            color: .green, id: "aiModelsSettingsLink", position: .last, edge: margin) {
+                            AIModelsView(store: translationSettings)
+                        }
+                    }
+                    Group {
+                        groupTitle("数据与帮助")
+                        row("备份与恢复", icon: "externaldrive.fill", color: .orange, id: "backupSettingsLink",
+                            position: .first, edge: margin) {
+                            LibraryBackupSettingsView(translationSettings: translationSettings)
+                        }
+                        row("数据与隐私", icon: "hand.raised.fill", color: .teal, id: "privacySettingsLink",
+                            position: .middle, edge: margin) {
+                            DataPrivacySettingsView()
+                        }
+                        row("操作指南", icon: "questionmark", color: .gray, id: "guideSettingsLink",
+                            position: .last, edge: margin) {
+                            AppGuideView()
+                        }
+                    }
+                    credit
                 }
+                .padding(.horizontal, margin)
+                .frame(maxWidth: 720)
+                .frame(maxWidth: .infinity)
             }
+            .background(JerreaderCanvasBackground())
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.large)
         }
         .tint(JerreaderTheme.accent(for: themeColor))
     }
 
-    @ViewBuilder
-    private var settingsContent: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .top, spacing: 18) {
-                VStack(spacing: 22) {
-                    preferencesSection
-                    aboutSection
-                }
-                .frame(minWidth: 320, maxWidth: .infinity, alignment: .top)
-
-                supportSection
-                    .frame(minWidth: 320, maxWidth: .infinity, alignment: .top)
+    private var brand: some View {
+        HStack(spacing: 14) {
+            Image("BrandMark").resizable().scaledToFill().frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 12.5, style: .continuous))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Jerreader").font(.title2.weight(.semibold))
+                Text("原版阅读 · 查词 · 翻译").font(.subheadline).foregroundStyle(.secondary)
             }
-            .frame(maxWidth: .infinity, alignment: .top)
-
-            VStack(spacing: 22) {
-                preferencesSection
-                supportSection
-                aboutSection
-            }
+            Spacer(minLength: 0)
         }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .background(JerreaderTheme.groupedRow, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .accessibilityElement(children: .combine)
     }
 
-    private var preferencesSection: some View {
-        settingsSection(
-            title: "偏好",
-            systemImage: "slider.horizontal.3"
-        ) {
-            settingsLink(
-                title: "界面主题",
-                detail: "选择 App 界面的整体色系",
-                systemImage: "paintpalette"
-            ) {
-                AppThemeColorSettingsView()
-            }
-            settingsDivider
-            settingsLink(
-                title: "默认阅读排版",
-                detail: "字体、间距、背景、翻页与日文版式",
-                systemImage: "textformat.size"
-            ) {
-                GlobalReaderDefaultsView()
-            }
-            settingsDivider
-            settingsLink(
-                title: "翻译与 AI",
-                detail: "服务商、三语互译、提示词与交互",
-                systemImage: "character.bubble"
-            ) {
-                TranslationSettingsDetailView(
-                    settings: translationSettings,
-                    quickSentenceEnabled: quickSentenceBinding,
-                    disablesTapPageTurnsDuringQuickTranslation:
-                        disablesTapPageTurnsDuringQuickTranslationBinding,
-                    showsQuickSentenceToggle: true
-                )
-            }
-        }
+    private func groupTitle(_ title: String) -> some View {
+        Text(title).font(.footnote).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20).padding(.top, 21).padding(.bottom, 5)
+            .accessibilityAddTraits(.isHeader)
     }
 
-    private var supportSection: some View {
-        settingsSection(
-            title: "支持",
-            systemImage: "info.circle"
-        ) {
-            settingsLink(
-                title: "操作指南",
-                detail: "导入、阅读、PDF/OCR 与 API 配置",
-                systemImage: "questionmark.circle"
-            ) {
-                AppGuideView()
-            }
-            settingsDivider
-            settingsLink(
-                title: "备份与恢复",
-                detail: "自选文件夹，备份书库、进度、生词与批注",
-                systemImage: "externaldrive"
-            ) {
-                LibraryBackupSettingsView(
-                    translationSettings: translationSettings
-                )
-            }
-            settingsDivider
-            settingsLink(
-                title: "数据与隐私",
-                detail: "本机数据、在线请求与密钥存储",
-                systemImage: "hand.raised"
-            ) {
-                DataPrivacySettingsView()
-            }
+    private var credit: some View {
+        VStack(spacing: 5) {
+            Text("Jerry Wong")
+                .font(.system(.footnote, design: .serif).weight(.semibold))
+                .foregroundStyle(JerreaderTheme.accent(for: themeColor))
+                .accessibilityIdentifier("developerCredit")
+            Text("Jerreader \(versionText)").font(.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier("appVersionLabel")
         }
+        .frame(maxWidth: .infinity).padding(.top, 12).padding(.bottom, 8)
     }
 
-    private var aboutSection: some View {
-        settingsSection(
-            title: "关于",
-            systemImage: "info.circle"
-        ) {
-            aboutRow(title: "Jerreader", value: versionText)
-            settingsDivider
-            aboutRow(title: "最低系统", value: "iOS 18")
-            settingsDivider
-            aboutRow(
-                title: "作者",
-                value: "Jerry Wong",
-                highlightsValue: true
-            )
-        }
-    }
-
-    private func settingsSection<Content: View>(
-        title: String,
-        systemImage: String,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            JerreaderLabel(title: title, icon: systemImage, size: 12)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.leading, 5)
-
-            VStack(spacing: 0) {
-                content()
-            }
-            .background(
-                JerreaderTheme.paper,
-                in: RoundedRectangle(cornerRadius: 15, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 15, style: .continuous)
-                    .stroke(JerreaderTheme.line, lineWidth: 0.7)
-            }
-        }
-    }
-
-    private func settingsLink<Destination: View>(
-        title: String,
-        detail: String,
-        systemImage: String,
+    /// A row in the style of the system Settings app: coloured icon, title, and
+    /// the current value on the trailing side.
+    /// - Parameter edge: the space after the chevron, which follows the page margin as in a system list.
+    private func row<Destination: View>(
+        _ title: String, value: String? = nil, warn: Bool = false, icon: String, color: Color,
+        id: String, position: GroupPosition, edge: CGFloat,
         @ViewBuilder destination: () -> Destination
     ) -> some View {
-        NavigationLink {
-            destination()
-        } label: {
-            HStack(spacing: 10) {
-                SettingsNavigationLabel(
-                    title: title,
-                    detail: detail,
-                    systemImage: systemImage
-                )
-                Spacer(minLength: 4)
-                JerreaderSymbol(name: "chevron.right", size: 13)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
+        // Large text puts the value under the title instead of squeezing both onto one line.
+        let text = typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2)) : AnyLayout(HStackLayout(spacing: 8))
+        return NavigationLink(destination: destination()) {
+            HStack(spacing: 14) {
+                Image(systemName: icon).font(.system(size: 17, weight: .medium)).foregroundStyle(.white)
+                    .frame(width: 32, height: 32)
+                    .background(color.gradient, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .accessibilityHidden(true)
+                text {
+                    Text(title).foregroundStyle(Color.primary).layoutPriority(1)
+                    if !typeSize.isAccessibilitySize { Spacer(minLength: 0) }
+                    if let value {
+                        Text(value).foregroundStyle(warn ? Color.orange : Color.secondary).lineLimit(1)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "chevron.right").font(.footnote.weight(.semibold))
+                    .foregroundStyle(Color(uiColor: .tertiaryLabel)).accessibilityHidden(true)
             }
-            .padding(.horizontal, 13)
-            .frame(minHeight: 60)
+            .padding(.leading, 16).padding(.trailing, edge).padding(.vertical, 6)
+            // The row takes whatever height the page hands it.
+            .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GroupedRowStyle(position: position, separatorInset: 62))
+        .accessibilityIdentifier(id)
+        .stretch(22)
     }
 
-    private var settingsDivider: some View {
-        Divider().padding(.leading, 45)
+    private var readerDefaultsSummary: String {
+        let theme = ReaderThemeChoice(rawValue: readerThemeRawValue) ?? .light
+        let mode = ReaderReadingMode(rawValue: readingModeRawValue) ?? .paginated
+        return "\(theme.title) · \(mode.title)"
     }
 
-    private func aboutRow(
-        title: String,
-        value: String,
-        highlightsValue: Bool = false
-    ) -> some View {
-        HStack {
-            Text(title)
-            Spacer()
-            Text(value)
-                .font(
-                    highlightsValue
-                        ? .system(.subheadline, design: .serif).weight(.semibold)
-                        : .subheadline
-                )
-                .foregroundStyle(
-                    highlightsValue ? JerreaderTheme.accent : .secondary
-                )
-        }
-        .font(.subheadline)
-        .padding(.horizontal, 13)
-        .frame(minHeight: 52)
-        .accessibilityElement(children: .combine)
+    private var aiModelsHasKey: Bool {
+        translationSettings.keyedProviderIDs.contains(translationSettings.aiProviders.activeID)
+    }
+
+    /// The provider in use, or 未设置 while it has no key.
+    private var aiModelsSummary: String {
+        let providers = translationSettings.aiProviders
+        return aiModelsHasKey ? providers.displayName(for: providers.activeID) : "未设置"
+    }
+
+    /// Orange only when translation already depends on the missing key.
+    private var aiModelsNeedKey: Bool {
+        !aiModelsHasKey && translationSettings.provider == .directAPI
     }
 
     private var quickSentenceBinding: Binding<Bool> {
@@ -301,28 +260,6 @@ private struct AppThemeColorSettingsView: View {
     }
 }
 
-private struct SettingsNavigationLabel: View {
-    let title: String
-    let detail: String
-    let systemImage: String
-
-    var body: some View {
-        Label {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .foregroundStyle(.primary)
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        } icon: {
-            JerreaderSymbol(name: systemImage)
-                .foregroundStyle(JerreaderTheme.accent)
-        }
-    }
-}
-
 private struct GlobalReaderDefaultsView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var books: [BookRecord]
@@ -340,12 +277,6 @@ private struct GlobalReaderDefaultsView: View {
     private var paragraphSpacing = 0.0
     @AppStorage(ReaderAppearanceDefaults.pageMarginsKey)
     private var pageMargins = 1.0
-    @AppStorage("reader.defaults.pageMarginTop")
-    private var pageMarginTop = 1.0
-    @AppStorage("reader.defaults.pageMarginBottom")
-    private var pageMarginBottom = 1.0
-    @AppStorage("reader.defaults.pageMarginHorizontal")
-    private var pageMarginHorizontal = 1.0
     @AppStorage(ReaderAppearanceDefaults.customBackgroundHexKey)
     private var customBackgroundHex = ""
     @AppStorage(ReaderAppearanceDefaults.customSelectionColorHexKey)
@@ -361,7 +292,6 @@ private struct GlobalReaderDefaultsView: View {
     @State private var didApply = false
     @State private var applyErrorMessage: String?
     @State private var synchronizationTask: Task<Void, Never>?
-    @State private var isPageMarginDetailExpanded = false
 
     var body: some View {
         Form {
@@ -454,36 +384,6 @@ private struct GlobalReaderDefaultsView: View {
                         .monospacedDigit()
                 }
                 Slider(value: $pageMargins, in: 0.5 ... 2, step: 0.1)
-
-                DisclosureGroup(isExpanded: $isPageMarginDetailExpanded) {
-                    VStack(spacing: 12) {
-                        pageMarginControl(
-                            title: "上",
-                            value: $pageMarginTop
-                        )
-                        pageMarginControl(
-                            title: "下",
-                            value: $pageMarginBottom
-                        )
-                        pageMarginControl(
-                            title: "左右",
-                            value: $pageMarginHorizontal
-                        )
-                    }
-                    .padding(.top, 6)
-                } label: {
-                    Label {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("分别设置")
-                            Text("上 / 下 / 左右")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    } icon: {
-                        Image(systemName: "rectangle.split.3x1")
-                            .foregroundStyle(JerreaderTheme.accent)
-                    }
-                }
             }
 
             Section("背景") {
@@ -692,20 +592,6 @@ private struct GlobalReaderDefaultsView: View {
         )
     }
 
-    private func pageMarginControl(
-        title: String,
-        value: Binding<Double>
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            LabeledContent(title) {
-                Text(value.wrappedValue.formatted(.number.precision(.fractionLength(1))))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            Slider(value: value, in: 0.5 ... 2, step: 0.1)
-        }
-    }
-
     private func applyToExistingBooks(showsConfirmation: Bool = true) {
         let preferences = currentEditorPreferences
         for book in books {
@@ -829,7 +715,7 @@ struct TranslationPreferencesSection: View {
                 Text(
                     quickSentenceEnabled
                         ? quickSentenceInteractionDescription
-                        : "关闭后，轻点正文只控制阅读界面；长按和拖动选区仍可翻译。"
+                        : "关闭后，EPUB 中轻点词语直接查词并记入学习记录，轻点空白处控制阅读界面；长按和拖动选区仍可翻译。"
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -927,33 +813,16 @@ struct TranslationPreferencesSection: View {
             }
 
             if settings.provider == .directAPI {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("选择 AI 服务商")
-                        .font(.subheadline.weight(.semibold))
-
-                    LazyVGrid(
-                        columns: [
-                            GridItem(
-                                .adaptive(minimum: 88, maximum: 132),
-                                spacing: 9
-                            )
-                        ],
-                        spacing: 8
-                    ) {
-                        ForEach(DirectAIProviderChoice.allCases) { provider in
-                            directProviderButton(provider)
-                        }
+                // Providers, keys and models live on their own page, as in the
+                // settings home's AI 大模型 row.
+                NavigationLink {
+                    AIModelsView(store: settings)
+                } label: {
+                    LabeledContent("AI 大模型") {
+                        Text(activeModelSummary).lineLimit(1)
                     }
                 }
-
-                SecureField(
-                    settings.directAPIProvider.keyPlaceholder,
-                    text: $settings.directAPIKey
-                )
-                .textContentType(.password)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .privacySensitive()
+                .accessibilityIdentifier("aiModelsLink")
 
                 configurationStatus(
                     message: settings.directAPIConfigurationMessage,
@@ -961,49 +830,6 @@ struct TranslationPreferencesSection: View {
                 )
 
                 connectionTestButton
-
-                AIModelPicker(configuration: AIModelCatalogConfiguration(
-                    api: settings.directAPIProvider == .anthropic ? .anthropic : settings.directAPIProvider == .gemini ? .gemini : .standard,
-                    endpoint: settings.directAPIProvider.usesCustomEndpoint ? settings.directAPIEndpoint : settings.directAPIProvider.defaultEndpointText,
-                    key: settings.directAPIKey), selectedModel: $settings.directAPIModel)
-
-                DisclosureGroup("高级配置") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        TextField("模型名称", text: $settings.directAPIModel)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-
-                        if settings.directAPIProvider.usesCustomEndpoint {
-                            TextField(
-                                "https://example.com/v1/chat/completions",
-                                text: $settings.directAPIEndpoint
-                            )
-                            .textContentType(.URL)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .keyboardType(.URL)
-                        }
-
-                        Text(
-                            settings.directAPIProvider.usesCustomEndpoint
-                                ? "兼容服务需要填写完整的 HTTPS Chat Completions 地址。"
-                                : "可刷新模型列表选择，也可手动填写服务商提供的模型 ID。"
-                        )
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 6)
-                }
-
-                DisclosureGroup("直接 API 说明") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("选择 GPT、Claude、Kimi 或其他服务商，再粘贴对应 API Key 即可。官方请求地址与初始模型会自动填写；只有“其他兼容服务”需要手动填写完整 HTTPS 地址。")
-                        Text("Key 按服务商分别保存在本机钥匙串中。直接调用会把本次选中文字发送给所选服务商，并可能产生少量 API 费用。")
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 6)
-                }
             } else if settings.provider == .backendProxy {
                 TextField(
                     "https://example.com/translate",
@@ -1066,16 +892,10 @@ struct TranslationPreferencesSection: View {
         .onChange(of: settings.targetLanguage) {
             resetConnectionTest()
         }
-        .onChange(of: settings.directAPIProvider) {
+        .onChange(of: settings.aiProviders) {
             resetConnectionTest()
         }
-        .onChange(of: settings.directAPIKey) {
-            resetConnectionTest()
-        }
-        .onChange(of: settings.directAPIModel) {
-            resetConnectionTest()
-        }
-        .onChange(of: settings.directAPIEndpoint) {
+        .onChange(of: settings.keyedProviderIDs) {
             resetConnectionTest()
         }
         .onChange(of: settings.backendEndpoint) {
@@ -1109,58 +929,11 @@ struct TranslationPreferencesSection: View {
         return "轻点正文翻译当前\(target)；点按左右边缘翻页。长按可智能补全，拖动手柄后按最终框选内容翻译。"
     }
 
-    private func directProviderButton(_ provider: DirectAIProviderChoice) -> some View {
-        let isSelected = settings.directAPIProvider == provider
-        return Button {
-            withAnimation(reduceMotion ? nil : JerreaderMotion.stateChange) {
-                settings.directAPIProvider = provider
-            }
-        } label: {
-            ZStack(alignment: .topTrailing) {
-                VStack(spacing: 7) {
-                    DirectAIProviderMark(
-                        provider: provider,
-                        isSelected: isSelected
-                    )
-                    Text(provider.title)
-                        .font(.caption.weight(.semibold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.72)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(JerreaderTheme.onPrimaryAction)
-                        .padding(7)
-                        .transition(.scale.combined(with: .opacity))
-                }
-            }
-            .foregroundStyle(isSelected ? JerreaderTheme.onPrimaryAction : JerreaderTheme.accent)
-            .frame(maxWidth: .infinity)
-            .frame(height: 68)
-            .background {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(
-                        isSelected
-                            ? AnyShapeStyle(JerreaderTheme.primaryAction)
-                            : AnyShapeStyle(JerreaderTheme.accentFill)
-                    )
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(JerreaderTheme.accent.opacity(isSelected ? 0 : 0.18), lineWidth: 1)
-            }
-            .shadow(
-                color: isSelected ? JerreaderTheme.shadow : .clear,
-                radius: 5,
-                y: 2
-            )
-        }
-        .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.96))
-        .accessibilityLabel("选择 \(provider.title)")
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    /// The provider and model in use, as the AI 大模型 row shows them.
+    private var activeModelSummary: String {
+        let entry = settings.aiProviders.active
+        let model = entry.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        return model.isEmpty ? entry.displayName : "\(entry.displayName) · \(model)"
     }
 
     private func configurationStatus(message: String, isReady: Bool) -> some View {
@@ -1261,8 +1034,8 @@ struct TranslationPreferencesSection: View {
             return "主服务短暂失败或超时后，会自动尝试 Apple 系统翻译。"
         case .directAPI:
             return settings.directAPIConfiguration == nil
-                ? "请先完成直接 AI API 配置，否则备用切换不会执行。"
-                : "主服务短暂失败或超时后，会把同一段选中文字发送给已配置的 AI API。"
+                ? "请先在「设置 → AI 大模型」填好 API Key，否则备用切换不会执行。"
+                : "主服务短暂失败或超时后，会把同一段选中文字发送给正在用的 AI 大模型。"
         case .backendProxy:
             return settings.backendConfiguration == nil
                 ? "请先完成 AI 代理配置，否则备用切换不会执行。"
@@ -1324,41 +1097,6 @@ struct TranslationPreferencesSection: View {
         connectionTestTask?.cancel()
         connectionTestTask = nil
         connectionTestState = .idle
-    }
-}
-
-private struct DirectAIProviderMark: View {
-    let provider: DirectAIProviderChoice
-    let isSelected: Bool
-
-    var body: some View {
-        Group {
-            if let image = UIImage(named: provider.localLogoAssetName) {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .padding(4)
-            } else {
-                Text(provider.fallbackMark)
-                    .font(
-                        .system(
-                            size: provider.fallbackMark.count == 1 ? 14 : 10,
-                            weight: .bold,
-                            design: .rounded
-                        )
-                    )
-                    .minimumScaleFactor(0.72)
-                    .lineLimit(1)
-                    .padding(.horizontal, 3)
-            }
-        }
-        .foregroundStyle(isSelected ? JerreaderTheme.onPrimaryAction : JerreaderTheme.accent)
-        .frame(width: 28, height: 28)
-        .background(
-            isSelected ? Color.white.opacity(0.16) : JerreaderTheme.accent.opacity(0.10),
-            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-        )
-        .accessibilityHidden(true)
     }
 }
 

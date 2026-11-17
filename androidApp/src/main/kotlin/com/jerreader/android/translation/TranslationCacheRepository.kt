@@ -92,6 +92,16 @@ class TranslationCacheRepository(
     private fun explanationRequest(request: ContextExplanationRequest): TranslationRequest =
         TranslationRequest(
             text = buildString {
+                // Each lens question, companion mode and hint level is its own answer.
+                request.lens?.let { lens ->
+                    append("lens-v1\u001F")
+                    append(lens.mode.storageId).append('\u001F')
+                    append(lens.companionMode.storageId).append('\u001F')
+                    append(lens.assistLevel.storageId).append('\u001F')
+                    append(lens.adaptiveInstruction.orEmpty()).append('\u001F')
+                    append(lens.focusTerms.joinToString("\u001D"))
+                    append("\u001E")
+                }
                 if (request.isWordLookup) {
                     append("word-lookup-v2\u001E")
                     append(request.dictionaryEntry.orEmpty().take(1_000))

@@ -39,12 +39,13 @@ fun OfflineDictionaryScreen(store: OfflineDictionaryPackageStore, models: com.je
                     onClick = { job = scope.launch { store.remove() } }) { Text("卸载") }
             }
         } }
+        // iOS asks for caption but its links still come out at body size.
         item { Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             LearningButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, JapaneseChineseLexicon.LICENSE.toUri())) }) {
-                Text("中日词典 · CC BY-SA 4.0", style = MaterialTheme.typography.labelMedium)
+                Text("中日词典 · CC BY-SA 4.0", style = MaterialTheme.typography.bodyLarge)
             }
             LearningButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, OfflineDictionaryManifest.LICENSE.toUri())) }) {
-                Text("ECDICT · MIT", style = MaterialTheme.typography.labelMedium)
+                Text("ECDICT · MIT", style = MaterialTheme.typography.bodyLarge)
             }
         } }
     }

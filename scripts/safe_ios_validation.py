@@ -21,9 +21,17 @@ MODES = {"doctor", "host-test", "build", "analyze", "test", "ui-test", "android"
 POLL_SECONDS = 5
 COOL_SECONDS = 30
 COOL_TIMEOUT = 300
-# Admission controls a waiting job, never kills a running job for load alone.
-# Replaces the fixed 50 abort ceiling at the user's request on 2026-10-05.
-QUEUE_LOAD_THRESHOLD = 150.0
+# Load average and thermal throttling are recorded but never queue, delay or
+# stop a job (user decision, 2026-11-13). Evidence: both documented WindowServer
+# watchdog crashes happened below CPU saturation (one on an idle machine), in the
+# display driver, while runs at load 200+ completed. The load gate (50 abort,
+# then the 150 queue threshold of 2026-10-05) and the thermal stop only made
+# jobs fail. Serial locking, foreign-build detection, memory, disk and deadlines
+# are unchanged. See docs/IOS_SAFE_TESTING.md.
+# Simulator/emulator phases still prefer to start on a settled host: wait for
+# load <= 2.5 per logical core (20 on this 8-thread host; raised from 1 at the
+# user's request on 2026-11-12), but only up to COOL_TIMEOUT, then continue.
+COOL_LOAD_PER_CPU = 2.5
 QUEUE_TIMEOUT = 3600
 _DAEMON_LOG_STATES = {}
 
@@ -72,10 +80,18 @@ def verify_test_report(report):
         raise PhaseFailure("xcresult does not show any passing tests with zero failures; inspect the result bundle") from error
 
 
+# Telemetry commands (ps, sysctl, pmset, ...) may take this long before the
+# monitor counts as unavailable and the run fails closed. Raised from 8 to 30 s
+# at the user's request on 2026-11-13: during simulator boot at load ~250, `ps`
+# took longer than 8 s and stopped XCTest before any test ran. Thresholds and
+# fail-closed behaviour are unchanged.
+MONITOR_COMMAND_TIMEOUT = 30
+
+
 def read(command, env=None):
     try:
         return subprocess.check_output(command, text=True, stderr=subprocess.PIPE,
-                                       timeout=8, env=env).strip()
+                                       timeout=MONITOR_COMMAND_TIMEOUT, env=env).strip()
     except (OSError, subprocess.SubprocessError) as error:
         raise MonitorUnavailable("health/configuration command failed: " + shlex.join(command)) from error
 
@@ -113,19 +129,18 @@ def health():
         read(["/usr/bin/pmset", "-g", "therm"]), shutil.disk_usage(ROOT).free)
 
 
-def unsafe(sample, starting=False, allow_thermal_throttling=False):
-    # Load is handled by admission/queueing. Other protections remain active.
+def unsafe(sample, starting=False):
+    # Only memory and disk stop or queue work. sample["load"] and
+    # sample["throttled"] stay in health.jsonl for diagnosis.
     if sample["pressure"] != 1 or sample["memory_free"] < (20 if starting else 15):
         return "memory pressure/free memory is unsafe"
-    if sample["throttled"] and not allow_thermal_throttling:
-        return "macOS reports thermal/performance throttling"
     if sample["disk_gib"] < 12:
         return "less than 12 GiB of disk space remains"
     return None
 
 
-def cool(sample, allow_thermal_throttling=False, allow_high_load=False):
-    return not unsafe(sample, starting=True, allow_thermal_throttling=allow_thermal_throttling) and (allow_high_load or sample["load"] <= sample["cpus"])
+def cool(sample, allow_high_load=False):
+    return not unsafe(sample, starting=True) and (allow_high_load or sample["load"] <= sample["cpus"] * COOL_LOAD_PER_CPU)
 
 
 def gradle_log_state(text):
@@ -311,10 +326,10 @@ def options(argv, env):
     if not queue_timeout.isdecimal() or not 1 <= int(queue_timeout) <= 43200:
         raise SafetyError("queue timeout must be 1 to 43200 seconds")
     # Off by default. Set only on a command explicitly authorized by the user;
-    # never persist this exception in project settings or a shell profile.
-    thermal_exception = env.get("JERREADER_SESSION_ALLOW_THERMAL_THROTTLING", "0")
-    if thermal_exception not in ("0", "1"):
-        raise SafetyError("session thermal exception must be 0 or 1")
+    # never persist these exceptions in project settings or a shell profile.
+    # JERREADER_SESSION_ALLOW_THERMAL_THROTTLING is obsolete and ignored:
+    # throttling no longer stops anything. The load exception now only skips
+    # the bounded settle wait between simulator/emulator phases.
     load_exception = env.get("JERREADER_SESSION_ALLOW_HIGH_LOAD", "0")
     if load_exception not in ("0", "1"):
         raise SafetyError("session load exception must be 0 or 1")
@@ -360,7 +375,7 @@ def options(argv, env):
     return dict(mode=mode, config=config, jobs=jobs, filters=filters,
                 udid=udid, destination=destination, dry=env.get("JERREADER_DRY_RUN") == "1",
                 queue_timeout=int(queue_timeout), android_scope=android_scope, android_variant=android_variant, android_release_smoke=release_smoke == "1",
-                allow_thermal_throttling=thermal_exception == "1", allow_high_load=load_exception == "1",
+                allow_high_load=load_exception == "1",
                 allow_external_activity=external_exception == "1")
 
 
@@ -403,7 +418,7 @@ class Supervisor:
     def check(self, phase, starting=False, group=None):
         sample = health()
         self.record(phase, sample)
-        reason = unsafe(sample, starting, allow_thermal_throttling=self.opts["allow_thermal_throttling"])
+        reason = unsafe(sample, starting)
         if reason:
             raise SafetyError(reason + ": " + json.dumps(sample))
         if self.opts["allow_external_activity"]:
@@ -437,13 +452,10 @@ class Supervisor:
         self.record(phase, sample)
         if sample["disk_gib"] < 12:
             raise SafetyError("less than 12 GiB of disk space remains")
-        reason = unsafe(sample, starting=True, allow_thermal_throttling=self.opts["allow_thermal_throttling"])
         # A known queue condition already prevents launch. Avoid contacting
-        # CoreSimulator while an overloaded host/foreign build is starting it;
+        # CoreSimulator while memory is short or a foreign build is starting it;
         # the full inventory is still required once these conditions clear.
-        if sample["load"] > QUEUE_LOAD_THRESHOLD and not self.opts["allow_high_load"]:
-            return reason or "load %.2f is high; waiting for <= %g" % (
-                sample["load"], QUEUE_LOAD_THRESHOLD)
+        reason = unsafe(sample, starting=True)
         if reason:
             return reason
         if not self.opts["allow_external_activity"]:
@@ -557,24 +569,30 @@ class Supervisor:
         say(phase + " passed")
 
     def cooldown(self, phase):
-        say(phase + (": require 30 continuous seconds of resource stability; session load exception active"
-                     if self.opts["allow_high_load"] else ": require 30 continuous seconds of load <= one/core; maximum wait 5 minutes"))
+        """Bounded settle wait before a simulator/emulator phase.
+
+        Load never stops the run: after COOL_TIMEOUT the next phase starts
+        anyway. Memory, disk and foreign work still stop it through check().
+        """
+        say(phase + (": wait for 30 continuous seconds of resource stability; session load exception active"
+                     if self.opts["allow_high_load"] else ": wait up to 5 minutes for 30 continuous seconds of load <= %g/core" % COOL_LOAD_PER_CPU))
         started = time.monotonic()
         stable_since = None
         last_message = started
+        sample = None
         while time.monotonic() - started < COOL_TIMEOUT:
             sample = self.check(phase)
             now = time.monotonic()
             stable_since = (stable_since if stable_since is not None else now) if cool(
-                sample, allow_thermal_throttling=self.opts["allow_thermal_throttling"],
-                allow_high_load=self.opts["allow_high_load"]) else None
+                sample, allow_high_load=self.opts["allow_high_load"]) else None
             if stable_since is not None and now - stable_since >= COOL_SECONDS:
                 return
             if now - last_message >= 45:
                 say(phase + ": waiting; load=%.2f" % sample["load"])
                 last_message = now
             time.sleep(POLL_SECONDS)
-        raise SafetyError("system did not settle within 5 minutes; no simulator/test restart")
+        say(phase + ": load did not settle within 5 minutes%s; continuing, load alone does not stop a run"
+            % ("" if sample is None else " (load=%.2f)" % sample["load"]))
 
     def common(self):
         return [str(self.developer / "usr/bin/xcodebuild"), "-project", str(ROOT / "Jerreader.xcodeproj"),
@@ -638,6 +656,15 @@ class Supervisor:
         suites = [(name, [learning + source + ".swift" for source in sources], harness)
                   for name, sources, harness in suites]
         suites.append(("model-catalog", ["Jerreader/Data/Services/AIModelCatalogService.swift"], "test_model_catalog"))
+        suites.append(("ai-providers", ["Jerreader/Core/Models/LanguageCode.swift",
+                                        "Jerreader/Core/Models/TranslationPreferences.swift",
+                                        "Jerreader/Core/Models/AIProviderSettings.swift"], "test_ai_providers"))
+        # Same cases as the Android ParityFixturesTest, read from shared/parity/.
+        suites.append(("parity-fixtures", [learning + "WordReviewState.swift", learning + "SentencePractice.swift",
+                                           "Jerreader/Data/Services/LibraryBackupPruner.swift",
+                                           "Jerreader/Core/Models/LanguageCode.swift",
+                                           learning + "ReadingCompanion.swift",
+                                           "Jerreader/Core/Services/ReadingLens.swift"], "test_parity_fixtures"))
         sdk = read(["/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path"], self.env)
         out = ROOT / ".build/SafeHostTests"
         out.mkdir(parents=True, exist_ok=True)
@@ -673,10 +700,8 @@ def main(argv):
     reason = None
     try:
         opts = options(argv, os.environ)
-        if opts["allow_thermal_throttling"]:
-            say("explicit session exception: thermal throttling is recorded but does not stop this command; other checks remain active")
         if opts["allow_high_load"]:
-            say("explicit session exception: load is recorded but does not delay this command; serial lock and other checks remain active")
+            say("explicit session exception: the settle wait between simulator/emulator phases ignores load; serial lock and other checks remain active")
         if opts["allow_external_activity"]:
             say("explicit session exception: unrelated builds/devices do not block this command; own jobs remain serial and cleanup only owns descendants/selected device")
         if Path.cwd().resolve() != ROOT or not (ROOT / "Jerreader.xcodeproj/project.pbxproj").is_file():
@@ -743,7 +768,6 @@ def main(argv):
         if supervisor and supervisor.logdir:
             summary = dict(mode=supervisor.opts["mode"], outcome=outcome,
                            reason=reason, last_health=supervisor.latest,
-                           allow_thermal_throttling=supervisor.opts["allow_thermal_throttling"],
                            allow_high_load=supervisor.opts["allow_high_load"],
                            allow_external_activity=supervisor.opts["allow_external_activity"])
             (supervisor.logdir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")

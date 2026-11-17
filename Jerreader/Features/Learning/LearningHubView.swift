@@ -156,6 +156,9 @@ private struct LearningPracticeView: View {
     @ObservedObject var translationSettings: TranslationSettingsStore
     @Query(filter: #Predicate<WordLookupRecord> { $0.isFavorite }) private var words: [WordLookupRecord]
     @Query private var sentences: [TranslationFavoriteRecord]
+    /// Every lookup, not just favourites: repeated lookups are what the map reads.
+    @Query private var lookups: [WordLookupRecord]
+    @State private var confusion: ReadingConfusionMap?
 
     var body: some View {
         LearningPage {
@@ -173,6 +176,9 @@ private struct LearningPracticeView: View {
                 Text("先回忆，再看释义；每组最多 10 个词。")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            if let confusion {
+                ReadingConfusionMapCard(confusion: confusion, showsBookTitle: true)
+            }
             Text("练习与积累").font(.headline)
             VStack(spacing: 0) {
                 NavigationLink { SentencePracticeView() } label: {
@@ -187,6 +193,10 @@ private struct LearningPracticeView: View {
                     tool("阅读成长报告", detail: "回顾本周阅读与复习记录", icon: "chart.bar")
                 }
             }.buttonStyle(.plain).jerreaderPaperCard(padding: 0)
+        }
+        // Rebuilt each time the page appears, so a review just finished shows up.
+        .task {
+            confusion = ReadingConfusionMapPolicy.build(ReadingCompanionSignals.from(lookups))
         }
     }
 

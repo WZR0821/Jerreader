@@ -18,6 +18,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import org.json.JSONObject
+import org.json.JSONTokener
 import org.readium.r2.navigator.Selection
 import org.readium.r2.navigator.epub.EpubNavigatorFragment
 import org.readium.r2.navigator.input.InputListener
@@ -32,7 +34,9 @@ class ReaderWordInteractionController(
     private val languageHint: () -> LanguageCode?,
     private val onStateChanged: (WordLookupCardState) -> Unit,
     private val shortTapEnabled: () -> Boolean = { true },
-    private val onSelectionInvalidated: (() -> Unit)? = null
+    private val onSelectionInvalidated: (() -> Unit)? = null,
+    /** A short tap that landed on no word, so the reader can show or hide its bars. */
+    private val onBlankTap: (() -> Unit)? = null
 ) {
     private val analyzer = WordMorphologyAnalyzer(AndroidWordBoundaryTokenizer())
     private var navigator: EpubNavigatorFragment? = null
@@ -63,7 +67,9 @@ class ReaderWordInteractionController(
             if (!shortTapEnabled()) return false
             invalidateForNewLookup()
             lookupJob?.cancel()
-            lookupJob = scope.launch { lookupAt(toCssPoint(event.point)) }
+            lookupJob = scope.launch {
+                lookupAt(event.point, pointIsReadiumPixels = true, reportsBlankTap = true)
+            }
             // Readium filters links and other interactive elements before this
             // callback. Consuming a plain tap gives it one meaning: word lookup.
             return true
@@ -110,33 +116,63 @@ class ReaderWordInteractionController(
         startLookup(analysis)
     }
 
-    /**
-     * Readium reports taps in navigator view pixels; `caretRangeFromPoint`
-     * expects CSS pixels, which equal dp on a `width=device-width` page.
-     */
-    private fun toCssPoint(point: PointF): PointF {
-        val density = navigator?.publicationView?.resources?.displayMetrics?.density ?: 0f
-        if (density <= 0f) return PointF(point.x, point.y)
-        return PointF(point.x / density, point.y / density)
-    }
-
     fun lookupSelectionFromMenu() {
         invalidateForNewLookup()
         lookupJob?.cancel()
         lookupJob = scope.launch { lookupCurrentSelection() }
     }
 
-    internal suspend fun lookupAt(point: PointF): WordLookupCardState? {
+    /**
+     * `pointIsReadiumPixels` is true for a real tap: Readium reports it in
+     * navigator pixels (CSS pixels times this WebView's devicePixelRatio).
+     * Tests pass CSS pixels directly.
+     */
+    internal suspend fun lookupAt(
+        point: PointF,
+        pointIsReadiumPixels: Boolean = false,
+        reportsBlankTap: Boolean = false
+    ): WordLookupCardState? {
         val navigator = navigator ?: return null
-        val selected = navigator.evaluateJavascript(shortTapSelectionScript(point))
-        if (selected != "true") {
+        val selected = navigator.evaluateJavascript(
+            shortTapSelectionScript(point, pointIsReadiumPixels)
+        )?.let(::decodeSelectedWord)
+        if (selected == null) {
             navigator.clearSelection()
+            // As on iOS, a tap on no word still shows or hides the bars.
+            if (reportsBlankTap) onBlankTap?.invoke()
             return null
         }
-        val selection = navigator.currentSelection() ?: return null
-        val analysis = analyzeSelection(selection, WordSelectionSource.SHORT_TAP)
-            ?: return null
+        // The DOM selection and Readium's native Selection flow do not update
+        // atomically, so currentSelection() could still be null or the
+        // previous word here. The script that hit-tested the glyph already
+        // knows the exact word and its neighbours; that payload is the input.
+        val analysis = analyzer.analyze(
+            WordAnalysisRequest(
+                text = selected.highlight,
+                languageHint = languageHint(),
+                source = WordSelectionSource.SHORT_TAP
+            )
+        )?.copy(sentenceContext = selected.context) ?: return null
         return lookupNow(analysis)
+    }
+
+    private fun decodeSelectedWord(raw: String): SelectedWord? {
+        if (raw == "null" || raw == "false") return null
+        val decoded = runCatching { JSONTokener(raw).nextValue() }.getOrNull()
+        val json = when (decoded) {
+            is JSONObject -> decoded
+            // evaluateJavascript hands back a JSON.stringify result as a quoted string.
+            is String -> runCatching { JSONObject(decoded) }.getOrNull()
+            else -> null
+        } ?: return null
+        val highlight = json.optString("highlight").trim()
+        if (highlight.isEmpty()) return null
+        val context = buildString {
+            append(json.optString("before"))
+            append(highlight)
+            append(json.optString("after"))
+        }.trim().takeIf(String::isNotBlank)
+        return SelectedWord(highlight = highlight, context = context)
     }
 
     internal fun analyzeSelectedTextForTesting(
@@ -220,10 +256,19 @@ class ReaderWordInteractionController(
         }
     }
 
-    private fun shortTapSelectionScript(point: PointF): String = """
+    private fun shortTapSelectionScript(point: PointF, pointIsReadiumPixels: Boolean): String {
+        val scale = if (pointIsReadiumPixels) {
+            "Math.max(Number(window.devicePixelRatio) || 1, 0.0001)"
+        } else {
+            "1"
+        }
+        return """
         (() => {
-          const x = ${point.x};
-          const y = ${point.y};
+          // Undo Readium's DPR scaling in the document that produced the
+          // point; the Android display density can differ on scaled WebViews.
+          const pointScale = $scale;
+          const x = ${point.x} / pointScale;
+          const y = ${point.y} / pointScale;
           let range = null;
           if (document.caretRangeFromPoint) {
             range = document.caretRangeFromPoint(x, y);
@@ -236,15 +281,30 @@ class ReaderWordInteractionController(
             }
           }
           if (!range || !range.startContainer || range.startContainer.nodeType !== Node.TEXT_NODE) {
-            return false;
+            return null;
           }
           const node = range.startContainer;
           const parent = node.parentElement;
           if (!parent || parent.closest('a,button,input,textarea,select,option,video,audio,rt,rp')) {
-            return false;
+            return null;
           }
+          if (!node.data || !node.data.length) return null;
+          // The tap has to land on a glyph, not just near one: caretRangeFromPoint
+          // always answers, even for a margin or the blank end of a chapter.
+          const hitOffset = Math.max(0, Math.min(range.startOffset, node.data.length - 1));
+          const hitProbe = document.createRange();
+          hitProbe.setStart(node, hitOffset);
+          hitProbe.setEnd(node, Math.min(hitOffset + 1, node.data.length));
+          let hitDistance = Number.POSITIVE_INFINITY;
+          for (const rect of hitProbe.getClientRects()) {
+            if (rect.width <= 0.5 && rect.height <= 0.5) continue;
+            const dx = Math.max(rect.left - x, 0, x - rect.right);
+            const dy = Math.max(rect.top - y, 0, y - rect.bottom);
+            hitDistance = Math.min(hitDistance, dx * dx + dy * dy);
+          }
+          if (!(hitDistance <= ${TAP_PROXIMITY_PX * TAP_PROXIMITY_PX})) return null;
           const selection = window.getSelection();
-          if (!selection || typeof selection.modify !== 'function') return false;
+          if (!selection || typeof selection.modify !== 'function') return null;
           const caretOffset = range.startOffset;
           const probe = node.data.charAt(Math.max(0, Math.min(caretOffset, node.data.length - 1)));
           const japaneseTap = /[\u3040-\u30FF\u3400-\u9FFF]/.test(probe);
@@ -293,12 +353,12 @@ class ReaderWordInteractionController(
             selection.modify('move', 'backward', 'word');
             selection.modify('extend', 'forward', 'word');
           }
-          if (!selection.rangeCount) return false;
+          if (!selection.rangeCount) return null;
           let selectedRange = selection.getRangeAt(0);
           let selectedText = selection.toString();
           if (!/[A-Za-z\u00C0-\u024F\u3040-\u30FF\u3400-\u9FFF]/.test(selectedText)) {
             selection.removeAllRanges();
-            return false;
+            return null;
           }
 
           // Chromium can split Japanese auxiliaries from the lexical stem.
@@ -314,12 +374,37 @@ class ReaderWordInteractionController(
               selectedText = selection.toString();
             }
           }
-          return selectedText.trim().length > 0;
+          // Readium's native selection bridge listens for this; addRange()
+          // alone does not raise it on every WebView version.
+          document.dispatchEvent(new Event('selectionchange'));
+          if (!selectedText.trim().length) return null;
+          selectedRange = selection.getRangeAt(0);
+          let before = '';
+          let after = '';
+          if (selectedRange.startContainer === node && selectedRange.endContainer === node) {
+            before = node.data.substring(
+              Math.max(0, selectedRange.startOffset - ${CONTEXT_SIDE_LIMIT}),
+              selectedRange.startOffset
+            );
+            after = node.data.substring(
+              selectedRange.endOffset,
+              Math.min(node.data.length, selectedRange.endOffset + ${CONTEXT_SIDE_LIMIT})
+            );
+          }
+          return JSON.stringify({highlight: selectedText, before, after});
         })()
-    """.trimIndent()
+        """.trimIndent()
+    }
+
+    private data class SelectedWord(
+        val highlight: String,
+        val context: String?
+    )
 
     private companion object {
         const val LOOKUP_MENU_ITEM_ID = 0x4A455257
         const val CONTEXT_SIDE_LIMIT = 120
+        /** How far (CSS px) from a glyph a tap may land and still count as on it. */
+        const val TAP_PROXIMITY_PX = 28
     }
 }

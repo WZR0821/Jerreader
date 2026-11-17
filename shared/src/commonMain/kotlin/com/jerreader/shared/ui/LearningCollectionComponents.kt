@@ -79,7 +79,7 @@ fun JerreaderSearchField(
                     Text(
                         text = placeholder,
                         style = MaterialTheme.typography.bodyMedium.copy(fontSize = 17.sp, lineHeight = 22.sp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                        color = LocalJerreaderColors.current.secondaryText.copy(alpha = .3f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -187,20 +187,28 @@ fun JerreaderCollectionControls(
             verticalAlignment = Alignment.CenterVertically,
             content = content
         )
-        JerreaderDivider()
+        JerreaderOverlaidDivider()
     }
 }
 
-/** Bold title over a grey explanatory line, the iOS plain-list section header. */
+/**
+ * Bold title over a grey explanatory line, the iOS plain-list section header.
+ * Measured against iOS: the title's ink starts 35.3 points under the card
+ * above, the two lines' ink 23 apart, and the next card 15.3 under the grey
+ * line. The list's 8-point top margin lands between the first header
+ * ([leading]) and its card there, so that card sits 7.4 points lower.
+ */
 @Composable
 fun JerreaderCollectionSectionHeader(
     title: String,
     detail: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    leading: Boolean = false
 ) {
     Column(
-        modifier = modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(top = 16.dp, bottom = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        modifier = modifier.fillMaxWidth().padding(horizontal = 20.dp)
+            .padding(top = if (leading) 17.7.dp else 16.9.dp, bottom = if (leading) 8.dp else 0.3.dp),
+        verticalArrangement = Arrangement.spacedBy(3.3.dp)
     ) {
         Text(
             text = title,
@@ -211,7 +219,7 @@ fun JerreaderCollectionSectionHeader(
         Text(
             text = detail,
             style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .5f)
+            color = LocalJerreaderColors.current.secondaryText.copy(alpha = .3f)
         )
     }
 }
@@ -275,7 +283,7 @@ fun JerreaderWordRecordRow(
                 Text(
                     text = "→ $lemma",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.plainSecondary
                 )
             }
             Spacer(modifier = Modifier.weight(1f))
@@ -285,7 +293,7 @@ fun JerreaderWordRecordRow(
             Text(
                 text = reading,
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.plainSecondary
             )
         }
         if (definitions.isNotBlank()) {
@@ -306,14 +314,14 @@ fun JerreaderWordRecordRow(
                 Text(
                     text = partOfSpeech,
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.plainSecondary
                 )
             }
             Spacer(modifier = Modifier.weight(1f))
             Text(
                 text = trailingNote,
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.plainSecondary,
                 maxLines = 1
             )
         }
@@ -384,10 +392,12 @@ fun JerreaderTranslationFavoriteRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            // In an iOS List row a Label centres its icon 14 points in and
+            // starts the title 44 in, whatever the icon's size.
             JerreaderGlyph(
                 icon = JerreaderIcon.DICTIONARY,
                 tint = colors.accent,
-                modifier = Modifier.size(18.dp)
+                modifier = Modifier.padding(start = 5.dp, end = 15.dp).size(18.dp)
             )
             Text(
                 text = languagePair,
@@ -399,7 +409,7 @@ fun JerreaderTranslationFavoriteRow(
             Text(
                 text = trailingNote,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .5f)
+                color = MaterialTheme.colorScheme.plainTertiary
             )
             trailing()
         }
@@ -413,7 +423,7 @@ fun JerreaderTranslationFavoriteRow(
         Text(
             text = sourceText,
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = MaterialTheme.colorScheme.plainSecondary,
             maxLines = 3,
             overflow = TextOverflow.Ellipsis
         )
@@ -424,13 +434,13 @@ fun JerreaderTranslationFavoriteRow(
             ) {
                 JerreaderGlyph(
                     icon = JerreaderIcon.BOOK_CLOSED,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .5f),
-                    modifier = Modifier.size(16.dp)
+                    tint = MaterialTheme.colorScheme.plainTertiary,
+                    modifier = Modifier.padding(start = 6.dp, end = 17.dp).size(16.dp)
                 )
                 Text(
                     text = bookTitle,
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .5f),
+                    color = MaterialTheme.colorScheme.plainTertiary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )

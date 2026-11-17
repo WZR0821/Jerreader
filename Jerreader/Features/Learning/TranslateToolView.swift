@@ -444,16 +444,26 @@ struct TranslateToolView: View {
         return lookupRecords.first { $0.id == wordLookupResultID }
     }
 
+    /// The page fills the room between the section bar and the tab bar
+    /// exactly: the translator card takes whatever height is left over, and a
+    /// long result or dictionary entry scrolls inside the card, so the page
+    /// itself never moves. With the keyboard up, large text or a short screen
+    /// it scrolls as usual.
     var body: some View {
-        ScrollView {
-            VStack(spacing: 14) {
+        OneScreenPage(identifier: "standalone-translation-page") { _ in
+            FillStack {
                 modeAndProviderBar
                 translatorCard
-                wordLookupContent
-                providerHelp
+                    .padding(.top, 14)
+                    .stretch(.infinity)
+                    .squeezes()
                 if let errorMessage {
                     errorCard(errorMessage)
+                        .padding(.top, 12)
                 }
+                providerHelp
+                    .padding(.top, 12)
+                    .shrinks()
             }
             .padding(.horizontal, JerreaderTheme.pagePadding)
             .padding(.vertical, 16)
@@ -541,29 +551,37 @@ struct TranslateToolView: View {
         }
     }
 
+    /// Spare height goes mostly to the result: the input grows a little, the
+    /// output takes the rest. When height is short, the output gives way.
     private var translatorCard: some View {
-        VStack(spacing: 0) {
+        FillStack {
             languageBar
 
             Divider()
 
             sourceInput
+                .stretch(30)
 
             Divider()
                 .padding(.horizontal, 14)
 
             translationOutput
+                .stretch(.infinity)
+                .squeezes()
         }
         .background(
             JerreaderTheme.paper,
             in: RoundedRectangle(cornerRadius: 16, style: .continuous)
         )
+        // The language bar's tint follows the card's rounded corners.
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(JerreaderTheme.line, lineWidth: 0.8)
         }
     }
 
+    /// Shown under the result, inside the card's scrolling output.
     @ViewBuilder
     private var wordLookupContent: some View {
         if mode == .word, isLookingUpWord {
@@ -576,7 +594,7 @@ struct TranslateToolView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(14)
                 .background(
-                    JerreaderTheme.paper,
+                    JerreaderTheme.mutedSurface.opacity(0.72),
                     in: RoundedRectangle(cornerRadius: 14, style: .continuous)
                 )
         } else if mode == .word, let wordLookupResult {
@@ -628,7 +646,7 @@ struct TranslateToolView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
             .background(
-                JerreaderTheme.paper,
+                JerreaderTheme.mutedSurface.opacity(0.72),
                 in: RoundedRectangle(cornerRadius: 14, style: .continuous)
             )
         }
@@ -712,10 +730,12 @@ struct TranslateToolView: View {
     private var sourceInput: some View {
         VStack(alignment: .leading, spacing: 12) {
             TextField(mode.placeholder, text: $inputText, axis: .vertical)
-                .lineLimit(mode == .word ? 2 ... 4 : 4 ... 10)
+                .lineLimit(mode == .word ? 2 ... 4 : 3 ... 10)
                 .focused($isInputFocused)
                 .font(.body)
                 .accessibilityIdentifier("standalone-translation-input")
+
+            Spacer(minLength: 0)
 
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 10) {
@@ -731,12 +751,26 @@ struct TranslateToolView: View {
             }
         }
         .padding(16)
-        .frame(minHeight: mode == .word ? 118 : 142, alignment: .top)
+        // The area takes the height the card hands it; the count and the
+        // translate button stay at its foot.
+        .frame(
+            maxWidth: .infinity,
+            minHeight: mode == .word ? 118 : 142,
+            maxHeight: .infinity,
+            alignment: .top
+        )
+        .background {
+            // A tap on the empty part of the area starts typing, as a tap on
+            // the field would. The field and the buttons sit in front of it.
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture { isInputFocused = true }
+                .accessibilityHidden(true)
+        }
     }
 
-    @ViewBuilder
     private var translationOutput: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 JerreaderLabel(title: targetLanguage.displayName, icon: "text.bubble", size: 15)
                     .font(.caption.weight(.semibold))
@@ -753,55 +787,77 @@ struct TranslateToolView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .padding(.horizontal, 16)
+
+            // A long result or dictionary entry scrolls here; the page stays
+            // put. The scroll area spans the card's width so the dictionary
+            // card's shadow is not cut off at its sides.
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    outputText
+                    wordLookupContent
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 4)
+            }
+            .scrollBounceBehavior(.basedOnSize)
 
             if let result {
-                if japaneseFuriganaEnabled, result.sourceLanguage == .japanese {
-                    Text("原文注音").font(.caption).foregroundStyle(.secondary)
-                    JapaneseFuriganaText(text: result.sourceText)
-                        .accessibilityIdentifier("japanese-source-furigana")
-                }
-                if japaneseFuriganaEnabled, targetLanguage == .japanese {
-                    JapaneseFuriganaText(text: result.translatedText)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .accessibilityIdentifier("standalone-translation-result")
-                } else {
-                    Text(result.translatedText)
-                        .font(.body)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .accessibilityIdentifier("standalone-translation-result")
-                }
-
                 resultActions(result)
-            } else if isTranslating {
-                HStack(spacing: 9) {
-                    ProgressView().controlSize(.small)
-                    Text(
-                        mode == .word
-                            ? "正在查词或准备翻译…"
-                            : provider == .apple
-                            ? "正在准备 Apple 翻译…"
-                            : "正在请求 AI 翻译…"
-                    )
-                    .foregroundStyle(.secondary)
-                }
-                .font(.subheadline)
-            } else {
-                Text("译文会显示在这里")
-                    .font(.body)
-                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 16)
             }
         }
-        .padding(16)
+        .padding(.vertical, 16)
         .frame(
             maxWidth: .infinity,
             minHeight: mode == .word ? 104 : 126,
+            maxHeight: .infinity,
             alignment: .topLeading
         )
         .animation(
             reduceMotion ? nil : JerreaderMotion.stateChange,
             value: result?.translatedText
         )
+    }
+
+    @ViewBuilder
+    private var outputText: some View {
+        if let result {
+            if japaneseFuriganaEnabled, result.sourceLanguage == .japanese {
+                Text("原文注音").font(.caption).foregroundStyle(.secondary)
+                JapaneseFuriganaText(text: result.sourceText)
+                    .accessibilityIdentifier("japanese-source-furigana")
+            }
+            if japaneseFuriganaEnabled, targetLanguage == .japanese {
+                JapaneseFuriganaText(text: result.translatedText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("standalone-translation-result")
+            } else {
+                Text(result.translatedText)
+                    .font(.body)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("standalone-translation-result")
+            }
+        } else if isTranslating {
+            HStack(spacing: 9) {
+                ProgressView().controlSize(.small)
+                Text(
+                    mode == .word
+                        ? "正在查词或准备翻译…"
+                        : provider == .apple
+                        ? "正在准备 Apple 翻译…"
+                        : "正在请求 AI 翻译…"
+                )
+                .foregroundStyle(.secondary)
+            }
+            .font(.subheadline)
+        } else {
+            Text("译文会显示在这里")
+                .font(.body)
+                .foregroundStyle(.secondary)
+        }
     }
 
     private var inputCount: some View {
@@ -898,6 +954,7 @@ struct TranslateToolView: View {
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 2)
+            .accessibilityIdentifier("standalone-translation-provider-help")
     }
 
     private func errorCard(_ message: String) -> some View {
@@ -943,7 +1000,10 @@ struct TranslateToolView: View {
         case .apple:
             return "Apple 系统翻译；首次使用某个语言方向时会提示下载语言包，下载后可离线使用。"
         case .directAPI:
-            return "AI API · \(translationSettings.directAPIProvider.title)；服务与模型可在「设置 → 翻译与 AI」中配置。"
+            let entry = translationSettings.aiProviders.active
+            let model = entry.model.trimmingCharacters(in: .whitespacesAndNewlines)
+            let name = model.isEmpty ? entry.displayName : "\(entry.displayName) · \(model)"
+            return "AI 大模型 · \(name)；可在「设置 → AI 大模型」换模型或添加供应商。"
         case .backendProxy:
             return "AI 代理；使用你在「设置 → 翻译与 AI」中配置的 HTTPS 服务。"
         }
@@ -1043,7 +1103,7 @@ struct TranslateToolView: View {
                 isTranslating = false
                 activeRequestID = nil
                 errorMessage = provider == .directAPI
-                    ? "AI API 尚未配置完成，请先到「设置 → 翻译与 AI」填写 API Key 和模型。"
+                    ? "AI 大模型还没设置好，请先到「设置 → AI 大模型」填写 API Key 并选择模型。"
                     : "AI 代理尚未配置完成，请先到「设置 → 翻译与 AI」填写 HTTPS 地址。"
                 return
             }
@@ -1069,6 +1129,8 @@ struct TranslateToolView: View {
                 endpoint: base.endpoint,
                 model: base.model,
                 apiKey: base.apiKey,
+                style: base.style,
+                reasoning: base.reasoning,
                 translationPromptTemplate: mode.translationPrompt(
                     fallback: base.translationPromptTemplate
                 ),

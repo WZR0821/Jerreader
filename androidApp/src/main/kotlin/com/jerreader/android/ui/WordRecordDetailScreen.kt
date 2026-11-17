@@ -13,6 +13,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
@@ -20,6 +22,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.jerreader.shared.ui.plainSecondary
+import com.jerreader.shared.ui.plainTertiary
 import com.jerreader.android.data.WordLookupEntity
 import com.jerreader.android.data.GrammarNoteEntity
 import com.jerreader.android.learning.LearningRecordRepository
@@ -46,8 +50,8 @@ fun WordRecordDetailScreen(record: WordLookupEntity, repository: LearningRecordR
             Column(Modifier.widthIn(max = 760.dp).fillMaxSize().verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp).padding(top = 14.dp, bottom = 32.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface,
-                    border = BorderStroke(.75.dp, MaterialTheme.colorScheme.outline), shadowElevation = 4.dp) {
+                Surface(modifier = Modifier.paperCardShadow(18.dp), shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(.75.dp, MaterialTheme.colorScheme.outline)) {
                     Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
                         Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -94,7 +98,7 @@ fun WordRecordDetailScreen(record: WordLookupEntity, repository: LearningRecordR
                             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                 Row(Modifier.fillMaxWidth().clickable(role = Role.Button) { aiExpanded = !aiExpanded }, verticalAlignment = Alignment.CenterVertically) {
                                     Text("展开 AI 语境建议", Modifier.weight(1f))
-                                    JerreaderGlyph(if (aiExpanded) JerreaderIcon.CHEVRON_DOWN else JerreaderIcon.CHEVRON_FORWARD, accent, Modifier.size(14.dp))
+                                    com.jerreader.shared.ui.JerreaderDisclosureChevron(aiExpanded, tint = accent)
                                 }
                                 if (aiExpanded) {
                                     SavedWordSection("AI 语境建议（需结合原句核对）", analysis)
@@ -161,8 +165,8 @@ private fun SavedWordSection(title: String, text: String) {
 }
 
 @Composable
-private fun SavedWordAction(title: String, icon: JerreaderIcon, active: Boolean = false, enabled: Boolean = true,
-    modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun SavedWordAction(title: String, icon: JerreaderIcon, modifier: Modifier = Modifier, active: Boolean = false,
+    enabled: Boolean = true, onClick: () -> Unit) {
     Column(modifier.clickable(enabled = enabled, role = Role.Button, onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(7.dp)) {
         Box(Modifier.size(38.dp).background(if (active) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.background,
@@ -176,8 +180,25 @@ private fun SavedWordAction(title: String, icon: JerreaderIcon, active: Boolean 
 @Composable
 private fun SavedWordDate(title: String, timestamp: Long, modifier: Modifier) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Text(title, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .5f))
+        Text(title, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.plainTertiary)
         Text(DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT, Locale.SIMPLIFIED_CHINESE).format(Date(timestamp)),
-            style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.plainSecondary)
     }
+}
+
+/**
+ * The shadow of the iOS paper card: black at 7 %, blurred about 10 points and
+ * dropped 3. A Material elevation shadow is three times as dark at the edge
+ * and half as long.
+ */
+private fun Modifier.paperCardShadow(cornerRadius: androidx.compose.ui.unit.Dp) = drawBehind {
+    val paint = android.graphics.Paint().apply {
+        isAntiAlias = true
+        color = android.graphics.Color.argb(18, 0, 0, 0)
+        // Skia blurs with sigma = 0.577 × radius + 0.5; 17 points gives a sigma near 10.
+        maskFilter = android.graphics.BlurMaskFilter(17.dp.toPx(), android.graphics.BlurMaskFilter.Blur.NORMAL)
+    }
+    val drop = 3.dp.toPx()
+    val corner = cornerRadius.toPx()
+    drawContext.canvas.nativeCanvas.drawRoundRect(0f, drop, size.width, size.height + drop, corner, corner, paint)
 }

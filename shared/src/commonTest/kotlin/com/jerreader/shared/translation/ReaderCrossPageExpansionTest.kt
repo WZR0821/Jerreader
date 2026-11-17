@@ -73,6 +73,39 @@ class ReaderCrossPageExpansionTest {
     }
 
     @Test
+    fun splitsSpokenLinesThatHaveNoTerminator() {
+        val text = "「待てよ」「どういうことだ」敦也がいった。"
+        val expected = mapOf("待て" to "「待てよ」", "どういう" to "「どういうことだ」", "敦也" to "敦也がいった。")
+        for ((target, sentence) in expected) {
+            val range = ReaderSentenceSegmenter.sentenceRange(text, text.indexOf(target), LanguageCode.JAPANESE)
+            assertEquals(sentence, range?.let { text.substring(it) }, target)
+        }
+    }
+
+    @Test
+    fun keepsAQuoteUsedAsANounInItsSentence() {
+        for (sentence in listOf("「待てよ」の一言で彼は止まった。", "最初の言葉は「待てよ」だった。")) {
+            val text = sentence + "次の話。"
+            val range = ReaderSentenceSegmenter.sentenceRange(text, text.indexOf("待て"), LanguageCode.JAPANESE)
+            assertEquals(sentence, range?.let { text.substring(it) })
+        }
+    }
+
+    @Test
+    fun keepsTheMarkThatFollowsASpokenLine() {
+        val text = "「待てよ」。敦也がいった。"
+        val range = ReaderSentenceSegmenter.sentenceRange(text, 1, LanguageCode.JAPANESE)
+        assertEquals("「待てよ」。", range?.let { text.substring(it) })
+    }
+
+    @Test
+    fun startsANewSentenceAtAnAdverbAfterASpokenLine() {
+        val text = "「待てよ」もう遅い。"
+        val range = ReaderSentenceSegmenter.sentenceRange(text, text.indexOf("遅い"), LanguageCode.JAPANESE)
+        assertEquals("もう遅い。", range?.let { text.substring(it) })
+    }
+
+    @Test
     fun stillSplitsWhenTheQuoteNeverCloses() {
         // A half-quoted paragraph must not collapse into a single sentence.
         val text = "「何だよ、それ。手頃なあばらやって"

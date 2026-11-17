@@ -10,10 +10,12 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalDensity
@@ -100,6 +102,17 @@ private fun surface(dark: Boolean, level: Int): Color = if (dark) {
 }
 
 
+/**
+ * SwiftUI's `.secondary` on text in the app's own rows and cards: the foreground
+ * at half strength (127 on white, measured). System-styled text, such as form
+ * headers and footers or a LabeledContent value, gets secondaryLabel instead,
+ * which is `onSurfaceVariant`.
+ */
+val ColorScheme.plainSecondary: Color get() = onSurface.copy(alpha = .5f)
+
+/** SwiftUI's `.tertiary` on the same text: the foreground at a quarter. */
+val ColorScheme.plainTertiary: Color get() = onSurface.copy(alpha = .25f)
+
 fun jerreaderColorScheme(accent: JerreaderAccent, dark: Boolean): ColorScheme {
     val colors = jerreaderColors(accent, dark)
     val onSurface = if (dark) Color.White else Color.Black
@@ -162,6 +175,53 @@ private val jerreaderTypography = Typography(
     labelMedium = TextStyle(fontSize = 12.sp, lineHeight = 14.5.sp, letterSpacing = 0.sp),
     labelSmall = TextStyle(fontSize = 11.sp, lineHeight = 13.sp)
 )
+
+/**
+ * SwiftUI's line height, kept even by a line on its own. The default style
+ * pads a lone line of Chinese that is shorter than the CJK font back out to
+ * the font's height (about 1.45 em), which leaves titles, labels, group titles
+ * and two-line rows 2–4 points further apart than on iOS. The tight mode holds
+ * the line height and lets the glyphs reach past it, as SwiftUI does.
+ */
+val ExactSystemLineHeight = LineHeightStyle(
+    LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both, LineHeightStyle.Mode.Tight
+)
+
+/**
+ * SwiftUI gives a line of Chinese the height of the system font's line, the
+ * same as a line of Latin text. Compose grows a line to the taller CJK
+ * fallback font unless the line height is enforced on every line, which is
+ * what this does, so text-heavy pages stack up the way they do on iOS.
+ *
+ * With the default [style] the first and last lines of a block are still
+ * padded out to the CJK font (about 1.45 em), so a line on its own keeps that
+ * height; the pages tuned against iOS with that behaviour use it.
+ * [ExactSystemLineHeight] holds every line, a lone one included, to the line height.
+ */
+fun Typography.withSystemLineHeights(
+    style: LineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None)
+): Typography {
+    fun TextStyle.fixed() = copy(lineHeightStyle = style)
+    return copy(
+        displayLarge = displayLarge.fixed(), displayMedium = displayMedium.fixed(), displaySmall = displaySmall.fixed(),
+        headlineLarge = headlineLarge.fixed(), headlineMedium = headlineMedium.fixed(), headlineSmall = headlineSmall.fixed(),
+        titleLarge = titleLarge.fixed(), titleMedium = titleMedium.fixed(), titleSmall = titleSmall.fixed(),
+        bodyLarge = bodyLarge.fixed(), bodyMedium = bodyMedium.fixed(), bodySmall = bodySmall.fixed(),
+        labelLarge = labelLarge.fixed(), labelMedium = labelMedium.fixed(), labelSmall = labelSmall.fixed()
+    )
+}
+
+/** Lays [content] out with [withSystemLineHeights] applied to the current type scale. */
+@Composable
+fun SystemLineHeights(content: @Composable () -> Unit) {
+    val typography = MaterialTheme.typography
+    MaterialTheme(
+        colorScheme = MaterialTheme.colorScheme,
+        typography = remember(typography) { typography.withSystemLineHeights() },
+        shapes = MaterialTheme.shapes,
+        content = content
+    )
+}
 
 /** Matches the iOS 16pt card radius used from 1.1.0. */
 private val jerreaderShapes = Shapes(

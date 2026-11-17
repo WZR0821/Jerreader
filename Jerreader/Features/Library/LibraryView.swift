@@ -182,7 +182,9 @@ struct LibraryView: View {
                 isImporting: isImporting,
                 onImporterResult: handleImporterResult
             )
-            .presentationDetents([.medium, .large])
+            // Full height from the start: the format grid comes first, and at
+            // the medium detent it pushed the "选择文档" button below the fold.
+            .presentationDetents([.large])
             .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $isShowingBackupRestore) {
@@ -254,6 +256,7 @@ struct LibraryView: View {
             }
 #if DEBUG
             startSelectionUITestImportIfNeeded()
+            startSampleBookUITestImportIfNeeded()
 #endif
         }
         .onChange(of: incomingBookURL) {
@@ -478,6 +481,41 @@ struct LibraryView: View {
         didStartSelectionUITestImport = true
         Task { @MainActor in
             await importBook(from: fixtureURL, opensAfterImport: true)
+        }
+    }
+
+    /// Opens a book for reader layout and tap-translation checks through the
+    /// normal importer. A tester may first copy a DRM-free EPUB of their own
+    /// into this app's `tmp/JerreaderUITestBook.epub` on the simulator; that
+    /// copy is imported (a second launch reopens it). Without one, a short
+    /// original Japanese text is imported as TXT. No book or host path is kept
+    /// in the project, and the hook is compiled out of Release builds.
+    @MainActor
+    private func startSampleBookUITestImportIfNeeded() {
+        guard ProcessInfo.processInfo.arguments.contains("--jerreader-sample-book-ui-test"),
+              !didStartSelectionUITestImport
+        else { return }
+
+        didStartSelectionUITestImport = true
+        let fileManager = FileManager.default
+        let temporary = fileManager.temporaryDirectory
+        let placedBook = temporary.appendingPathComponent("JerreaderUITestBook.epub")
+        let url: URL
+        do {
+            if fileManager.fileExists(atPath: placedBook.path) {
+                // Import a copy so the placed book survives for the next launch.
+                url = temporary.appendingPathComponent("JerreaderUITestBook-import.epub")
+                try? fileManager.removeItem(at: url)
+                try fileManager.copyItem(at: placedBook, to: url)
+            } else {
+                url = temporary.appendingPathComponent("Jerreader 测试书.txt")
+                try SampleBookUITestText.body.write(to: url, atomically: true, encoding: .utf8)
+            }
+        } catch {
+            return
+        }
+        Task { @MainActor in
+            await importBook(from: url, opensAfterImport: true)
         }
     }
 #endif
@@ -1601,7 +1639,7 @@ private struct BookImportOptionsView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("先选择文件格式")
                             .font(.headline)
-                        Text("系统文件选择器会隐藏其他格式，查找大文件夹时更省时间。")
+                        Text("系统文件选择器里，其他格式的文件会变灰、不能选。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
@@ -1620,8 +1658,7 @@ private struct BookImportOptionsView: View {
                                     }
                                 } label: {
                                     VStack(spacing: 7) {
-                                        Image(systemName: format.systemImage)
-                                            .font(.title3)
+                                        JerreaderSymbol(name: format.icon, size: 20)
                                         Text(format.title)
                                             .font(.caption.weight(.semibold))
                                     }
@@ -1638,7 +1675,7 @@ private struct BookImportOptionsView: View {
                                     )
                                 }
                                 .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.97))
-                                .accessibilityLabel("只显示 \(format.accessibilityTitle)")
+                                .accessibilityLabel("只选 \(format.accessibilityTitle)")
                             }
                         }
                     }
@@ -1649,8 +1686,8 @@ private struct BookImportOptionsView: View {
                     } label: {
                         TransferMethodCard(
                             title: "选择\(selectedFormat.filePickerTitle)",
-                            description: "从“文件”、iCloud Drive、下载目录或外接存储中选择。系统会交给Jerreader一个只读副本，不会直接打开或写回原文件；当前只显示\(selectedFormat.filePickerDescription)。",
-                            systemImage: "folder.fill",
+                            description: "从“文件”、iCloud Drive、下载目录或外接存储中选择。系统会交给Jerreader一个只读副本，不会直接打开或写回原文件；当前只能选\(selectedFormat.filePickerDescription)，其他格式会变灰。",
+                            icon: "FOLDER",
                             showsDisclosure: true
                         )
                     }
@@ -1660,16 +1697,16 @@ private struct BookImportOptionsView: View {
                     TransferMethodCard(
                         title: "其他 App 与隔空投送",
                         description: "在微信、Safari、邮件或 AirDrop 收到支持的文档后，选择“用Jerreader打开”即可导入。",
-                        systemImage: "square.and.arrow.down.fill"
+                        icon: "DOWNLOAD"
                     )
 
                     TransferMethodCard(
                         title: "电脑文件共享",
-                        description: "用 Mac 的 Finder 或 Windows Apple Devices 将文档复制到Jerreader，然后通过上方“文件与 iCloud Drive”选择它。",
-                        systemImage: "laptopcomputer.and.iphone"
+                        description: "用 Mac 的 Finder 或 Windows Apple Devices 将文档复制到Jerreader，然后在上方从“文件”里选择它。",
+                        icon: "EXTERNAL_DRIVE"
                     )
 
-                    Label("支持 EPUB、PDF、DOCX 和 TXT；扫描 PDF 可按需使用本机 OCR。不支持受 DRM 保护的书籍、旧式 .doc 或整本上传翻译。", systemImage: "info.circle")
+                    JerreaderLabel(title: "支持 EPUB、PDF、DOCX 和 TXT；扫描 PDF 可按需使用本机 OCR。不支持受 DRM 保护的书籍、旧式 .doc 或整本上传翻译。", icon: "INFO", size: 13)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1767,13 +1804,13 @@ private struct CopyingDocumentPicker: UIViewControllerRepresentable {
 private struct TransferMethodCard: View {
     let title: String
     let description: String
-    let systemImage: String
+    /// A key from the shared icon library, so Android draws the same glyph.
+    let icon: String
     var showsDisclosure = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
-            Image(systemName: systemImage)
-                .font(.title3)
+            JerreaderSymbol(name: icon, size: 22)
                 .foregroundStyle(JerreaderTheme.accent)
                 .frame(width: 44, height: 44)
                 .background(
@@ -1850,13 +1887,14 @@ private enum BookImportFormatFilter: String, CaseIterable, Identifiable {
         }
     }
 
-    var systemImage: String {
+    /// Shared icon keys; the Android import sheet uses the same ones.
+    var icon: String {
         switch self {
-        case .all: return "square.grid.2x2"
-        case .epub: return "books.vertical.fill"
-        case .pdf: return "doc.richtext.fill"
-        case .docx: return "doc.text.fill"
-        case .text: return "text.document.fill"
+        case .all: return "GRID"
+        case .epub: return "BOOKS"
+        case .pdf: return "DOC_PDF"
+        case .docx: return "DOC_WORD"
+        case .text: return "DOC_PLAIN"
         }
     }
 
@@ -1900,3 +1938,25 @@ private extension String {
         return normalized.isEmpty ? nil : normalized
     }
 }
+
+#if DEBUG
+/// Original text written for UI automation; several sentences per paragraph so
+/// sentence and paragraph translation can be told apart.
+private enum SampleBookUITestText {
+    static let body = """
+    第一章　朝の図書館
+    春の朝、ミナは駅前の小さな図書館へ向かった。空は薄い青で、風はまだ少し冷たかった。彼女は鞄の中の古いノートを何度も確かめた。
+    図書館の扉を開けると、紙の匂いがふわりと広がった。受付の田中さんは「おはよう、今日も早いね」と笑った。ミナは小さく頭を下げて、窓際の席に座った。
+    机の上には、昨日読みかけた本が置いてあった。表紙は色あせていたが、文字ははっきりと読めた。彼女はしおりを外して、続きのページを開いた。
+    その本には、海の向こうの町の話が書かれていた。町の人々は毎朝パンを焼き、夕方には港で歌を歌った。ミナはいつかその町を訪ねてみたいと思った。
+    昼が近づくと、館内は少しずつにぎやかになった。子どもたちは絵本の棚の前に座り込み、大人たちは新聞を広げた。ミナはノートに気になった言葉を書き写した。
+    「この言葉はどういう意味だろう」と彼女はつぶやいた。辞書を引くと、思っていたより深い意味があった。彼女は鉛筆で丁寧に説明を書き加えた。
+    午後になると、外では雨が降り始めた。窓ガラスを伝う水の筋が、ゆっくりと形を変えていった。ミナは雨の音を聞きながら、静かにページをめくった。
+    第二章　雨の午後
+    雨はなかなか止まなかった。田中さんは温かいお茶を入れて、ミナの机にそっと置いた。「無理をしないでね」と言われ、彼女は少し照れくさそうに笑った。
+    本の中では、主人公が古い地図を見つけていた。地図には、誰も知らない小道が細い線で描かれていた。ミナは息をのんで、次の行を読み進めた。
+    夕方、雨はようやく上がった。雲の切れ間から、やわらかな光が差し込んだ。ミナはノートを閉じて、明日もここに来ようと決めた。
+    帰り道、水たまりに空が映っていた。彼女は一歩ずつ確かめるように歩いた。家に着くころには、町の灯りが一つ、また一つとともり始めた。
+    """
+}
+#endif

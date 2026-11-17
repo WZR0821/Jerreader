@@ -60,13 +60,33 @@ object ReaderSentenceSegmenter {
      */
     private const val SPEECH_CLOSERS = "」』”’"
 
-    /** Japanese quotation helpers that continue the sentence after a mark. */
-    private val JAPANESE_QUOTE_PARTICLES = listOf("って", "などと", "なんて")
-
-    /** `と`-initial words that begin a new sentence rather than quote one. */
-    private val JAPANESE_INDEPENDENT_STARTERS = listOf(
-        "とても", "ところ", "とにかく", "とはいえ", "とは言え", "とりあえず", "とうとう"
+    /**
+     * What keeps a sentence going after a closing quote: a quotative
+     * (「本当？」と, って) or a particle that makes the quote a noun
+     * (「待てよ」の一言, 「はい」を, 「はい」だった). The same lists as the iOS
+     * `ReaderSentenceSegmenter`.
+     */
+    private val JAPANESE_QUOTE_PARTICLES = listOf(
+        "って", "と", "など", "なんて", "なんか", "の", "を", "が", "は", "も",
+        "に", "へ", "で", "や", "から", "まで", "より", "だ", "じゃ", "しか",
+        "ばかり", "くらい", "ぐらい", "こそ", "さえ", "すら"
     )
+
+    /** Words that begin a new sentence although they start like a particle. */
+    private val JAPANESE_INDEPENDENT_STARTERS = listOf(
+        "とても", "ところ", "とにかく", "とはいえ", "とは言え", "とりあえず",
+        "とうとう", "ともかく", "とたん", "とつぜん", "ときどき",
+        "もう", "もし", "もっと", "もちろん", "もともと",
+        "やがて", "やっと", "やはり", "やっぱり", "はっと", "はっきり",
+        "にっこり", "にやり", "しかし", "しかも",
+        "だが", "だから", "だけど", "だけれど", "でも、"
+    )
+
+    /**
+     * Punctuation right after a closing quote: 「待てよ」。 ends at the mark,
+     * and 「待てよ」、と… keeps going.
+     */
+    private const val JAPANESE_QUOTE_FOLLOWERS = "。．.！!？?、，,…‥・：:；;"
 
     /** Range of the sentence containing [offset], or null when out of bounds. */
     fun sentenceRange(text: String, offset: Int, language: LanguageCode?): IntRange? {
@@ -139,9 +159,17 @@ object ReaderSentenceSegmenter {
         while (after < text.length && text[after] in CLOSING_MARKS) after++
         val closedQuote = closesSpeech || after > index + 1
         if (japanese) {
-            // 「本当？」と彼は…… keeps running: a quotation particle right after a
-            // closing mark means the sentence has not ended yet.
-            if (closedQuote && continuesAfterJapaneseQuote(text, after)) return false
+            if (closedQuote) {
+                var probe = after
+                while (probe < text.length && text[probe].isWhitespace()) probe++
+                // 「待てよ」。 ends at the 。 that follows, not before it.
+                if (closesSpeech && text.getOrNull(probe)?.let { it in JAPANESE_QUOTE_FOLLOWERS } == true) {
+                    return false
+                }
+                // 「本当？」と彼は…… keeps running: a quotation particle right
+                // after a closing mark means the sentence has not ended yet.
+                if (continuesAfterJapaneseQuote(text, probe)) return false
+            }
         } else if (closedQuote) {
             // "Stop!" he said. — a lower-case word after the closing quote
             // continues the same sentence.
@@ -154,9 +182,8 @@ object ReaderSentenceSegmenter {
     }
 
     private fun continuesAfterJapaneseQuote(text: String, after: Int): Boolean {
-        if (JAPANESE_QUOTE_PARTICLES.any { text.startsWith(it, after) }) return true
-        if (!text.startsWith("と", after)) return false
-        return JAPANESE_INDEPENDENT_STARTERS.none { text.startsWith(it, after) }
+        if (JAPANESE_INDEPENDENT_STARTERS.any { text.startsWith(it, after) }) return false
+        return JAPANESE_QUOTE_PARTICLES.any { text.startsWith(it, after) }
     }
 
     /** Keeps `J. K. Rowling`, `U.S.` and `3.14` inside one sentence. */

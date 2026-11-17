@@ -10,7 +10,7 @@ enum TranslationProviderChoice: String, CaseIterable, Codable, Identifiable, Sen
     var title: String {
         switch self {
         case .apple: return "Apple 系统翻译"
-        case .directAPI: return "AI API（直接）"
+        case .directAPI: return "AI 大模型"
         case .backendProxy: return "AI 代理"
         }
     }
@@ -18,7 +18,7 @@ enum TranslationProviderChoice: String, CaseIterable, Codable, Identifiable, Sen
     var shortTitle: String {
         switch self {
         case .apple: return "Apple"
-        case .directAPI: return "AI API"
+        case .directAPI: return "AI 大模型"
         case .backendProxy: return "AI 代理"
         }
     }
@@ -40,7 +40,7 @@ enum TranslationFallbackChoice: String, CaseIterable, Codable, Identifiable, Sen
         switch self {
         case .none: return "不自动切换"
         case .apple: return "Apple 系统翻译"
-        case .directAPI: return "AI API（直接）"
+        case .directAPI: return "AI 大模型"
         case .backendProxy: return "AI 代理"
         }
     }
@@ -56,10 +56,15 @@ enum TranslationFallbackChoice: String, CaseIterable, Codable, Identifiable, Sen
 }
 
 enum DirectAIProviderChoice: String, CaseIterable, Codable, Identifiable, Sendable {
-    case openAI
+    // Raw values are stored in settings and keychain accounts; keep them.
     case anthropic
-    case kimi
+    case openAI
     case deepSeek
+    case qwen
+    case doubao
+    case kimi
+    case zhipu
+    case minimax
     case gemini
     case openAICompatible
 
@@ -67,12 +72,16 @@ enum DirectAIProviderChoice: String, CaseIterable, Codable, Identifiable, Sendab
 
     var title: String {
         switch self {
-        case .openAI: return "GPT"
         case .anthropic: return "Claude"
-        case .kimi: return "Kimi"
+        case .openAI: return "ChatGPT"
         case .deepSeek: return "DeepSeek"
+        case .qwen: return "通义千问"
+        case .doubao: return "豆包"
+        case .kimi: return "Kimi"
+        case .zhipu: return "智谱 GLM"
+        case .minimax: return "MiniMax"
         case .gemini: return "Gemini"
-        case .openAICompatible: return "其他兼容服务"
+        case .openAICompatible: return "自定义 API"
         }
     }
 
@@ -81,67 +90,38 @@ enum DirectAIProviderChoice: String, CaseIterable, Codable, Identifiable, Sendab
     /// remote images. The UI always has a brand-neutral text fallback.
     var localLogoAssetName: String {
         switch self {
-        case .openAI: return "ProviderLogoOpenAI"
         case .anthropic: return "ProviderLogoAnthropic"
-        case .kimi: return "ProviderLogoKimi"
+        case .openAI: return "ProviderLogoOpenAI"
         case .deepSeek: return "ProviderLogoDeepSeek"
+        case .qwen: return "ProviderLogoQwen"
+        case .doubao: return "ProviderLogoDoubao"
+        case .kimi: return "ProviderLogoKimi"
+        case .zhipu: return "ProviderLogoZhipu"
+        case .minimax: return "ProviderLogoMiniMax"
         case .gemini: return "ProviderLogoGemini"
         case .openAICompatible: return "ProviderLogoCompatible"
         }
     }
 
+    /// The letter on the provider's mark when no licensed logo is bundled.
     var fallbackMark: String {
         switch self {
-        case .openAI: return "GPT"
         case .anthropic: return "C"
+        case .openAI: return "G"
+        case .deepSeek: return "D"
+        case .qwen: return "通"
+        case .doubao: return "豆"
         case .kimi: return "K"
-        case .deepSeek: return "DS"
-        case .gemini: return "G"
+        case .zhipu: return "智"
+        case .minimax: return "M"
+        case .gemini: return "✦"
         case .openAICompatible: return "API"
         }
     }
 
-    var defaultEndpointText: String {
-        switch self {
-        case .openAI:
-            return "https://api.openai.com/v1/responses"
-        case .anthropic:
-            return "https://api.anthropic.com/v1/messages"
-        case .kimi:
-            return "https://api.moonshot.cn/v1/chat/completions"
-        case .deepSeek:
-            return "https://api.deepseek.com/chat/completions"
-        case .gemini:
-            return "https://generativelanguage.googleapis.com/v1beta"
-        case .openAICompatible:
-            return ""
-        }
-    }
-
+    /// The model a newly added provider uses first.
     var defaultModel: String {
-        switch self {
-        case .openAI: return "gpt-5.6-luna"
-        case .anthropic: return "claude-sonnet-5"
-        case .kimi: return "kimi-k2.6"
-        case .deepSeek: return "deepseek-v4-flash"
-        case .gemini: return "gemini-3.5-flash"
-        case .openAICompatible: return ""
-        }
-    }
-
-    var usesCustomEndpoint: Bool {
-        self == .openAICompatible
-    }
-
-    var keyPlaceholder: String {
-        switch self {
-        case .openAI: return "OpenAI API Key"
-        case .anthropic: return "Claude API Key"
-        case .kimi: return "Kimi API Key"
-        case .deepSeek: return "DeepSeek API Key"
-        case .gemini: return "Gemini API Key"
-        case .openAICompatible: return "API Key"
-        }
+        modelPresets.first?.id ?? ""
     }
 }
 
@@ -278,9 +258,13 @@ struct BackendTranslationConfiguration: Equatable, Sendable {
 
 struct DirectAITranslationConfiguration: Equatable, Sendable {
     let provider: DirectAIProviderChoice
+    /// The full request URL; for Gemini's own format, the address the model path is added to.
     let endpoint: URL
     let model: String
     let apiKey: String
+    let style: AIAPIStyle
+    /// `nil` is 自动.
+    let reasoning: AIReasoningEffort?
     let translationPromptTemplate: String
     let grammarAnalysisPromptTemplate: String
 
@@ -289,6 +273,8 @@ struct DirectAITranslationConfiguration: Equatable, Sendable {
         endpoint: URL,
         model: String,
         apiKey: String,
+        style: AIAPIStyle? = nil,
+        reasoning: AIReasoningEffort? = nil,
         translationPromptTemplate: String = AIPromptTemplateDefaults.translation,
         grammarAnalysisPromptTemplate: String =
             AIPromptTemplateDefaults.grammarAnalysis
@@ -297,6 +283,8 @@ struct DirectAITranslationConfiguration: Equatable, Sendable {
         self.endpoint = endpoint
         self.model = model
         self.apiKey = apiKey
+        self.style = style ?? provider.legacyStyle
+        self.reasoning = reasoning
         self.translationPromptTemplate = translationPromptTemplate
         self.grammarAnalysisPromptTemplate = grammarAnalysisPromptTemplate
     }

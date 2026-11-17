@@ -206,18 +206,20 @@ struct BackendTranslationService: TranslationService, ContextExplanationService 
         request.httpBody = try JSONEncoder().encode(
             ExplanationRequestBody(
                 task: "explain",
-                analysisMode: "grammar",
+                analysisMode: explanationRequest.lens?.mode.rawValue ?? "grammar",
                 text: focusedText,
                 context: context,
                 sourceLanguage: explanationRequest.sourceLanguage?.rawValue,
                 responseLanguage: explanationRequest.responseLanguage.rawValue,
                 model: configuration.model,
-                prompt: AIPromptTemplateDefaults.rendered(
-                    configuration.grammarAnalysisPromptTemplate,
-                    sourceLanguage: explanationRequest.sourceLanguage,
-                    responseLanguage: explanationRequest.responseLanguage,
-                    fallback: AIPromptTemplateDefaults.grammarAnalysis
-                ) + explanationRequest.lookupInstruction
+                prompt: explanationRequest.systemInstruction(
+                    grammarPrompt: AIPromptTemplateDefaults.rendered(
+                        configuration.grammarAnalysisPromptTemplate,
+                        sourceLanguage: explanationRequest.sourceLanguage,
+                        responseLanguage: explanationRequest.responseLanguage,
+                        fallback: AIPromptTemplateDefaults.grammarAnalysis
+                    )
+                )
             )
         )
 
@@ -326,14 +328,26 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
     }
 
     static func providerVersion(for configuration: DirectAITranslationConfiguration) -> String {
-        let value = [
+        var parts = [
             configuration.provider.rawValue,
             configuration.endpoint.absoluteString,
             configuration.model,
             configuration.translationPromptTemplate,
             configuration.grammarAnalysisPromptTemplate,
-            "jerreader-direct-api-v1",
-        ].joined(separator: "\u{001F}")
+            // v2: the context is tagged and the request says not to
+            // translate it, so results cached from v1 prompts, which some
+            // models answered with the whole paragraph, are not reused.
+            "jerreader-direct-api-v2",
+        ]
+        // Added only when set, so a configuration in its provider's original
+        // format keeps the cache identity it had before formats were chosen.
+        if configuration.style != configuration.provider.legacyStyle {
+            parts.append("style:" + configuration.style.rawValue)
+        }
+        if let reasoning = configuration.reasoning {
+            parts.append("reasoning:" + reasoning.rawValue)
+        }
+        let value = parts.joined(separator: "\u{001F}")
         let digest = SHA256.hash(data: Data(value.utf8))
         return digest.prefix(12).map { String(format: "%02x", $0) }.joined()
     }
@@ -451,12 +465,14 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
             throw ServiceError.invalidConfiguration
         }
 
-        let systemInstruction = AIPromptTemplateDefaults.rendered(
-            configuration.grammarAnalysisPromptTemplate,
-            sourceLanguage: explanationRequest.sourceLanguage,
-            responseLanguage: explanationRequest.responseLanguage,
-            fallback: AIPromptTemplateDefaults.grammarAnalysis
-        ) + explanationRequest.lookupInstruction
+        let systemInstruction = explanationRequest.systemInstruction(
+            grammarPrompt: AIPromptTemplateDefaults.rendered(
+                configuration.grammarAnalysisPromptTemplate,
+                sourceLanguage: explanationRequest.sourceLanguage,
+                responseLanguage: explanationRequest.responseLanguage,
+                fallback: AIPromptTemplateDefaults.grammarAnalysis
+            )
+        )
         let userContent: String
         if let context {
             userContent = """
@@ -472,7 +488,8 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
         let request = try makeRequest(
             systemInstruction: systemInstruction,
             userContent: userContent,
-            timeoutInterval: Self.explanationRequestTimeout
+            timeoutInterval: Self.explanationRequestTimeout,
+            quick: false
         )
 
         let data: Data
@@ -510,10 +527,13 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
         )
     }
 
+    /// - Parameter quick: a translation, as opposed to an explanation; 自动
+    ///   reasoning is lighter for it.
     private func makeRequest(
         systemInstruction: String,
         userContent: String,
-        timeoutInterval: TimeInterval = 30
+        timeoutInterval: TimeInterval = 30,
+        quick: Bool = true
     ) throws -> URLRequest {
         var request = URLRequest(url: requestURL)
         request.httpMethod = "POST"
@@ -521,8 +541,8 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        switch configuration.provider {
-        case .openAI:
+        switch configuration.style {
+        case .responses:
             request.setValue(
                 "Bearer \(configuration.apiKey)",
                 forHTTPHeaderField: "Authorization"
@@ -535,7 +555,7 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
                 )
             )
 
-        case .kimi, .deepSeek, .openAICompatible:
+        case .chatCompletions:
             request.setValue(
                 "Bearer \(configuration.apiKey)",
                 forHTTPHeaderField: "Authorization"
@@ -551,7 +571,7 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
                 )
             )
 
-        case .gemini:
+        case .geminiNative:
             request.setValue(configuration.apiKey, forHTTPHeaderField: "x-goog-api-key")
             request.httpBody = try JSONEncoder().encode(
                 GeminiRequest(
@@ -564,13 +584,13 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
                 )
             )
 
-        case .anthropic:
+        case .anthropicMessages:
             request.setValue(configuration.apiKey, forHTTPHeaderField: "x-api-key")
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
             request.httpBody = try JSONEncoder().encode(
                 AnthropicRequest(
                     model: configuration.model,
-                    maxTokens: 1_200,
+                    maxTokens: AIRequestTuning.anthropicOutputTokens,
                     system: systemInstruction,
                     messages: [
                         .init(role: "user", content: userContent)
@@ -578,11 +598,26 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
                 )
             )
         }
+
+        // Reasoning and output fields of the chosen model; none for most
+        // models on 自动, which leaves the body as it was.
+        let extra = AIRequestTuning.extraFields(
+            kind: configuration.provider,
+            style: configuration.style,
+            model: configuration.model,
+            reasoning: configuration.reasoning,
+            quick: quick
+        )
+        if !extra.isEmpty, let body = request.httpBody,
+           var object = try JSONSerialization.jsonObject(with: body) as? [String: Any] {
+            object.merge(extra) { _, added in added }
+            request.httpBody = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        }
         return request
     }
 
     private var requestURL: URL {
-        guard configuration.provider == .gemini else {
+        guard configuration.style == .geminiNative else {
             return configuration.endpoint
         }
         return configuration.endpoint
@@ -592,8 +627,8 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
 
     private func decodedText(from data: Data) throws -> String {
         do {
-            switch configuration.provider {
-            case .openAI:
+            switch configuration.style {
+            case .responses:
                 let response = try JSONDecoder().decode(OpenAIResponsesResponse.self, from: data)
                 if let outputText = response.outputText?.nilIfBlank {
                     return outputText
@@ -607,18 +642,18 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
                     .compactMap(\.text)
                     .joined()
 
-            case .kimi, .deepSeek, .openAICompatible:
+            case .chatCompletions:
                 let response = try JSONDecoder().decode(ChatCompletionsResponse.self, from: data)
                 return response.choices.first?.message.content ?? ""
 
-            case .gemini:
+            case .geminiNative:
                 let response = try JSONDecoder().decode(GeminiResponse.self, from: data)
                 return (response.candidates ?? [])
                     .flatMap { $0.content?.parts ?? [] }
                     .compactMap(\.text)
                     .joined()
 
-            case .anthropic:
+            case .anthropicMessages:
                 let response = try JSONDecoder().decode(AnthropicResponse.self, from: data)
                 return response.content.compactMap(\.text).joined()
             }
@@ -628,6 +663,9 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
     }
 
     private struct TranslationPrompt {
+        static let contextInstruction =
+            "只翻译 <source> 里的原文。<context> 是原文所在的上下文，只用来理解原文，不要翻译它，也不要把它写进输出。"
+
         let systemInstruction: String
         let userContent: String
 
@@ -644,12 +682,20 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
                 targetLanguage: targetLanguage
             )
             if let context {
+                // A custom prompt may not say what the context is for, and
+                // some models then translate it as well, so one selected
+                // sentence came back with its whole paragraph. The request
+                // itself says which part to translate.
                 userContent = """
-                SOURCE:
-                \(sourceText)
+                \(Self.contextInstruction)
 
-                CONTEXT:
+                <source>
+                \(sourceText)
+                </source>
+
+                <context>
                 \(context)
+                </context>
                 """
             } else {
                 userContent = "SOURCE:\n\(sourceText)"

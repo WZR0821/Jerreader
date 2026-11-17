@@ -59,7 +59,11 @@ class ReaderWordLookupTest {
                 assertEquals("went", english.analysis.surfaceForm.lowercase())
                 assertEquals("go", english.analysis.lemma)
                 assertEquals(WordSelectionSource.SHORT_TAP, english.analysis.source)
-                assertTrue("去" in english.explanation.definitions)
+                // The bundled ECDICT entry gives whole lines, "vi. 去, 走, …".
+                assertTrue(
+                    "English definitions were ${english.explanation.definitions}",
+                    english.explanation.definitions.any { "去" in it }
+                )
 
                 val japanesePoint = elementCenter(activity, "japanese-word")
                 val japanese = withContext(Dispatchers.Main) {

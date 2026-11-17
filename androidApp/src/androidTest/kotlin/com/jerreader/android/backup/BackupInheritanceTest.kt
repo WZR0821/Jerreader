@@ -239,6 +239,7 @@ class BackupInheritanceTest {
         try {
             val settings = JSONObject().put("topBarTransparency", 0.35).put("bottomBarTransparency", 0.75)
                 .put("japaneseFuriganaEnabled", true).put("immersiveReading", false)
+                .put("layoutMode", "immersive")
             val archive = writeEntries(listOf("manifest.json" to validManifest(100).toString().toByteArray(),
                 "settings/preferences.json" to settings.toString().toByteArray()))
             service.restore(Uri.fromFile(archive))
@@ -248,6 +249,7 @@ class BackupInheritanceTest {
                 assertEquals(0.75f, loaded.bottomBarTransparency, 0.0001f)
                 assertTrue(loaded.japaneseFuriganaEnabled)
                 assertEquals(false, loaded.immersiveReading)
+                assertEquals(com.jerreader.shared.library.ReaderLayoutMode.IMMERSIVE, loaded.layoutMode)
             }
             assertOptions()
             val old = writeEntries(listOf("manifest.json" to validManifest(200).toString().toByteArray(),
@@ -260,6 +262,7 @@ class BackupInheritanceTest {
                 updateBottomBarTransparency(original.bottomBarTransparency)
                 updateJapaneseFurigana(original.japaneseFuriganaEnabled)
                 updateImmersiveReading(original.immersiveReading)
+                updateLayoutMode(original.layoutMode)
             }
         }
     }

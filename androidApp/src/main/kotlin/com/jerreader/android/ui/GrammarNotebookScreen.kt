@@ -16,6 +16,9 @@ import com.jerreader.android.data.GrammarNoteEntity
 import com.jerreader.android.learning.LearningRecordRepository
 import com.jerreader.android.reader.ReaderActivity
 import com.jerreader.shared.ui.JerreaderGlyph
+import com.jerreader.shared.ui.PageSheetShape
+import com.jerreader.shared.ui.pageSheetHeight
+import com.jerreader.shared.ui.pageSheetTop
 import com.jerreader.shared.ui.JerreaderIcon
 import kotlinx.coroutines.launch
 
@@ -103,12 +106,14 @@ fun GrammarNoteEditor(draft: GrammarNoteEntity, repository: LearningRecordReposi
     var error by remember { mutableStateOf<String?>(null) }
     var saving by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val sheetTop = pageSheetTop()
     LearningTypography {
     ModalBottomSheet(onDismissRequest = { if (!saving) onClose() }, dragHandle = null,
-        containerColor = MaterialTheme.colorScheme.background,
+        shape = PageSheetShape, containerColor = MaterialTheme.colorScheme.background,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-      Column(Modifier.fillMaxHeight(0.95f).fillMaxWidth().imePadding().padding(horizontal = 16.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+      Column(Modifier.pageSheetHeight(sheetTop).fillMaxWidth().imePadding().padding(horizontal = 16.dp)) {
+        // The iOS sheet's inline bar: 56 tall, its buttons 20 points from the edges.
+        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 4.dp), horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             LearningButton(enabled = !saving, onClick = onClose) { Text("取消") }
             Text("保存语法", style = MaterialTheme.typography.titleMedium)

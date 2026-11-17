@@ -22,6 +22,7 @@ sealed class TranslationFailure(message: String) : Exception(message) {
     data object UnsupportedLanguage : TranslationFailure("暂不支持该语言方向。")
     data object ConfigurationMissing : TranslationFailure("请先在“设置 → 翻译与 AI”中配置翻译服务。")
     data object InvalidConfiguration : TranslationFailure("翻译服务配置无效，请检查 HTTPS 地址、模型和密钥。")
+    data object AIModelNotReady : TranslationFailure("AI 大模型还没设置好，请先到「设置 → AI 大模型」填写 API Key 并选择模型。")
     data class ProviderRejected(val detail: String) : TranslationFailure(detail)
     data class LocalModelsMissing(val languages: String) : TranslationFailure("尚未下载${languages}语言包。请前往“设置 → 翻译与 AI → 离线资源”准备；基础查词无需下载。")
     data object ServiceUnavailable : TranslationFailure("翻译服务暂时不可用。")
@@ -37,59 +38,6 @@ enum class TranslationSourceChoice(val language: LanguageCode?) {
     JAPANESE(LanguageCode.JAPANESE),
     ENGLISH(LanguageCode.ENGLISH),
     CHINESE_SIMPLIFIED(LanguageCode.CHINESE_SIMPLIFIED)
-}
-
-enum class DirectAIProtocol {
-    OPENAI_RESPONSES,
-    ANTHROPIC_MESSAGES,
-    OPENAI_CHAT_COMPLETIONS,
-    GEMINI_GENERATE_CONTENT
-}
-
-enum class DirectAIProvider(
-    val displayName: String,
-    val defaultEndpoint: String,
-    val defaultModel: String,
-    val protocol: DirectAIProtocol,
-    val usesCustomEndpoint: Boolean = false
-) {
-    OPENAI(
-        displayName = "GPT",
-        defaultEndpoint = "https://api.openai.com/v1/responses",
-        defaultModel = "gpt-5.2",
-        protocol = DirectAIProtocol.OPENAI_RESPONSES
-    ),
-    ANTHROPIC(
-        displayName = "Claude",
-        defaultEndpoint = "https://api.anthropic.com/v1/messages",
-        defaultModel = "claude-sonnet-4-20250514",
-        protocol = DirectAIProtocol.ANTHROPIC_MESSAGES
-    ),
-    KIMI(
-        displayName = "Kimi",
-        defaultEndpoint = "https://api.moonshot.cn/v1/chat/completions",
-        defaultModel = "kimi-k2.6",
-        protocol = DirectAIProtocol.OPENAI_CHAT_COMPLETIONS
-    ),
-    DEEPSEEK(
-        displayName = "DeepSeek",
-        defaultEndpoint = "https://api.deepseek.com/chat/completions",
-        defaultModel = "deepseek-v4-flash",
-        protocol = DirectAIProtocol.OPENAI_CHAT_COMPLETIONS
-    ),
-    GEMINI(
-        displayName = "Gemini",
-        defaultEndpoint = "https://generativelanguage.googleapis.com/v1beta",
-        defaultModel = "gemini-3.6-flash",
-        protocol = DirectAIProtocol.GEMINI_GENERATE_CONTENT
-    ),
-    OPENAI_COMPATIBLE(
-        displayName = "其他兼容服务",
-        defaultEndpoint = "",
-        defaultModel = "",
-        protocol = DirectAIProtocol.OPENAI_CHAT_COMPLETIONS,
-        usesCustomEndpoint = true
-    )
 }
 
 enum class TranslationProviderMode {
@@ -123,9 +71,8 @@ data class TranslationPreferences(
     // equivalent no-key path is the on-device model, so quick translation works
     // before the user configures any AI provider.
     val providerMode: TranslationProviderMode = TranslationProviderMode.ON_DEVICE,
-    val directProvider: DirectAIProvider = DirectAIProvider.DEEPSEEK,
-    val directEndpoint: String = DirectAIProvider.DEEPSEEK.defaultEndpoint,
-    val directModel: String = DirectAIProvider.DEEPSEEK.defaultModel,
+    // The AI 大模型 providers, their models and keys live in the Android
+    // settings store, which also writes them to backups.
     val backendEndpoint: String = "",
     val backendModel: String = "",
     val sourceChoice: TranslationSourceChoice = TranslationSourceChoice.AUTOMATIC,
@@ -139,7 +86,6 @@ data class TranslationPreferences(
     val fallbackMode: TranslationFallbackMode = TranslationFallbackMode.NONE,
     val translationPromptTemplate: String = DEFAULT_TRANSLATION_PROMPT,
     val grammarAnalysisPromptTemplate: String = DEFAULT_GRAMMAR_PROMPT,
-    val directApiKeyPresent: Boolean = false,
     val backendAccessTokenPresent: Boolean = false
 ) {
     companion object {

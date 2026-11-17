@@ -2,4 +2,8 @@
 <resources>
     <item name="reader_container" type="id" />
     <item name="reader_loading" type="id" />
+    <item name="reader_top_chrome" type="id" />
+    <item name="reader_bottom_chrome" type="id" />
+    <item name="reader_reveal_top" type="id" />
+    <item name="reader_reveal_bottom" type="id" />
 </resources>

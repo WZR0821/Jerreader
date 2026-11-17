@@ -1,6 +1,5 @@
 package com.jerreader.android.reader
 
-import android.os.Build
 import com.jerreader.shared.domain.LanguageCode
 import com.jerreader.shared.lexical.TextToken
 import com.jerreader.shared.lexical.WordBoundaryTokenizer
@@ -14,15 +13,8 @@ class AndroidWordBoundaryTokenizer : WordBoundaryTokenizer {
             LanguageCode.ENGLISH -> Locale.ENGLISH
             LanguageCode.CHINESE_SIMPLIFIED -> Locale.SIMPLIFIED_CHINESE
         }
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            tokenizeWithIcu(text, locale)
-        } else {
-            tokenizeWithJava(text, locale)
-        }
-    }
-
-    @androidx.annotation.RequiresApi(Build.VERSION_CODES.N)
-    private fun tokenizeWithIcu(text: String, locale: Locale): List<TextToken> {
+        // ICU word breaking (API 24+) knows Japanese and Chinese word
+        // boundaries; minSdk is 24, so it is always available.
         val iterator = android.icu.text.BreakIterator.getWordInstance(locale)
         iterator.setText(text)
         val tokens = mutableListOf<TextToken>()
@@ -33,21 +25,6 @@ class AndroidWordBoundaryTokenizer : WordBoundaryTokenizer {
             if (iterator.ruleStatus != android.icu.text.BreakIterator.WORD_NONE && candidate.isLexical()) {
                 tokens += TextToken(candidate, start, end)
             }
-            start = end
-            end = iterator.next()
-        }
-        return tokens
-    }
-
-    private fun tokenizeWithJava(text: String, locale: Locale): List<TextToken> {
-        val iterator = java.text.BreakIterator.getWordInstance(locale)
-        iterator.setText(text)
-        val tokens = mutableListOf<TextToken>()
-        var start = iterator.first()
-        var end = iterator.next()
-        while (end != java.text.BreakIterator.DONE) {
-            val candidate = text.substring(start, end)
-            if (candidate.isLexical()) tokens += TextToken(candidate, start, end)
             start = end
             end = iterator.next()
         }

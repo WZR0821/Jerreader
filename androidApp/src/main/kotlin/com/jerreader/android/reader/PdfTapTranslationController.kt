@@ -62,6 +62,11 @@ class PdfTapTranslationController(
     private val onNextPageRequested: (() -> Unit)? = null,
     private val onHighlightChanged: ((List<RectF>) -> Unit)? = null,
     private val onSelectionInvalidated: (() -> Unit)? = null,
+    /**
+     * A tap that found no text on the page, or with quick translation off any
+     * tap, so the reader can show or hide its bars the way iOS does.
+     */
+    private val onBlankTap: (() -> Unit)? = null,
     private val timeSource: () -> Long = System::currentTimeMillis
 ) : Closeable {
     private val descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
@@ -103,7 +108,11 @@ class PdfTapTranslationController(
     private val inputListener = object : InputListener {
         override fun onTap(event: TapEvent): Boolean {
             val preferences = settings.preferences.value
-            if (!preferences.quickTranslationEnabled) return false
+            if (!preferences.quickTranslationEnabled) {
+                // Nothing else claims a PDF tap here; iOS toggles the bars.
+                onBlankTap?.invoke()
+                return onBlankTap != null
+            }
             if (!preferences.disablesTapPageTurnsDuringQuickTranslation) {
                 val width = navigator?.publicationView?.width?.takeIf { it > 0 } ?: 0
                 if (width > 0 && event.point.x <= width * EDGE_PAGE_TURN_RATIO) {
@@ -121,7 +130,9 @@ class PdfTapTranslationController(
             lastTapPoint = PointF(event.point.x, event.point.y)
             requestToken++
             job?.cancel()
-            job = scope.launch { translateAt(event.point) }
+            job = scope.launch {
+                if (translateAt(event.point) == null) onBlankTap?.invoke()
+            }
             return true
         }
     }

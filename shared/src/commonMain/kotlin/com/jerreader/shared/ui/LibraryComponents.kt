@@ -57,9 +57,9 @@ fun LibraryReadingOverview(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("阅读统计", style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                    color = MaterialTheme.colorScheme.plainSecondary, modifier = Modifier.weight(1f))
                 Text(if (startedCount == 0) "从一本喜欢的书开始" else "只记录本机阅读进度",
-                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.plainTertiary)
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 OverviewMetric(

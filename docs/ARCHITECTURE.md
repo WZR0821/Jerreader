@@ -35,6 +35,7 @@
 - Readium `WKWebView` 在逐屏分页中禁止回弹、缩放、纵向 bounce 和 inset 自动调整；固定版面额外禁止平移。重排版 EPUB 保留 Readium 的横向 pan，因为它同时负责逐页手势和原生文本选区。
 - 中文、英文和日文是当前唯一的翻译语言集。日文书提供“原版 / 横排”双模式：原版将 `verticalText` 和 `readingProgression` 交还出版物元数据；横排同时设定 `verticalText = false` 和 `readingProgression = .ltr`，因此章节间与章节内都统一从左向右。
 - Reader 只把选中文本、Locator JSON 和选区 frame 上报给视图模型。EPUB 翻译入口分三层：短按正文按用户设置用临时 DOM Range 命中所在句子或当前语义块中的一个段落；长按第一次原生选区时利用前后 Readium 文本片段智能补全，单词用 `NLTokenizer`、多词与点句共用句子解析器；同一选区会话中一旦用户拖动手柄改变原始文本，解析器便进入精确模式，后续严格使用系统选区原文，直到点按其他位置、翻页、关闭卡片或位置改变时重置。轻点翻译默认在 Readium 边缘翻页观察者之前消费单击，使一次触摸只会进入翻译命中；该策略不影响横向滑动。用户可在设置中关闭保护，或关闭轻点翻译以恢复左右点按翻页。英文解析先将 EPUB 源码换行投影为等长空格，再在 `NLTokenizer` 上校正人名首字母和可结句的缩写；日文解析只针对引号内问号/叹号后紧跟 `と`、`って` 等引用表达的系统误切合并相邻范围，同时保留真正独立的新句。两者都保持 WebKit UTF-16 高亮偏移不变。PDF 优先用 PDFKit 文字层按点击位置映射字符，并按句子或由空行、缩进和版面几何限定的单个段落提取；无可用文字层时渲染当前页缩略图并调用本机 Vision OCR。按书开启的论文双栏模式只改变自动 PDF 识别：PDFKit 文字层依照 `selectionsByLine()` 的真实 UTF-16 范围和页内几何组合点击栏，并以不连续 `PDFSelection` 高亮；OCR 则把候选行限制在点击的半页栏。横跨 72% 页宽以上的标题、摘要和图注退回普通流程，PDFKit 原生长按/手柄选区保持不变。OCR 行会根据行距、段首缩进、分栏和横/竖排几何关系重组，遇到标点遗漏时也不跨段串句；日文小号假名只有在尺寸、方向和汉字邻接关系同时匹配时才会作为注音过滤，竖排判断不依赖 PDF 语言元数据。命中文本与本页 OCR 结果只缓存在当前阅读器内存。长按文字层仍保留原生选择菜单。所有命中只创建临时覆盖高亮，不改写出版物正文或 PDF 文件。
+- 1.5.0 起，EPUB 在关闭轻点翻译时把非边缘单击交给同一条 DOM 命中链路，粒度改为词语：命中点必须在字形 28pt 内，`ReaderWordSegmenter` 用 `NLTokenizer` 取整词并把被切开的日语词尾并回词干（"ない / た / て"只接平假名结尾的词干），所在句子作为原句；载荷以 `.quickWord` 触发器交给视图模型，直接打开语境查词并写入学习记录。未命中字形时仍切换阅读界面。Android 的短按脚本在同一次 WebView 计算中返回词面与前后文，DPR 换算留在该文档内，不读取可能滞后的 Readium 原生选区；查词成功即记录一次。
 - PDF 点按容差以 16pt 屏幕坐标为真值，每次按 PDFView 当前缩放和页旋转换算到 page space；OCR 自定义长按为 0.30 秒。OCR 长按识别器始终附着在 PDFView，由 delegate 按实际触点页面判断是否存在可用文字层，因此 iPad 双页中相邻扫描页也可命中。文字 PDF 的翻译高亮保留 `PDFSelection`，OCR 页保留页内归一化识别框，屏幕 `CGRect` 仅是当前帧的派生值。缩放、滚动、旋转或 layout 变化时，使用 `selectionsByLine()` 和 PDFView 官方 `convert` 重算高亮与翻译卡片锚点，不做 `rect * scaleFactor` 推算。
 - PDF 原生选择与点句翻译共用单调时间手势门：系统长按选区出现后，松手产生的尾随 tap 不会进入点句逻辑并清空选区。翻译菜单优先读取 PDFKit `currentSelection`，Readium 选区回调只作为后备；选择文本、页内范围和几何锚点因此来自同一个 PDFSelection。
 - 选区的实时 frame 更新与翻译请求是两条独立通道：frame 变化驱动覆盖层布局但会过滤亚像素抖动；智能文本等待 170ms、精确文本等待 280ms 稳定，再按章节资源、规范化文本、语言对与服务配置生成语义身份去重。同一句在短按、智能选区和精确选区之间切换时，只更新覆盖层位置，不重复调用翻译服务。Readium 回传的 Navigator 坐标先经 UIKit 转为窗口坐标，覆盖层再减去自身 SwiftUI 全局原点，避免正文延伸到安全区而覆盖层不延伸时的纵向偏移。翻译使用单一 `ReaderTranslationState`，请求 UUID 同时保护连续选区、覆盖层关闭和迟到结果。
@@ -48,7 +49,7 @@
 - 成功译文可以收藏。`TranslationFavoriteRecord` 保存原文、译文、语言对、服务标识、书籍上下文和 Locator；与 EPUB 文件完全分离，并在“学习”页与词语收藏统一检索。
 - 划线、批注和笔记由 `ReadingAnnotationRecord` 与 `ReadingAnnotationStore` 持久化。EPUB 保存 Locator/选区锚点并用独立 Readium Decoration group 呈现；PDF 保存页码、规范化页内矩形和文本，布局变化时重新映射。删除书籍会与书签一起先提交数据库删除，再清理本地文件；任何标记都不写入出版物正文。
 - EPUB、由 DOCX/TXT 转换得到的重排文档以及 PDF 共用 `ReaderSelectionVisualStyle` 与翻译覆盖层状态。重排文档的点击、长按、注音过滤和语义恢复均走同一基文节点管线；PDFKit 文字层和 Vision OCR 只负责产生领域选区与归一化几何。浅色、护眼、冷灰和深色主题分别使用适配的填充、边框和朗读色；自定义背景可保存独立选区色，低对比组合会自动向黑或白混合。原生选择确认后统一换成不接收触摸的临时高亮。
-- AI 后端代理只接受 HTTPS。非敏感的 endpoint/model 保存到 `UserDefaults`，可选代理访问凭据保存到 iOS Keychain（`AfterFirstUnlockThisDeviceOnly`）；不记录凭据或原文。协议为 HTTPS `POST` JSON `text/sourceLanguage/targetLanguage/model`，成功响应接受 `translatedText` 或 `translation`。客户端附带由规范化文本、上下文、语言对和代理版本生成的 `X-Jerreader-Idempotency-Key`，代理可据此合并同一翻译的并发或重试请求。
+- AI 后端代理只接受 HTTPS。非敏感的 endpoint/model 保存到 `UserDefaults`，可选代理访问凭据保存到 iOS Keychain（`AfterFirstUnlockThisDeviceOnly`）；不记录凭据或原文。协议为 HTTPS `POST` JSON：翻译请求 `text/context/sourceLanguage/targetLanguage/model/prompt`，成功响应读 `translatedText` 或 `translation`；解析请求带 `task: "explain"`、`analysisMode` 与 `responseLanguage`，依次读 `explanation`、`answer`、`translatedText`、`translation`。两类请求都带 `X-Jerreader-Translation-Protocol: 1`；翻译请求另附由规范化文本、上下文、语言对和代理版本生成的 `X-Jerreader-Idempotency-Key`，代理可据此合并同一翻译的并发或重试请求。Android 的 `AIProxyProtocol` 发同样的请求，幂等键也按同一算法生成（翻译请求暂不带 `context`）；字段说明见 README「AI 代理协议」。
 - 直接 API 预设覆盖 OpenAI Responses、Claude Messages、Kimi/DeepSeek/OpenAI Chat Completions 与 Gemini `generateContent`；“其他兼容服务”使用 OpenAI Chat Completions 结构。配置界面用 GPT、Claude、Kimi 等可见卡片选择服务商，官方 endpoint 与推荐模型自动填写，普通路径只需粘贴 Key。供应商标记优先从本地资产目录读取，缺失或未获得商标授权时使用可读文字标记回退，不下载远程图片、不暗示供应商背书。非敏感配置写入 `UserDefaults`，Key 按服务商独立写入 Keychain（`AfterFirstUnlockThisDeviceOnly`）。服务版本哈希只包含服务商、endpoint 与模型，不含 Key。
 - 网络提供方的短暂故障可自动重试一次；仍失败时可切换到用户明确配置且可用的备用服务。请求 UUID 与 `didUseFallback` 防止迟到结果覆盖和服务之间循环切换；命中缓存的同一句不会再次请求上游。
 - 代理配置、语言对和供应方版本参与翻译缓存键；切换目标语言、供应方或代理模型不会误用旧结果。网络、鉴权、配置和结果错误映射为领域错误供 UI 呈现。
@@ -72,7 +73,9 @@
 - 学习界面只依赖 `LexicalLookupService` 返回的领域模型，不直接读取第三方响应。默认实现优先查询内置中日词典与已安装的英语扩展包，未命中再使用中文维基词典 MediaWiki API 等既有服务，带本机缓存、超时、日语/英语词形回退和 iOS 系统词典后备；Mock 只供离线测试。
 - 日语词形管线先用保守规则生成候选词典形，再用真实词典释义验证候选，避免把猜测当作结果。领域模型同时保存假名、词性、活用说明和有限例句。若用户已配置直接 AI API 或代理，可按需对词条和书中原句做上下文语法解析；结果经过可见性校验后写入词条缓存，同一词条再次打开不自动重复计费。
 - 视觉层使用自有的语义颜色和原生 SwiftUI 控件：书库采用封面网格、最近阅读与轻量统计；阅读器参考微信读书的沉浸式交互原则，正文优先、控件按需出现，目录/搜索/书签集中在底部导航 Sheet。学习卡片、AI 解释和翻译覆盖层采用冷灰蓝层次。页面进入、状态变化、标签切换、按钮按压和加载反馈共用短时动效令牌；拖动翻译卡片时关闭隐式动效，系统开启“减少动态效果”时停用位移和缩放类动画。外观参考只用于层级与交互原则，不复制第三方品牌资源。
-- 阅读中可验收的生词入口是长按智能选中完整词语、完成翻译后从卡片更多菜单加入；先通过 `LexicalLookupService` 补全基本形、读音、词性、活用和例句，词典失败时使用已校验的当前译文降级，并始终记录书籍与有限语境。AI 深度解析由用户主动请求，避免无意产生费用。手动词典查询仍从学习页进入。“正文短按命中完整单词并直接写入学习记录”尚未稳定接入 Readium，是当前明确的降级项与未完成验收目标。
+- 阅读中可验收的生词入口是长按智能选中完整词语、完成翻译后从卡片更多菜单加入；先通过 `LexicalLookupService` 补全基本形、读音、词性、活用和例句，词典失败时使用已校验的当前译文降级，并始终记录书籍与有限语境。AI 深度解析由用户主动请求，避免无意产生费用。手动词典查询仍从学习页进入。“正文短按命中完整单词并直接写入学习记录”自 1.5.0 起两端均已接入（见上文 EPUB 翻译入口），命中准确度、ruby 与竖排的设备正式验收仍未完成，长按入口作为降级保留。
+- 阅读伴读（1.5.0，移植自统一版）：小说 / 非虚构模式按书保存；AI 阅读透镜、困惑地图、90 秒章节闭环和续读回顾的规则在共享 Kotlin `ReadingCompanion.kt`、`ReadingLens.kt` 与 iOS 同名 Swift 文件中各一份，困惑地图只读本机查词记录与复习结果。iOS 的伴读状态在 `ReaderCompanionModel`，与 `ReaderSearchModel` 一样是 `@Observable` 的阅读器子模型。
+- 双端对拍：`shared/parity/*.json` 的同一批用例由 Android `:shared:testAndroidHostTest` 的 `ParityFixturesTest` 和 iOS `host-test` 的 `parity-fixtures` 套件分别执行。改动复习、原句练习、备份清理或伴读规则时先改用例。
 - AI 翻译同时支持个人设备上的直接 API 与通用后端代理。公开分发或多人共享凭据时必须经用户控制的后端代理；直接 API 只保存用户主动输入、可撤销且应设置额度的个人 Key。全部网络实现使用可注入 HTTP Client，自动化测试使用 Stub/Mock，不依赖外网或真实密钥。
 
 ## 当前验证边界
@@ -150,6 +153,8 @@
 
 用户将原负载超过 50 中止的规则替换为 150 排队门槛。主机回归、iOS 构建和 Android 打包经同一监督器与主机锁串行执行，固定单 job / 单 worker；高负载或已有任务时等待，运行中负载单独升高不再中止。内存、温控、磁盘、外部竞争构建和模拟器授权仍受保护。历史阈值说明由此节及最新 AGENTS 取代，细节见 `IOS_SAFE_TESTING.md`。
 
+2026-11-13：150 排队门槛和温控中止已取消，负载与温控只记录；新增 `scripts/background_build.py`，在登录会话之外通过同一监督器构建并打包 IPA。依据见 `IOS_SAFE_TESTING.md`。
+
 ## 2026-10-06 Android 离线与读取优化
 
 - `OnDeviceTranslationService` 协调基础词典与已安装本机模型；`LocalTranslationBackend` 隔离 SDK，`LocalTranslationModels` 向 UI 暴露语言包状态和显式操作。ML Kit Task 取消等待后仍保持底层操作互斥直至完成。
@@ -185,3 +190,19 @@
 上下栏透明度、沉浸阅读、日语注音属于可备份的非敏感设置；旧备份缺省字段保留当前值。注音是翻译辅助卡片的显示能力，复用已有翻译状态，不改变服务协议、缓存身份或 EPUB。Android 保守匹配本机词典的已确认读音及活用，未知与歧义内容不猜读音；iOS 沿用本机分词器。
 
 离线资源页面仅呈现简短说明、状态、下载/卸载及必要进度/错误，许可使用短外链，随包许可资源保留。Apple 语言包由系统管理，Android 语言包由本机服务管理，不把平台能力差异伪装成可用操作。当前版本实际构建、测试和交付状态见 [1.4.1 维护记录](HOTFIX_1.4.1_2026-10-17.md)。
+
+## 2026-11-17 界面布局、选句与导入筛选（未发版）
+
+- 阅读界面分「标准」「沉浸」两种布局，入口在 阅读设置 → 阅读界面 → 界面布局。
+  - 存储键是 `reader.layoutMode`，值为 `standard` / `immersive`，两端相同。它随备份导出和恢复。
+  - 标准：上下栏常驻，正文排在两栏之间。
+  - 沉浸：正文全屏，上下栏浮在正文上，默认收起。轻点正文上下的空白条或没有文字的地方会呼出上下栏，4 秒后自动收起。空白条是安全区加页边。正文上的轻点仍用来查词和翻译。
+  - 只有切换布局会让 Readium 重新分页。沉浸下显示、隐藏上下栏都不会。
+  - 沉浸下系统状态栏始终隐藏。原来的“沉浸阅读”开关改称“隐藏状态栏”，只在标准布局下显示，存储键仍是 `reader.immersiveReading`。上一节说的“正文始终保留相同上下空间”，现在只适用于标准布局。
+- 修了“选一句却翻成整段”：
+  - 系统选区回退后，再拖手柄一律按精确选区处理，不再被智能补全扩大。
+  - 智能补全的句子最长 220 字（`ReaderSmartSelection.maximumCompletedSentenceLength`）。超过时说明附近找不到句界，保留原选区。
+  - 日文对白「」后面即使没有句号也算句末，跨段落的对白不再连成一句。共享规则在 `ReaderCrossPageExpansion.kt`。
+  - iOS 直连 AI 的提示用 `<source>` / `<context>` 分开原文和上下文，缓存身份升为 `jerreader-direct-api-v2`，旧的整段结果不再命中。安卓的翻译请求不带上下文，不涉及这一条。
+- 导入弹层可先选格式（全部、EPUB、PDF、Word、TXT）。选定某种格式后只把它交给系统选择器（iOS 传内容类型，安卓传 MIME 类型），其他格式不能选；选“全部”时仍可选所有支持的格式。导入弹层全高显示。
+- iOS「默认阅读排版 → 间距」里的「分别设置」（上 / 下 / 左右边距）删了。这三个值（`reader.defaults.pageMarginTop` 等）只存不读，阅读器一直只用统一的「页边距」，安卓也从没有这一项。旧安装里残留的值不再读写，不影响使用。

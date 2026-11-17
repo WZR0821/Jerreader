@@ -7,7 +7,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.*
 
-enum class JerreaderIcon { CLOSE, TABLE_OF_CONTENTS, BOOKMARK_OUTLINE, BOOKMARK_FILLED, TEXT_FORMAT, CHEVRON_LEFT, CHEVRON_RIGHT, CHEVRON_FORWARD, CHEVRON_DOWN, CHEVRON_UP_DOWN, CHEVRON_DOUBLE_LEFT, CHEVRON_DOUBLE_RIGHT, SPEECH_BUBBLE, SPEECH_BUBBLE_FILLED, MORE, MORE_CIRCLE, TREND, GRID, CLOCK, PLUS, SORT, CHECKLIST, SEARCH, INFO, SLIDERS, PALETTE, QUESTION, SHIELD, EXTERNAL_DRIVE, HAND, BOOKS, DICTIONARY, GEAR, STAR_OUTLINE, STAR_FILLED, DOWNLOAD, RESTORE, LOCK, SWAP, COPY, WARNING, CHECK_CIRCLE, TRASH, SHARE, REVIEW, SENTENCES, NOTE, CHART, CHECK, FOLDER, PHOTO, BOOK_CLOSED, TRANSLATION_BUBBLE_FILLED }
+enum class JerreaderIcon { CLOSE, TABLE_OF_CONTENTS, BOOKMARK_OUTLINE, BOOKMARK_FILLED, TEXT_FORMAT, CHEVRON_LEFT, CHEVRON_RIGHT, CHEVRON_FORWARD, CHEVRON_DOWN, CHEVRON_UP_DOWN, CHEVRON_DOUBLE_LEFT, CHEVRON_DOUBLE_RIGHT, SPEECH_BUBBLE, SPEECH_BUBBLE_FILLED, MORE, MORE_CIRCLE, TREND, GRID, CLOCK, PLUS, SORT, CHECKLIST, SEARCH, INFO, SLIDERS, PALETTE, QUESTION, SHIELD, EXTERNAL_DRIVE, HAND, BOOKS, DICTIONARY, GEAR, STAR_OUTLINE, STAR_FILLED, DOWNLOAD, RESTORE, LOCK, SWAP, COPY, WARNING, CHECK_CIRCLE, TRASH, SHARE, REVIEW, SENTENCES, NOTE, CHART, CHECK, FOLDER, PHOTO, BOOK_CLOSED, TRANSLATION_BUBBLE_FILLED, DOC_PDF, DOC_WORD, DOC_PLAIN, PALETTE_FILLED, SPARKLES, EXTERNAL_DRIVE_FILLED, HAND_FILLED }
 
 private data class IconPath(val path: Path, val filled: Boolean)
 private val iconPaths: Map<JerreaderIcon, List<IconPath>> = mapOf(
@@ -965,6 +965,264 @@ private val iconPaths: Map<JerreaderIcon, List<IconPath>> = mapOf(
             lineTo(11.2f, 11.8f)
             lineTo(13f, 11f)
             lineTo(9f, 11f)
+            close()
+            fillType = PathFillType.EvenOdd
+        }, true),
+    ),
+    JerreaderIcon.DOC_PDF to listOf(
+        IconPath(Path().apply {
+            moveTo(6f, 2f)
+            lineTo(13f, 2f)
+            lineTo(13f, 7f)
+            quadraticTo(13f, 9f, 15f, 9f)
+            lineTo(20f, 9f)
+            lineTo(20f, 20f)
+            quadraticTo(20f, 22f, 18f, 22f)
+            lineTo(6f, 22f)
+            quadraticTo(4f, 22f, 4f, 20f)
+            lineTo(4f, 4f)
+            quadraticTo(4f, 2f, 6f, 2f)
+            close()
+            moveTo(14.6f, 2.4f)
+            lineTo(19.6f, 7.4f)
+            lineTo(15.6f, 7.4f)
+            quadraticTo(14.6f, 7.4f, 14.6f, 6.4f)
+            close()
+            moveTo(7f, 19f)
+            lineTo(10.5f, 14.5f)
+            lineTo(12.8f, 17.2f)
+            lineTo(14.4f, 15.5f)
+            lineTo(17f, 19f)
+            close()
+            moveTo(10.6f, 11.5f)
+            cubicTo(10.6f, 12.38f, 9.88f, 13.1f, 9f, 13.1f)
+            cubicTo(8.12f, 13.1f, 7.4f, 12.38f, 7.4f, 11.5f)
+            cubicTo(7.4f, 10.62f, 8.12f, 9.9f, 9f, 9.9f)
+            cubicTo(9.88f, 9.9f, 10.6f, 10.62f, 10.6f, 11.5f)
+            close()
+            fillType = PathFillType.EvenOdd
+        }, true),
+    ),
+    JerreaderIcon.DOC_WORD to listOf(
+        IconPath(Path().apply {
+            moveTo(6f, 2f)
+            lineTo(13f, 2f)
+            lineTo(13f, 7f)
+            quadraticTo(13f, 9f, 15f, 9f)
+            lineTo(20f, 9f)
+            lineTo(20f, 20f)
+            quadraticTo(20f, 22f, 18f, 22f)
+            lineTo(6f, 22f)
+            quadraticTo(4f, 22f, 4f, 20f)
+            lineTo(4f, 4f)
+            quadraticTo(4f, 2f, 6f, 2f)
+            close()
+            moveTo(14.6f, 2.4f)
+            lineTo(19.6f, 7.4f)
+            lineTo(15.6f, 7.4f)
+            quadraticTo(14.6f, 7.4f, 14.6f, 6.4f)
+            close()
+            moveTo(7.5f, 12f)
+            lineTo(16.5f, 12f)
+            lineTo(16.5f, 13.5f)
+            lineTo(7.5f, 13.5f)
+            close()
+            moveTo(7.5f, 15f)
+            lineTo(16.5f, 15f)
+            lineTo(16.5f, 16.5f)
+            lineTo(7.5f, 16.5f)
+            close()
+            moveTo(7.5f, 18f)
+            lineTo(13f, 18f)
+            lineTo(13f, 19.5f)
+            lineTo(7.5f, 19.5f)
+            close()
+            fillType = PathFillType.EvenOdd
+        }, true),
+    ),
+    JerreaderIcon.DOC_PLAIN to listOf(
+        IconPath(Path().apply {
+            moveTo(6f, 2f)
+            lineTo(13f, 2f)
+            lineTo(13f, 7f)
+            quadraticTo(13f, 9f, 15f, 9f)
+            lineTo(20f, 9f)
+            lineTo(20f, 20f)
+            quadraticTo(20f, 22f, 18f, 22f)
+            lineTo(6f, 22f)
+            quadraticTo(4f, 22f, 4f, 20f)
+            lineTo(4f, 4f)
+            quadraticTo(4f, 2f, 6f, 2f)
+            close()
+            moveTo(14.6f, 2.4f)
+            lineTo(19.6f, 7.4f)
+            lineTo(15.6f, 7.4f)
+            quadraticTo(14.6f, 7.4f, 14.6f, 6.4f)
+            close()
+            moveTo(8f, 11.5f)
+            lineTo(16f, 11.5f)
+            lineTo(16f, 13.1f)
+            lineTo(12.8f, 13.1f)
+            lineTo(12.8f, 19.5f)
+            lineTo(11.2f, 19.5f)
+            lineTo(11.2f, 13.1f)
+            lineTo(8f, 13.1f)
+            close()
+            fillType = PathFillType.EvenOdd
+        }, true),
+    ),
+    JerreaderIcon.PALETTE_FILLED to listOf(
+        IconPath(Path().apply {
+            moveTo(12f, 3.5f)
+            cubicTo(6f, 3.5f, 2f, 6.9f, 2f, 12f)
+            cubicTo(2f, 17.1f, 6f, 20.5f, 12f, 20.5f)
+            cubicTo(16f, 20.5f, 16f, 17.1f, 14f, 16.25f)
+            cubicTo(12f, 14.55f, 14f, 12.85f, 17f, 12.85f)
+            lineTo(19f, 12.85f)
+            cubicTo(25f, 12.85f, 21f, 3.5f, 12f, 3.5f)
+            close()
+            moveTo(8.55f, 8.77f)
+            cubicTo(8.55f, 9.626f, 7.856f, 10.32f, 7f, 10.32f)
+            cubicTo(6.144f, 10.32f, 5.45f, 9.626f, 5.45f, 8.77f)
+            cubicTo(5.45f, 7.914f, 6.144f, 7.22f, 7f, 7.22f)
+            cubicTo(7.856f, 7.22f, 8.55f, 7.914f, 8.55f, 8.77f)
+            close()
+            moveTo(13.55f, 6.815f)
+            cubicTo(13.55f, 7.671f, 12.856f, 8.365f, 12f, 8.365f)
+            cubicTo(11.144f, 8.365f, 10.45f, 7.671f, 10.45f, 6.815f)
+            cubicTo(10.45f, 5.959f, 11.144f, 5.265f, 12f, 5.265f)
+            cubicTo(12.856f, 5.265f, 13.55f, 5.959f, 13.55f, 6.815f)
+            close()
+            moveTo(18.55f, 8.77f)
+            cubicTo(18.55f, 9.626f, 17.856f, 10.32f, 17f, 10.32f)
+            cubicTo(16.144f, 10.32f, 15.45f, 9.626f, 15.45f, 8.77f)
+            cubicTo(15.45f, 7.914f, 16.144f, 7.22f, 17f, 7.22f)
+            cubicTo(17.856f, 7.22f, 18.55f, 7.914f, 18.55f, 8.77f)
+            close()
+            moveTo(7.75f, 12.85f)
+            cubicTo(7.75f, 13.706f, 7.056f, 14.4f, 6.2f, 14.4f)
+            cubicTo(5.344f, 14.4f, 4.65f, 13.706f, 4.65f, 12.85f)
+            cubicTo(4.65f, 11.994f, 5.344f, 11.3f, 6.2f, 11.3f)
+            cubicTo(7.056f, 11.3f, 7.75f, 11.994f, 7.75f, 12.85f)
+            close()
+            fillType = PathFillType.EvenOdd
+        }, true),
+    ),
+    JerreaderIcon.SPARKLES to listOf(
+        IconPath(Path().apply {
+            moveTo(14.6f, 7.5f)
+            quadraticTo(15.29f, 14.61f, 21.5f, 15.4f)
+            quadraticTo(15.29f, 16.19f, 14.6f, 23.3f)
+            quadraticTo(13.91f, 16.19f, 7.7f, 15.4f)
+            quadraticTo(13.91f, 14.61f, 14.6f, 7.5f)
+            close()
+            fillType = PathFillType.EvenOdd
+        }, true),
+        IconPath(Path().apply {
+            moveTo(6.6f, 3.2f)
+            quadraticTo(6.99f, 7.16f, 10.5f, 7.6f)
+            quadraticTo(6.99f, 8.04f, 6.6f, 12f)
+            quadraticTo(6.21f, 8.04f, 2.7f, 7.6f)
+            quadraticTo(6.21f, 7.16f, 6.6f, 3.2f)
+            close()
+            fillType = PathFillType.EvenOdd
+        }, true),
+        IconPath(Path().apply {
+            moveTo(14f, 0.7f)
+            quadraticTo(14.22f, 2.95f, 16.2f, 3.2f)
+            quadraticTo(14.22f, 3.45f, 14f, 5.7f)
+            quadraticTo(13.78f, 3.45f, 11.8f, 3.2f)
+            quadraticTo(13.78f, 2.95f, 14f, 0.7f)
+            close()
+            fillType = PathFillType.EvenOdd
+        }, true),
+    ),
+    JerreaderIcon.EXTERNAL_DRIVE_FILLED to listOf(
+        IconPath(Path().apply {
+            moveTo(7.2f, 5f)
+            lineTo(16.8f, 5f)
+            quadraticTo(18.5f, 5f, 19f, 6.6f)
+            lineTo(20.8f, 12f)
+            lineTo(3.2f, 12f)
+            lineTo(5f, 6.6f)
+            quadraticTo(5.5f, 5f, 7.2f, 5f)
+            close()
+            fillType = PathFillType.EvenOdd
+        }, true),
+        IconPath(Path().apply {
+            moveTo(4f, 13.3f)
+            lineTo(20f, 13.3f)
+            quadraticTo(22f, 13.3f, 22f, 15.3f)
+            lineTo(22f, 17.4f)
+            quadraticTo(22f, 19.4f, 20f, 19.4f)
+            lineTo(4f, 19.4f)
+            quadraticTo(2f, 19.4f, 2f, 17.4f)
+            lineTo(2f, 15.3f)
+            quadraticTo(2f, 13.3f, 4f, 13.3f)
+            close()
+            moveTo(19.15f, 16.35f)
+            cubicTo(19.15f, 16.93f, 18.68f, 17.4f, 18.1f, 17.4f)
+            cubicTo(17.52f, 17.4f, 17.05f, 16.93f, 17.05f, 16.35f)
+            cubicTo(17.05f, 15.77f, 17.52f, 15.3f, 18.1f, 15.3f)
+            cubicTo(18.68f, 15.3f, 19.15f, 15.77f, 19.15f, 16.35f)
+            close()
+            fillType = PathFillType.EvenOdd
+        }, true),
+    ),
+    JerreaderIcon.HAND_FILLED to listOf(
+        IconPath(Path().apply {
+            moveTo(5.53f, 14f)
+            lineTo(5.53f, 8.22f)
+            cubicTo(5.53f, 7.546f, 6.076f, 7f, 6.75f, 7f)
+            cubicTo(7.424f, 7f, 7.97f, 7.546f, 7.97f, 8.22f)
+            lineTo(7.97f, 14f)
+            close()
+            fillType = PathFillType.EvenOdd
+        }, true),
+        IconPath(Path().apply {
+            moveTo(8.63f, 14f)
+            lineTo(8.63f, 4.92f)
+            cubicTo(8.63f, 4.246f, 9.176f, 3.7f, 9.85f, 3.7f)
+            cubicTo(10.524f, 3.7f, 11.07f, 4.246f, 11.07f, 4.92f)
+            lineTo(11.07f, 14f)
+            close()
+            fillType = PathFillType.EvenOdd
+        }, true),
+        IconPath(Path().apply {
+            moveTo(11.73f, 14f)
+            lineTo(11.73f, 3.72f)
+            cubicTo(11.73f, 3.046f, 12.276f, 2.5f, 12.95f, 2.5f)
+            cubicTo(13.624f, 2.5f, 14.17f, 3.046f, 14.17f, 3.72f)
+            lineTo(14.17f, 14f)
+            close()
+            fillType = PathFillType.EvenOdd
+        }, true),
+        IconPath(Path().apply {
+            moveTo(14.83f, 14f)
+            lineTo(14.83f, 5.72f)
+            cubicTo(14.83f, 5.046f, 15.376f, 4.5f, 16.05f, 4.5f)
+            cubicTo(16.724f, 4.5f, 17.27f, 5.046f, 17.27f, 5.72f)
+            lineTo(17.27f, 14f)
+            close()
+            fillType = PathFillType.EvenOdd
+        }, true),
+        IconPath(Path().apply {
+            moveTo(5.53f, 12.5f)
+            lineTo(17.27f, 12.5f)
+            lineTo(17.27f, 15.5f)
+            cubicTo(17.27f, 19.8f, 14.9f, 22.2f, 11.3f, 22.2f)
+            cubicTo(7.7f, 22.2f, 5.53f, 19.6f, 5.53f, 16.2f)
+            close()
+            fillType = PathFillType.EvenOdd
+        }, true),
+        IconPath(Path().apply {
+            moveTo(16.104f, 19.827f)
+            lineTo(20.654f, 13.427f)
+            cubicTo(21.166f, 12.707f, 20.997f, 11.708f, 20.277f, 11.196f)
+            cubicTo(19.557f, 10.684f, 18.558f, 10.853f, 18.046f, 11.573f)
+            lineTo(13.496f, 17.973f)
+            cubicTo(12.984f, 18.693f, 13.153f, 19.692f, 13.873f, 20.204f)
+            cubicTo(14.593f, 20.716f, 15.592f, 20.547f, 16.104f, 19.827f)
             close()
             fillType = PathFillType.EvenOdd
         }, true),

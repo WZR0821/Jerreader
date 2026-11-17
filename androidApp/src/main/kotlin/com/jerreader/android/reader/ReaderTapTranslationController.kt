@@ -53,6 +53,11 @@ class ReaderTapTranslationController(
     private val onHighlightChanged: ((List<RectF>) -> Unit)? = null,
     private val onSelectionInvalidated: (() -> Unit)? = null,
     private val appearance: () -> ReaderAppearance = { ReaderAppearance() },
+    /**
+     * A quick-translation tap that found nothing to translate, so the reader
+     * can show or hide its bars the way iOS does for an empty hit.
+     */
+    private val onBlankTap: (() -> Unit)? = null,
     private val timeSource: () -> Long = System::currentTimeMillis
 ) {
     private var navigator: EpubNavigatorFragment? = null
@@ -131,7 +136,7 @@ class ReaderTapTranslationController(
             lastTapPoint = cssPoint
             translationJob?.cancel()
             translationJob = scope.launch {
-                translateAt(cssPoint, preferences.quickTranslationUnit)
+                translateAt(cssPoint, preferences.quickTranslationUnit, reportsBlankTap = true)
             }
             // A plain body tap is reserved for quick translation. Links and
             // controls are filtered by Readium before reaching this listener.
@@ -290,34 +295,41 @@ class ReaderTapTranslationController(
      */
     internal suspend fun translateAt(
         point: PointF,
-        unit: QuickTranslationUnit = settings.preferences.value.quickTranslationUnit
+        unit: QuickTranslationUnit = settings.preferences.value.quickTranslationUnit,
+        reportsBlankTap: Boolean = false
     ): TranslationCardState? {
         val navigator = navigator ?: return null
         lastTapPoint = PointF(point.x, point.y)
+        // Nothing under the finger to translate: iOS lets such a tap show or
+        // hide the bars instead of doing nothing.
+        fun blank(): TranslationCardState? {
+            if (reportsBlankTap) onBlankTap?.invoke()
+            return null
+        }
         // Drop the previous tiles here, in the same awaited sequence that draws
         // the new ones, so a tap that resolves to nothing cannot leave the old
         // sentence highlighted underneath.
         navigator.evaluateJavascript(clearHighlightScript())
-        val raw = navigator.evaluateJavascript(blockTextScript(point)) ?: return null
-        val block = decodeJson(raw) ?: return null
+        val raw = navigator.evaluateJavascript(blockTextScript(point)) ?: return blank()
+        val block = decodeJson(raw) ?: return blank()
         val text = block.optString("text")
-        if (text.isBlank()) return null
+        if (text.isBlank()) return blank()
         val caret = block.optInt("offset").coerceIn(0, (text.length - 1).coerceAtLeast(0))
 
         val range = if (unit == QuickTranslationUnit.PARAGRAPH) {
             text.indices
         } else {
-            ReaderSentenceSegmenter.sentenceRange(text, caret, bookLanguageHint()) ?: return null
+            ReaderSentenceSegmenter.sentenceRange(text, caret, bookLanguageHint()) ?: return blank()
         }
         var start = range.first
         var end = range.last + 1
         while (start < end && text[start].isWhitespace()) start++
         while (end > start && text[end - 1].isWhitespace()) end--
-        if (end <= start) return null
+        if (end <= start) return blank()
 
-        val selectedRaw = navigator.evaluateJavascript(selectRangeScript(point, start, end)) ?: return null
-        val selected = decodeJson(selectedRaw) ?: return null
-        if (!selected.optBoolean("ok")) return null
+        val selectedRaw = navigator.evaluateJavascript(selectRangeScript(point, start, end)) ?: return blank()
+        val selected = decodeJson(selectedRaw) ?: return blank()
+        if (!selected.optBoolean("ok")) return blank()
 
         // The page paints the tiles itself; these are the same tiles, only so
         // the card can be anchored clear of the selected text. They go through

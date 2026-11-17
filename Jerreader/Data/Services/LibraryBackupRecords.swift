@@ -254,6 +254,7 @@ extension LibraryBackupService {
             ReaderInterfaceDefaults.bottomTransparencyKey,
             ReaderInterfaceDefaults.japaneseFuriganaKey,
             ReaderInterfaceDefaults.immersiveReadingKey,
+            ReaderInterfaceDefaults.layoutModeKey,
             ReaderTextOrientationDefaults.storageKey,
             JerreaderThemePreferences.storageKey,
         ] + TranslationSettingsStore.backupDefaultKeys

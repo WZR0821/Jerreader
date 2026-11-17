@@ -18,14 +18,18 @@ val keystoreProperties = Properties().apply {
 
 android {
     namespace = "com.jerreader.android"
-    compileSdk = 36
+    // Readium 3.4, Compose 1.12 and androidx.core 1.19 require compileSdk 37
+    // (AAR metadata). This only changes the APIs we compile against; runtime
+    // behaviour follows targetSdk, which stays 36 until 37 has been reviewed
+    // on a device.
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.jerreader.android"
-        minSdk = 23
+        minSdk = 24
         targetSdk = 36
-        versionCode = 60
-        versionName = "1.4.1"
+        versionCode = 69
+        versionName = "1.7.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -45,6 +49,28 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.findByName("release")
+            // R8 only shrinks here: proguard-rules.pro turns obfuscation off so
+            // stack traces stay readable, and keeps the libraries that ship no
+            // consumer rules of their own (Readium, the PDF renderer).
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+
+    // Phones need arm64-v8a only; that split is the deliverable. x86_64 is
+    // built from the same DEX and resources so this Mac's emulator can install
+    // and launch the Release candidate before delivery. 32-bit ABIs are not
+    // shipped any more (they were about 53 MB of the old universal APK).
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "x86_64")
+            isUniversalApk = false
         }
     }
 

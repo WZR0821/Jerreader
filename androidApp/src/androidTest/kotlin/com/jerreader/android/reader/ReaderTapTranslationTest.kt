@@ -12,6 +12,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.jerreader.android.JerreaderApplication
 import com.jerreader.android.library.PublicationIntegrity
 import com.jerreader.android.test.createSyntheticEpub
+import com.jerreader.shared.library.ReaderLayoutMode
 import com.jerreader.shared.translation.MockTranslationService
 import com.jerreader.shared.translation.QuickTranslationUnit
 import com.jerreader.shared.ui.TranslationCardState
@@ -41,8 +42,10 @@ class ReaderTapTranslationTest {
         val book = graph.importService.importPublication(Uri.fromFile(source)).book
         val stored = graph.publicationStore.resolvePublication(book.publicationFileName)
         val storedSnapshot = PublicationIntegrity.capture(stored)
+        val originalLayout = graph.appSettings.preferences.value.layoutMode
 
         try {
+            graph.appSettings.updateLayoutMode(ReaderLayoutMode.STANDARD)
             graph.translationService = MockTranslationService()
             graph.translationSettings.updateQuickTranslationEnabled(true)
             graph.translationSettings.updateQuickTranslationUnit(QuickTranslationUnit.SENTENCE)
@@ -86,12 +89,13 @@ class ReaderTapTranslationTest {
                 assertEquals("She went home.", fromDeviceTap.sourceText)
                 captureReader("android-reader-translation")
                 verifyOverlayMatrix(activity)
-                if (android.os.Build.VERSION.SDK_INT >= 24) verifyReaderInterfaceControls(activity)
+                verifyReaderInterfaceControls(activity)
             }
 
             assertTrue(PublicationIntegrity.isUnchanged(sourceSnapshot))
             assertTrue(PublicationIntegrity.isUnchanged(storedSnapshot))
         } finally {
+            graph.appSettings.updateLayoutMode(originalLayout)
             graph.translationService = originalService
             graph.translationSettings.updateQuickTranslationUnit(QuickTranslationUnit.SENTENCE)
             graph.bookService.delete(book.id)
@@ -151,8 +155,17 @@ class ReaderTapTranslationTest {
                 check(stable >= 3) { "Translation card kept moving: $name long=$long ruby=$ruby; samples=$sampledFrames" }
                 val card = checkNotNull(frame) { "No stable translation card: $name long=$long ruby=$ruby" }
                 val source = withContext(Dispatchers.Main) { checkNotNull(activity.translationSourceFrameForTesting) }
-                val safe = android.graphics.RectF(viewport.left + 12 * density, viewport.top + 52 * density,
-                    viewport.right - 12 * density, viewport.bottom - 128 * density)
+                val safeArea = withContext(Dispatchers.Main) {
+                    android.graphics.RectF(checkNotNull(activity.translationSafeAreaForTesting))
+                }
+                val (topBar, bottomBar) = withContext(Dispatchers.Main) { activity.chromeFramesForTesting() }
+                val safe = android.graphics.RectF(viewport.left + 12 * density, safeArea.top,
+                    viewport.right - 12 * density, safeArea.bottom)
+                // The standard layout keeps its bars, so the card must clear them.
+                checkNotNull(topBar) { "The standard layout lost its top bar" }
+                checkNotNull(bottomBar) { "The standard layout lost its bottom bar" }
+                assertTrue("Card under the top bar $name long=$long: card=$card bar=$topBar", card.top >= topBar.bottom - 2)
+                assertTrue("Card under the bottom bar $name long=$long: card=$card bar=$bottomBar", card.bottom <= bottomBar.top + 2)
                 assertTrue("Overlaps selection $name long=$long ruby=$ruby: card=$card source=$source", !android.graphics.RectF.intersects(card, source))
                 assertTrue("Outside safe viewport $name: card=$card safe=$safe", card.left >= safe.left - 2 && card.right <= safe.right + 2 && card.top >= safe.top - 2 && card.bottom <= safe.bottom + 2)
                 if (vertical) assertTrue("Vertical card must stay beside the column", card.right <= source.left + 1 || card.left >= source.right - 1)
@@ -231,9 +244,67 @@ class ReaderTapTranslationTest {
                 check(instrumentation.uiAutomation.injectInputEvent(android.view.KeyEvent(time,
                     SystemClock.uptimeMillis(), action, android.view.KeyEvent.KEYCODE_BACK, 0), true))
         }
+        suspend fun waitForAbsent(label: String) {
+            repeat(50) {
+                instrumentation.waitForIdleSync()
+                if (find(label) == null) return
+                kotlinx.coroutines.delay(100)
+            }
+            captureReader("android-reader-controls-failure")
+            error("Reader setting should be gone: $label")
+        }
+        suspend fun eventually(what: String, condition: () -> Boolean) {
+            repeat(50) {
+                if (withContext(Dispatchers.Main) { condition() }) return
+                kotlinx.coroutines.delay(100)
+            }
+            captureReader("android-reader-layout-failure")
+            error("Reader layout never reached: $what")
+        }
+        // A slow drag that stops before it lifts, so the sheet does not fling.
+        fun dragSheet() {
+            val bounds = android.graphics.Rect()
+            checkNotNull(instrumentation.uiAutomation.rootInActiveWindow).getBoundsInScreen(bounds)
+            val x = bounds.exactCenterX()
+            val start = bounds.top + bounds.height() * .72f
+            val end = bounds.top + bounds.height() * .32f
+            val down = SystemClock.uptimeMillis()
+            fun send(action: Int, y: Float) {
+                val event = android.view.MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, x, y, 0)
+                try { check(instrumentation.uiAutomation.injectInputEvent(event, true)) } finally { event.recycle() }
+            }
+            send(android.view.MotionEvent.ACTION_DOWN, start)
+            repeat(12) { step ->
+                SystemClock.sleep(16)
+                send(android.view.MotionEvent.ACTION_MOVE, start + (end - start) * (step + 1) / 12f)
+            }
+            SystemClock.sleep(150)
+            send(android.view.MotionEvent.ACTION_UP, end)
+            instrumentation.waitForIdleSync()
+        }
         try {
+            // The sheet section by section, and its 翻译与 AI page, for the
+            // side-by-side check against iOS. It reopens at the top below.
             click("阅读设置")
-            waitFor("沉浸阅读（隐藏状态栏）")
+            waitFor("阅读与翻译")
+            captureReader("android-reader-sheet-1")
+            for (page in 2..4) {
+                dragSheet()
+                captureReader("android-reader-sheet-$page")
+            }
+            repeat(4) { if (find("翻译与 AI")?.isVisibleToUser != true) dragSheet() }
+            click("翻译与 AI")
+            waitFor("翻译服务")
+            captureReader("android-reader-sheet-translation")
+            back()
+            waitForAbsent("翻译服务")
+            back()
+            waitForAbsent("阅读与翻译")
+
+            click("阅读设置")
+            waitFor("阅读与翻译")
+            waitFor("界面布局")
+            waitFor("隐藏状态栏")
             for ((label, value) in listOf("顶部栏透明度" to .35f, "底部栏透明度" to .75f)) {
                 val slider = waitFor(label, android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id)
                 val arguments = android.os.Bundle().apply { putFloat(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE, value) }
@@ -243,7 +314,7 @@ class ReaderTapTranslationTest {
             val loaded = com.jerreader.android.settings.AndroidAppSettingsStore(instrumentation.targetContext).preferences.value
             assertEquals(.35f, loaded.topBarTransparency, .001f)
             assertEquals(.75f, loaded.bottomBarTransparency, .001f)
-            click("沉浸阅读（隐藏状态栏）")
+            click("隐藏状态栏")
             assertEquals(!original.immersiveReading, graph.appSettings.preferences.value.immersiveReading)
             captureReader("android-reader-interface-controls")
             back()
@@ -258,8 +329,61 @@ class ReaderTapTranslationTest {
             }
             assertTrue("Immersive preference must affect the real Activity status bar", matched)
             captureReader("android-reader-status-bar-option")
+
+            // 界面布局 › 沉浸: the bars and the status bar go away, the page
+            // takes the screen, and the blank strips bring the bars back until
+            // they hide themselves, as on iOS.
+            click("阅读设置")
+            waitFor("界面布局")
+            click("沉浸")
+            assertEquals(ReaderLayoutMode.IMMERSIVE, graph.appSettings.preferences.value.layoutMode)
+            waitFor(ReaderLayoutMode.IMMERSIVE.detail)
+            waitForAbsent("隐藏状态栏")
+            captureReader("android-reader-settings-immersive")
+            back()
+            waitForAbsent("界面布局")
+            eventually("the immersive layout with its bars away") {
+                activity.layoutModeForTesting == ReaderLayoutMode.IMMERSIVE &&
+                    !activity.isChromeVisible && activity.revealZonesVisibleForTesting()
+            }
+            eventually("no status bar in the immersive layout") {
+                androidx.core.view.ViewCompat.getRootWindowInsets(activity.window.decorView)
+                    ?.isVisible(androidx.core.view.WindowInsetsCompat.Type.statusBars()) == false
+            }
+            eventually("a full-screen page") {
+                activity.readerContentPaddingForTesting() == activity.systemBarInsetsForTesting()
+            }
+            captureReader("android-reader-immersive")
+            check(withContext(Dispatchers.Main) { activity.tapRevealZoneForTesting(top = true) })
+            eventually("the bars shown from the top strip") { activity.isChromeVisible }
+            captureReader("android-reader-immersive-revealed")
+            kotlinx.coroutines.delay(2_000)
+            assertTrue("The bars hid before the countdown", withContext(Dispatchers.Main) { activity.isChromeVisible })
+            eventually("the bars hidden after four seconds") { !activity.isChromeVisible }
+            check(withContext(Dispatchers.Main) { activity.tapRevealZoneForTesting(top = false) })
+            eventually("the bars shown from the bottom strip") { activity.isChromeVisible }
+            withContext(Dispatchers.Main) { activity.tapBlankPageForTesting() }
+            eventually("the bars hidden by a tap on no text") { !activity.isChromeVisible }
+            withContext(Dispatchers.Main) { activity.tapBlankPageForTesting() }
+            eventually("the bars shown by a tap on no text") { activity.isChromeVisible }
+
+            // 标准 brings the bars back for good and lays the page out between them.
+            graph.appSettings.updateLayoutMode(ReaderLayoutMode.STANDARD)
+            eventually("the standard layout with its bars") {
+                activity.layoutModeForTesting == ReaderLayoutMode.STANDARD &&
+                    activity.isChromeVisible && !activity.revealZonesVisibleForTesting()
+            }
+            eventually("the page between the bars") {
+                val (top, bottom) = activity.chromeFramesForTesting()
+                val (paddingTop, paddingBottom) = activity.readerContentPaddingForTesting()
+                top != null && bottom != null &&
+                    kotlin.math.abs(paddingTop - top.height()) <= 2f &&
+                    kotlin.math.abs(paddingBottom - bottom.height()) <= 2f
+            }
+            captureReader("android-reader-standard")
         } finally {
-            if (find("顶部栏透明度") != null) back()
+            if (find("界面布局") != null) back()
+            graph.appSettings.updateLayoutMode(original.layoutMode)
             graph.appSettings.updateTopBarTransparency(original.topBarTransparency)
             graph.appSettings.updateBottomBarTransparency(original.bottomBarTransparency)
             graph.appSettings.updateImmersiveReading(original.immersiveReading)

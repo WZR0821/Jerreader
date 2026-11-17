@@ -1283,6 +1283,322 @@ enum JerreaderIconImage {
             }.withRenderingMode(.alwaysTemplate)
             for name in ["TRANSLATION_BUBBLE_FILLED", "character.bubble.fill"] { result[name] = image }
         }
+        do {
+            let image = UIGraphicsImageRenderer(size: CGSize(width: 24, height: 24)).image { context in
+                UIColor.black.setStroke(); UIColor.black.setFill()
+                do {
+                    let p = UIBezierPath()
+                    p.lineWidth = 1.65; p.lineCapStyle = .round; p.lineJoinStyle = .round; p.usesEvenOddFillRule = true
+                    p.move(to: CGPoint(x: 6, y: 2))
+                    p.addLine(to: CGPoint(x: 13, y: 2))
+                    p.addLine(to: CGPoint(x: 13, y: 7))
+                    p.addQuadCurve(to: CGPoint(x: 15, y: 9), controlPoint: CGPoint(x: 13, y: 9))
+                    p.addLine(to: CGPoint(x: 20, y: 9))
+                    p.addLine(to: CGPoint(x: 20, y: 20))
+                    p.addQuadCurve(to: CGPoint(x: 18, y: 22), controlPoint: CGPoint(x: 20, y: 22))
+                    p.addLine(to: CGPoint(x: 6, y: 22))
+                    p.addQuadCurve(to: CGPoint(x: 4, y: 20), controlPoint: CGPoint(x: 4, y: 22))
+                    p.addLine(to: CGPoint(x: 4, y: 4))
+                    p.addQuadCurve(to: CGPoint(x: 6, y: 2), controlPoint: CGPoint(x: 4, y: 2))
+                    p.close()
+                    p.move(to: CGPoint(x: 14.6, y: 2.4))
+                    p.addLine(to: CGPoint(x: 19.6, y: 7.4))
+                    p.addLine(to: CGPoint(x: 15.6, y: 7.4))
+                    p.addQuadCurve(to: CGPoint(x: 14.6, y: 6.4), controlPoint: CGPoint(x: 14.6, y: 7.4))
+                    p.close()
+                    p.move(to: CGPoint(x: 7, y: 19))
+                    p.addLine(to: CGPoint(x: 10.5, y: 14.5))
+                    p.addLine(to: CGPoint(x: 12.8, y: 17.2))
+                    p.addLine(to: CGPoint(x: 14.4, y: 15.5))
+                    p.addLine(to: CGPoint(x: 17, y: 19))
+                    p.close()
+                    p.move(to: CGPoint(x: 10.6, y: 11.5))
+                    p.addCurve(to: CGPoint(x: 9, y: 13.1), controlPoint1: CGPoint(x: 10.6, y: 12.38), controlPoint2: CGPoint(x: 9.88, y: 13.1))
+                    p.addCurve(to: CGPoint(x: 7.4, y: 11.5), controlPoint1: CGPoint(x: 8.12, y: 13.1), controlPoint2: CGPoint(x: 7.4, y: 12.38))
+                    p.addCurve(to: CGPoint(x: 9, y: 9.9), controlPoint1: CGPoint(x: 7.4, y: 10.62), controlPoint2: CGPoint(x: 8.12, y: 9.9))
+                    p.addCurve(to: CGPoint(x: 10.6, y: 11.5), controlPoint1: CGPoint(x: 9.88, y: 9.9), controlPoint2: CGPoint(x: 10.6, y: 10.62))
+                    p.close()
+                    p.fill()
+                }
+            }.withRenderingMode(.alwaysTemplate)
+            for name in ["DOC_PDF", "doc.richtext.fill", "doc.richtext"] { result[name] = image }
+        }
+        do {
+            let image = UIGraphicsImageRenderer(size: CGSize(width: 24, height: 24)).image { context in
+                UIColor.black.setStroke(); UIColor.black.setFill()
+                do {
+                    let p = UIBezierPath()
+                    p.lineWidth = 1.65; p.lineCapStyle = .round; p.lineJoinStyle = .round; p.usesEvenOddFillRule = true
+                    p.move(to: CGPoint(x: 6, y: 2))
+                    p.addLine(to: CGPoint(x: 13, y: 2))
+                    p.addLine(to: CGPoint(x: 13, y: 7))
+                    p.addQuadCurve(to: CGPoint(x: 15, y: 9), controlPoint: CGPoint(x: 13, y: 9))
+                    p.addLine(to: CGPoint(x: 20, y: 9))
+                    p.addLine(to: CGPoint(x: 20, y: 20))
+                    p.addQuadCurve(to: CGPoint(x: 18, y: 22), controlPoint: CGPoint(x: 20, y: 22))
+                    p.addLine(to: CGPoint(x: 6, y: 22))
+                    p.addQuadCurve(to: CGPoint(x: 4, y: 20), controlPoint: CGPoint(x: 4, y: 22))
+                    p.addLine(to: CGPoint(x: 4, y: 4))
+                    p.addQuadCurve(to: CGPoint(x: 6, y: 2), controlPoint: CGPoint(x: 4, y: 2))
+                    p.close()
+                    p.move(to: CGPoint(x: 14.6, y: 2.4))
+                    p.addLine(to: CGPoint(x: 19.6, y: 7.4))
+                    p.addLine(to: CGPoint(x: 15.6, y: 7.4))
+                    p.addQuadCurve(to: CGPoint(x: 14.6, y: 6.4), controlPoint: CGPoint(x: 14.6, y: 7.4))
+                    p.close()
+                    p.move(to: CGPoint(x: 7.5, y: 12))
+                    p.addLine(to: CGPoint(x: 16.5, y: 12))
+                    p.addLine(to: CGPoint(x: 16.5, y: 13.5))
+                    p.addLine(to: CGPoint(x: 7.5, y: 13.5))
+                    p.close()
+                    p.move(to: CGPoint(x: 7.5, y: 15))
+                    p.addLine(to: CGPoint(x: 16.5, y: 15))
+                    p.addLine(to: CGPoint(x: 16.5, y: 16.5))
+                    p.addLine(to: CGPoint(x: 7.5, y: 16.5))
+                    p.close()
+                    p.move(to: CGPoint(x: 7.5, y: 18))
+                    p.addLine(to: CGPoint(x: 13, y: 18))
+                    p.addLine(to: CGPoint(x: 13, y: 19.5))
+                    p.addLine(to: CGPoint(x: 7.5, y: 19.5))
+                    p.close()
+                    p.fill()
+                }
+            }.withRenderingMode(.alwaysTemplate)
+            for name in ["DOC_WORD", "doc.text.fill"] { result[name] = image }
+        }
+        do {
+            let image = UIGraphicsImageRenderer(size: CGSize(width: 24, height: 24)).image { context in
+                UIColor.black.setStroke(); UIColor.black.setFill()
+                do {
+                    let p = UIBezierPath()
+                    p.lineWidth = 1.65; p.lineCapStyle = .round; p.lineJoinStyle = .round; p.usesEvenOddFillRule = true
+                    p.move(to: CGPoint(x: 6, y: 2))
+                    p.addLine(to: CGPoint(x: 13, y: 2))
+                    p.addLine(to: CGPoint(x: 13, y: 7))
+                    p.addQuadCurve(to: CGPoint(x: 15, y: 9), controlPoint: CGPoint(x: 13, y: 9))
+                    p.addLine(to: CGPoint(x: 20, y: 9))
+                    p.addLine(to: CGPoint(x: 20, y: 20))
+                    p.addQuadCurve(to: CGPoint(x: 18, y: 22), controlPoint: CGPoint(x: 20, y: 22))
+                    p.addLine(to: CGPoint(x: 6, y: 22))
+                    p.addQuadCurve(to: CGPoint(x: 4, y: 20), controlPoint: CGPoint(x: 4, y: 22))
+                    p.addLine(to: CGPoint(x: 4, y: 4))
+                    p.addQuadCurve(to: CGPoint(x: 6, y: 2), controlPoint: CGPoint(x: 4, y: 2))
+                    p.close()
+                    p.move(to: CGPoint(x: 14.6, y: 2.4))
+                    p.addLine(to: CGPoint(x: 19.6, y: 7.4))
+                    p.addLine(to: CGPoint(x: 15.6, y: 7.4))
+                    p.addQuadCurve(to: CGPoint(x: 14.6, y: 6.4), controlPoint: CGPoint(x: 14.6, y: 7.4))
+                    p.close()
+                    p.move(to: CGPoint(x: 8, y: 11.5))
+                    p.addLine(to: CGPoint(x: 16, y: 11.5))
+                    p.addLine(to: CGPoint(x: 16, y: 13.1))
+                    p.addLine(to: CGPoint(x: 12.8, y: 13.1))
+                    p.addLine(to: CGPoint(x: 12.8, y: 19.5))
+                    p.addLine(to: CGPoint(x: 11.2, y: 19.5))
+                    p.addLine(to: CGPoint(x: 11.2, y: 13.1))
+                    p.addLine(to: CGPoint(x: 8, y: 13.1))
+                    p.close()
+                    p.fill()
+                }
+            }.withRenderingMode(.alwaysTemplate)
+            for name in ["DOC_PLAIN", "text.document.fill", "text.document"] { result[name] = image }
+        }
+        do {
+            let image = UIGraphicsImageRenderer(size: CGSize(width: 24, height: 24)).image { context in
+                UIColor.black.setStroke(); UIColor.black.setFill()
+                do {
+                    let p = UIBezierPath()
+                    p.lineWidth = 1.65; p.lineCapStyle = .round; p.lineJoinStyle = .round; p.usesEvenOddFillRule = true
+                    p.move(to: CGPoint(x: 12, y: 3.5))
+                    p.addCurve(to: CGPoint(x: 2, y: 12), controlPoint1: CGPoint(x: 6, y: 3.5), controlPoint2: CGPoint(x: 2, y: 6.9))
+                    p.addCurve(to: CGPoint(x: 12, y: 20.5), controlPoint1: CGPoint(x: 2, y: 17.1), controlPoint2: CGPoint(x: 6, y: 20.5))
+                    p.addCurve(to: CGPoint(x: 14, y: 16.25), controlPoint1: CGPoint(x: 16, y: 20.5), controlPoint2: CGPoint(x: 16, y: 17.1))
+                    p.addCurve(to: CGPoint(x: 17, y: 12.85), controlPoint1: CGPoint(x: 12, y: 14.55), controlPoint2: CGPoint(x: 14, y: 12.85))
+                    p.addLine(to: CGPoint(x: 19, y: 12.85))
+                    p.addCurve(to: CGPoint(x: 12, y: 3.5), controlPoint1: CGPoint(x: 25, y: 12.85), controlPoint2: CGPoint(x: 21, y: 3.5))
+                    p.close()
+                    p.move(to: CGPoint(x: 8.55, y: 8.77))
+                    p.addCurve(to: CGPoint(x: 7, y: 10.32), controlPoint1: CGPoint(x: 8.55, y: 9.626), controlPoint2: CGPoint(x: 7.856, y: 10.32))
+                    p.addCurve(to: CGPoint(x: 5.45, y: 8.77), controlPoint1: CGPoint(x: 6.144, y: 10.32), controlPoint2: CGPoint(x: 5.45, y: 9.626))
+                    p.addCurve(to: CGPoint(x: 7, y: 7.22), controlPoint1: CGPoint(x: 5.45, y: 7.914), controlPoint2: CGPoint(x: 6.144, y: 7.22))
+                    p.addCurve(to: CGPoint(x: 8.55, y: 8.77), controlPoint1: CGPoint(x: 7.856, y: 7.22), controlPoint2: CGPoint(x: 8.55, y: 7.914))
+                    p.close()
+                    p.move(to: CGPoint(x: 13.55, y: 6.815))
+                    p.addCurve(to: CGPoint(x: 12, y: 8.365), controlPoint1: CGPoint(x: 13.55, y: 7.671), controlPoint2: CGPoint(x: 12.856, y: 8.365))
+                    p.addCurve(to: CGPoint(x: 10.45, y: 6.815), controlPoint1: CGPoint(x: 11.144, y: 8.365), controlPoint2: CGPoint(x: 10.45, y: 7.671))
+                    p.addCurve(to: CGPoint(x: 12, y: 5.265), controlPoint1: CGPoint(x: 10.45, y: 5.959), controlPoint2: CGPoint(x: 11.144, y: 5.265))
+                    p.addCurve(to: CGPoint(x: 13.55, y: 6.815), controlPoint1: CGPoint(x: 12.856, y: 5.265), controlPoint2: CGPoint(x: 13.55, y: 5.959))
+                    p.close()
+                    p.move(to: CGPoint(x: 18.55, y: 8.77))
+                    p.addCurve(to: CGPoint(x: 17, y: 10.32), controlPoint1: CGPoint(x: 18.55, y: 9.626), controlPoint2: CGPoint(x: 17.856, y: 10.32))
+                    p.addCurve(to: CGPoint(x: 15.45, y: 8.77), controlPoint1: CGPoint(x: 16.144, y: 10.32), controlPoint2: CGPoint(x: 15.45, y: 9.626))
+                    p.addCurve(to: CGPoint(x: 17, y: 7.22), controlPoint1: CGPoint(x: 15.45, y: 7.914), controlPoint2: CGPoint(x: 16.144, y: 7.22))
+                    p.addCurve(to: CGPoint(x: 18.55, y: 8.77), controlPoint1: CGPoint(x: 17.856, y: 7.22), controlPoint2: CGPoint(x: 18.55, y: 7.914))
+                    p.close()
+                    p.move(to: CGPoint(x: 7.75, y: 12.85))
+                    p.addCurve(to: CGPoint(x: 6.2, y: 14.4), controlPoint1: CGPoint(x: 7.75, y: 13.706), controlPoint2: CGPoint(x: 7.056, y: 14.4))
+                    p.addCurve(to: CGPoint(x: 4.65, y: 12.85), controlPoint1: CGPoint(x: 5.344, y: 14.4), controlPoint2: CGPoint(x: 4.65, y: 13.706))
+                    p.addCurve(to: CGPoint(x: 6.2, y: 11.3), controlPoint1: CGPoint(x: 4.65, y: 11.994), controlPoint2: CGPoint(x: 5.344, y: 11.3))
+                    p.addCurve(to: CGPoint(x: 7.75, y: 12.85), controlPoint1: CGPoint(x: 7.056, y: 11.3), controlPoint2: CGPoint(x: 7.75, y: 11.994))
+                    p.close()
+                    p.fill()
+                }
+            }.withRenderingMode(.alwaysTemplate)
+            for name in ["PALETTE_FILLED"] { result[name] = image }
+        }
+        do {
+            let image = UIGraphicsImageRenderer(size: CGSize(width: 24, height: 24)).image { context in
+                UIColor.black.setStroke(); UIColor.black.setFill()
+                do {
+                    let p = UIBezierPath()
+                    p.lineWidth = 1.65; p.lineCapStyle = .round; p.lineJoinStyle = .round; p.usesEvenOddFillRule = true
+                    p.move(to: CGPoint(x: 14.6, y: 7.5))
+                    p.addQuadCurve(to: CGPoint(x: 21.5, y: 15.4), controlPoint: CGPoint(x: 15.29, y: 14.61))
+                    p.addQuadCurve(to: CGPoint(x: 14.6, y: 23.3), controlPoint: CGPoint(x: 15.29, y: 16.19))
+                    p.addQuadCurve(to: CGPoint(x: 7.7, y: 15.4), controlPoint: CGPoint(x: 13.91, y: 16.19))
+                    p.addQuadCurve(to: CGPoint(x: 14.6, y: 7.5), controlPoint: CGPoint(x: 13.91, y: 14.61))
+                    p.close()
+                    p.fill()
+                }
+                do {
+                    let p = UIBezierPath()
+                    p.lineWidth = 1.65; p.lineCapStyle = .round; p.lineJoinStyle = .round; p.usesEvenOddFillRule = true
+                    p.move(to: CGPoint(x: 6.6, y: 3.2))
+                    p.addQuadCurve(to: CGPoint(x: 10.5, y: 7.6), controlPoint: CGPoint(x: 6.99, y: 7.16))
+                    p.addQuadCurve(to: CGPoint(x: 6.6, y: 12), controlPoint: CGPoint(x: 6.99, y: 8.04))
+                    p.addQuadCurve(to: CGPoint(x: 2.7, y: 7.6), controlPoint: CGPoint(x: 6.21, y: 8.04))
+                    p.addQuadCurve(to: CGPoint(x: 6.6, y: 3.2), controlPoint: CGPoint(x: 6.21, y: 7.16))
+                    p.close()
+                    p.fill()
+                }
+                do {
+                    let p = UIBezierPath()
+                    p.lineWidth = 1.65; p.lineCapStyle = .round; p.lineJoinStyle = .round; p.usesEvenOddFillRule = true
+                    p.move(to: CGPoint(x: 14, y: 0.7))
+                    p.addQuadCurve(to: CGPoint(x: 16.2, y: 3.2), controlPoint: CGPoint(x: 14.22, y: 2.95))
+                    p.addQuadCurve(to: CGPoint(x: 14, y: 5.7), controlPoint: CGPoint(x: 14.22, y: 3.45))
+                    p.addQuadCurve(to: CGPoint(x: 11.8, y: 3.2), controlPoint: CGPoint(x: 13.78, y: 3.45))
+                    p.addQuadCurve(to: CGPoint(x: 14, y: 0.7), controlPoint: CGPoint(x: 13.78, y: 2.95))
+                    p.close()
+                    p.fill()
+                }
+            }.withRenderingMode(.alwaysTemplate)
+            for name in ["SPARKLES"] { result[name] = image }
+        }
+        do {
+            let image = UIGraphicsImageRenderer(size: CGSize(width: 24, height: 24)).image { context in
+                UIColor.black.setStroke(); UIColor.black.setFill()
+                do {
+                    let p = UIBezierPath()
+                    p.lineWidth = 1.65; p.lineCapStyle = .round; p.lineJoinStyle = .round; p.usesEvenOddFillRule = true
+                    p.move(to: CGPoint(x: 7.2, y: 5))
+                    p.addLine(to: CGPoint(x: 16.8, y: 5))
+                    p.addQuadCurve(to: CGPoint(x: 19, y: 6.6), controlPoint: CGPoint(x: 18.5, y: 5))
+                    p.addLine(to: CGPoint(x: 20.8, y: 12))
+                    p.addLine(to: CGPoint(x: 3.2, y: 12))
+                    p.addLine(to: CGPoint(x: 5, y: 6.6))
+                    p.addQuadCurve(to: CGPoint(x: 7.2, y: 5), controlPoint: CGPoint(x: 5.5, y: 5))
+                    p.close()
+                    p.fill()
+                }
+                do {
+                    let p = UIBezierPath()
+                    p.lineWidth = 1.65; p.lineCapStyle = .round; p.lineJoinStyle = .round; p.usesEvenOddFillRule = true
+                    p.move(to: CGPoint(x: 4, y: 13.3))
+                    p.addLine(to: CGPoint(x: 20, y: 13.3))
+                    p.addQuadCurve(to: CGPoint(x: 22, y: 15.3), controlPoint: CGPoint(x: 22, y: 13.3))
+                    p.addLine(to: CGPoint(x: 22, y: 17.4))
+                    p.addQuadCurve(to: CGPoint(x: 20, y: 19.4), controlPoint: CGPoint(x: 22, y: 19.4))
+                    p.addLine(to: CGPoint(x: 4, y: 19.4))
+                    p.addQuadCurve(to: CGPoint(x: 2, y: 17.4), controlPoint: CGPoint(x: 2, y: 19.4))
+                    p.addLine(to: CGPoint(x: 2, y: 15.3))
+                    p.addQuadCurve(to: CGPoint(x: 4, y: 13.3), controlPoint: CGPoint(x: 2, y: 13.3))
+                    p.close()
+                    p.move(to: CGPoint(x: 19.15, y: 16.35))
+                    p.addCurve(to: CGPoint(x: 18.1, y: 17.4), controlPoint1: CGPoint(x: 19.15, y: 16.93), controlPoint2: CGPoint(x: 18.68, y: 17.4))
+                    p.addCurve(to: CGPoint(x: 17.05, y: 16.35), controlPoint1: CGPoint(x: 17.52, y: 17.4), controlPoint2: CGPoint(x: 17.05, y: 16.93))
+                    p.addCurve(to: CGPoint(x: 18.1, y: 15.3), controlPoint1: CGPoint(x: 17.05, y: 15.77), controlPoint2: CGPoint(x: 17.52, y: 15.3))
+                    p.addCurve(to: CGPoint(x: 19.15, y: 16.35), controlPoint1: CGPoint(x: 18.68, y: 15.3), controlPoint2: CGPoint(x: 19.15, y: 15.77))
+                    p.close()
+                    p.fill()
+                }
+            }.withRenderingMode(.alwaysTemplate)
+            for name in ["EXTERNAL_DRIVE_FILLED"] { result[name] = image }
+        }
+        do {
+            let image = UIGraphicsImageRenderer(size: CGSize(width: 24, height: 24)).image { context in
+                UIColor.black.setStroke(); UIColor.black.setFill()
+                do {
+                    let p = UIBezierPath()
+                    p.lineWidth = 1.65; p.lineCapStyle = .round; p.lineJoinStyle = .round; p.usesEvenOddFillRule = true
+                    p.move(to: CGPoint(x: 5.53, y: 14))
+                    p.addLine(to: CGPoint(x: 5.53, y: 8.22))
+                    p.addCurve(to: CGPoint(x: 6.75, y: 7), controlPoint1: CGPoint(x: 5.53, y: 7.546), controlPoint2: CGPoint(x: 6.076, y: 7))
+                    p.addCurve(to: CGPoint(x: 7.97, y: 8.22), controlPoint1: CGPoint(x: 7.424, y: 7), controlPoint2: CGPoint(x: 7.97, y: 7.546))
+                    p.addLine(to: CGPoint(x: 7.97, y: 14))
+                    p.close()
+                    p.fill()
+                }
+                do {
+                    let p = UIBezierPath()
+                    p.lineWidth = 1.65; p.lineCapStyle = .round; p.lineJoinStyle = .round; p.usesEvenOddFillRule = true
+                    p.move(to: CGPoint(x: 8.63, y: 14))
+                    p.addLine(to: CGPoint(x: 8.63, y: 4.92))
+                    p.addCurve(to: CGPoint(x: 9.85, y: 3.7), controlPoint1: CGPoint(x: 8.63, y: 4.246), controlPoint2: CGPoint(x: 9.176, y: 3.7))
+                    p.addCurve(to: CGPoint(x: 11.07, y: 4.92), controlPoint1: CGPoint(x: 10.524, y: 3.7), controlPoint2: CGPoint(x: 11.07, y: 4.246))
+                    p.addLine(to: CGPoint(x: 11.07, y: 14))
+                    p.close()
+                    p.fill()
+                }
+                do {
+                    let p = UIBezierPath()
+                    p.lineWidth = 1.65; p.lineCapStyle = .round; p.lineJoinStyle = .round; p.usesEvenOddFillRule = true
+                    p.move(to: CGPoint(x: 11.73, y: 14))
+                    p.addLine(to: CGPoint(x: 11.73, y: 3.72))
+                    p.addCurve(to: CGPoint(x: 12.95, y: 2.5), controlPoint1: CGPoint(x: 11.73, y: 3.046), controlPoint2: CGPoint(x: 12.276, y: 2.5))
+                    p.addCurve(to: CGPoint(x: 14.17, y: 3.72), controlPoint1: CGPoint(x: 13.624, y: 2.5), controlPoint2: CGPoint(x: 14.17, y: 3.046))
+                    p.addLine(to: CGPoint(x: 14.17, y: 14))
+                    p.close()
+                    p.fill()
+                }
+                do {
+                    let p = UIBezierPath()
+                    p.lineWidth = 1.65; p.lineCapStyle = .round; p.lineJoinStyle = .round; p.usesEvenOddFillRule = true
+                    p.move(to: CGPoint(x: 14.83, y: 14))
+                    p.addLine(to: CGPoint(x: 14.83, y: 5.72))
+                    p.addCurve(to: CGPoint(x: 16.05, y: 4.5), controlPoint1: CGPoint(x: 14.83, y: 5.046), controlPoint2: CGPoint(x: 15.376, y: 4.5))
+                    p.addCurve(to: CGPoint(x: 17.27, y: 5.72), controlPoint1: CGPoint(x: 16.724, y: 4.5), controlPoint2: CGPoint(x: 17.27, y: 5.046))
+                    p.addLine(to: CGPoint(x: 17.27, y: 14))
+                    p.close()
+                    p.fill()
+                }
+                do {
+                    let p = UIBezierPath()
+                    p.lineWidth = 1.65; p.lineCapStyle = .round; p.lineJoinStyle = .round; p.usesEvenOddFillRule = true
+                    p.move(to: CGPoint(x: 5.53, y: 12.5))
+                    p.addLine(to: CGPoint(x: 17.27, y: 12.5))
+                    p.addLine(to: CGPoint(x: 17.27, y: 15.5))
+                    p.addCurve(to: CGPoint(x: 11.3, y: 22.2), controlPoint1: CGPoint(x: 17.27, y: 19.8), controlPoint2: CGPoint(x: 14.9, y: 22.2))
+                    p.addCurve(to: CGPoint(x: 5.53, y: 16.2), controlPoint1: CGPoint(x: 7.7, y: 22.2), controlPoint2: CGPoint(x: 5.53, y: 19.6))
+                    p.close()
+                    p.fill()
+                }
+                do {
+                    let p = UIBezierPath()
+                    p.lineWidth = 1.65; p.lineCapStyle = .round; p.lineJoinStyle = .round; p.usesEvenOddFillRule = true
+                    p.move(to: CGPoint(x: 16.104, y: 19.827))
+                    p.addLine(to: CGPoint(x: 20.654, y: 13.427))
+                    p.addCurve(to: CGPoint(x: 20.277, y: 11.196), controlPoint1: CGPoint(x: 21.166, y: 12.707), controlPoint2: CGPoint(x: 20.997, y: 11.708))
+                    p.addCurve(to: CGPoint(x: 18.046, y: 11.573), controlPoint1: CGPoint(x: 19.557, y: 10.684), controlPoint2: CGPoint(x: 18.558, y: 10.853))
+                    p.addLine(to: CGPoint(x: 13.496, y: 17.973))
+                    p.addCurve(to: CGPoint(x: 13.873, y: 20.204), controlPoint1: CGPoint(x: 12.984, y: 18.693), controlPoint2: CGPoint(x: 13.153, y: 19.692))
+                    p.addCurve(to: CGPoint(x: 16.104, y: 19.827), controlPoint1: CGPoint(x: 14.593, y: 20.716), controlPoint2: CGPoint(x: 15.592, y: 20.547))
+                    p.close()
+                    p.fill()
+                }
+            }.withRenderingMode(.alwaysTemplate)
+            for name in ["HAND_FILLED"] { result[name] = image }
+        }
         return result
     }()
 

@@ -13,9 +13,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-/** Shared app navigation geometry. System status/navigation insets stay platform owned. */
+/**
+ * Shared app navigation geometry. System status/navigation insets stay platform owned.
+ * [trailing] holds an optional toolbar control (a text button or icon) pinned to the end.
+ */
 @Composable
-fun JerreaderNavigationBar(title: String, backTitle: String, onBack: () -> Unit) {
+fun JerreaderNavigationBar(
+    title: String,
+    backTitle: String,
+    onBack: () -> Unit,
+    trailing: (@Composable () -> Unit)? = null
+) {
     val barFontSize = with(androidx.compose.ui.platform.LocalDensity.current) { 17.dp.toSp() }
     Column(Modifier.fillMaxWidth().statusBarsPadding()) {
         BoxWithConstraints(Modifier.fillMaxWidth().heightIn(min = 44.dp)) {
@@ -30,6 +38,10 @@ fun JerreaderNavigationBar(title: String, backTitle: String, onBack: () -> Unit)
                 JerreaderGlyph(JerreaderIcon.CHEVRON_LEFT, MaterialTheme.colorScheme.primary, Modifier.size(22.dp))
                 Text(backTitle, fontSize = barFontSize, lineHeight = with(androidx.compose.ui.platform.LocalDensity.current) { 22.dp.toSp() }, color = MaterialTheme.colorScheme.primary,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            if (trailing != null) {
+                Box(Modifier.align(Alignment.CenterEnd).widthIn(max = maxWidth * .25f).heightIn(min = 44.dp).padding(end = 8.dp),
+                    contentAlignment = Alignment.CenterEnd) { trailing() }
             }
         }
     }

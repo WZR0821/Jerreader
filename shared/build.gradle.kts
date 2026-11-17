@@ -8,8 +8,8 @@ plugins {
 kotlin {
     android {
         namespace = "com.jerreader.shared"
-        compileSdk = 36
-        minSdk = 23
+        compileSdk = 37
+        minSdk = 24
 
         withHostTestBuilder {}.configure {}
     }
@@ -36,5 +36,18 @@ kotlin {
         commonTest.dependencies {
             implementation(kotlin("test"))
         }
+        // The parity tests read shared/parity/*.json. The android.jar stub
+        // returns defaults for org.json, so host tests need the real library.
+        getByName("androidHostTest").dependencies {
+            implementation(libs.json)
+        }
     }
+}
+
+// The fixtures are test inputs: editing one must rerun the host tests even
+// when no Kotlin source changed.
+tasks.withType<Test>().configureEach {
+    inputs.dir(layout.projectDirectory.dir("parity"))
+        .withPropertyName("parityFixtures")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 }

@@ -1110,6 +1110,32 @@ final class ReaderServicesTests: XCTestCase {
         )
     }
 
+    func testSmartSelectionDoesNotGrowIntoNeighbouringSpokenLines() {
+        // Readium's context joins paragraphs with a line break; three spoken
+        // lines used to come back as one "sentence".
+        XCTAssertEqual(
+            ReaderSmartSelection.resolvedText(
+                highlight: "どういうこと",
+                before: "「待てよ」\n「",
+                after: "だ」\n敦也がいった。"
+            ),
+            "「どういうことだ」"
+        )
+    }
+
+    func testSmartSelectionKeepsExactRangeWhenTheSentenceIsParagraphSized() {
+        let before = String(repeating: "長い説明が続き、", count: 18)
+        let after = String(repeating: "さらに話が続き、", count: 18) + "終わった。"
+        XCTAssertEqual(
+            ReaderSmartSelection.resolvedText(
+                highlight: "その結果",
+                before: before,
+                after: after
+            ),
+            "その結果"
+        )
+    }
+
     func testRubyAnnotationHeuristicRecognizesKanaButNotBaseText() {
         XCTAssertTrue(ReaderJapaneseSelection.isLikelyRubyAnnotation("ふりがな"))
         XCTAssertTrue(ReaderJapaneseSelection.isLikelyRubyAnnotation("トウ キョウ"))
@@ -2044,17 +2070,18 @@ final class ReaderServicesTests: XCTestCase {
     /// too, which killed selection highlighting the moment the reader switched
     /// orientation. Nothing in the reader may remove user scripts.
     func testReaderNeverRemovesScriptsFromReadiumsContentController() throws {
-        let source = try String(
-            contentsOf: URL(
-                fileURLWithPath: #filePath
+        // The controller and the JavaScript it injects live in two files.
+        let source = try ["EPUBReaderHost.swift", "EPUBReaderScripts.swift"].map { name in
+            try String(
+                contentsOf: URL(
+                    fileURLWithPath: #filePath
+                )
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Jerreader/Features/Reader/" + name),
+                encoding: .utf8
             )
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent(
-                "Jerreader/Features/Reader/EPUBReaderHost.swift"
-            ),
-            encoding: .utf8
-        )
+        }.joined(separator: "\n")
 
         XCTAssertFalse(
             source.contains("removeAllUserScripts"),
@@ -2676,6 +2703,69 @@ final class ReaderServicesTests: XCTestCase {
         )
     }
 
+    func testStandardLayoutKeepsBarsThroughContentTapsAndTranslations() throws {
+        let (model, container, _) = try makeReaderModel()
+        defer { withExtendedLifetime(container) {} }
+
+        model.setLayoutMode(.immersive)
+        model.setLayoutMode(.standard)
+        XCTAssertEqual(model.layoutMode, .standard)
+        XCTAssertTrue(model.isChromeVisible)
+
+        model.handleContentTap()
+        XCTAssertTrue(model.isChromeVisible)
+        model.handleContentTap()
+        XCTAssertTrue(model.isChromeVisible)
+
+        // A translation asks for the bars to go; the standard layout keeps them.
+        model.controlsVisible = false
+        XCTAssertTrue(model.isChromeVisible)
+    }
+
+    func testImmersiveLayoutStartsHiddenTogglesOnTapAndAutoHides() async throws {
+        let (model, container, _) = try makeReaderModel()
+        defer { withExtendedLifetime(container) {} }
+        model.chromeAutoHideDelay = .milliseconds(40)
+
+        model.setLayoutMode(.immersive)
+        XCTAssertFalse(model.isChromeVisible)
+
+        model.handleContentTap()
+        XCTAssertTrue(model.isChromeVisible)
+        model.handleContentTap()
+        XCTAssertFalse(model.isChromeVisible)
+
+        model.handleContentTap()
+        XCTAssertTrue(model.isChromeVisible)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertFalse(model.isChromeVisible, "the bars hide again on their own")
+
+        // Dragging the progress slider holds the bars until the finger lifts.
+        model.handleContentTap()
+        model.setChromeAutoHideSuspended(true)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(model.isChromeVisible)
+        model.setChromeAutoHideSuspended(false)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertFalse(model.isChromeVisible)
+
+        model.setLayoutMode(.standard)
+        XCTAssertTrue(model.isChromeVisible)
+    }
+
+    func testReaderLayoutModeDefaultsToStandardAndReadsStoredValue() throws {
+        let suiteName = "JerreaderTests.layout.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        XCTAssertEqual(ReaderInterfaceDefaults.layoutMode(defaults: defaults), .standard)
+        defaults.set("immersive", forKey: ReaderInterfaceDefaults.layoutModeKey)
+        XCTAssertEqual(ReaderInterfaceDefaults.layoutMode(defaults: defaults), .immersive)
+        defaults.set("unknown", forKey: ReaderInterfaceDefaults.layoutModeKey)
+        XCTAssertEqual(ReaderInterfaceDefaults.layoutMode(defaults: defaults), .standard)
+        XCTAssertEqual(ReaderLayoutMode.allCases.map(\.title), ["标准", "沉浸"])
+    }
+
     func testQuickTranslationIndicatorAutoHidesWithoutDisablingPointTranslation() async throws {
         let timing = ReaderQuickTranslationIndicatorTiming(
             autoExitDelay: .milliseconds(20)
@@ -2785,6 +2875,24 @@ final class ReaderServicesTests: XCTestCase {
         XCTAssertEqual(restarted.trigger, .smartSelection)
     }
 
+    func testThreeLayerSelectionStaysExactAfterFallbackDelivery() throws {
+        var resolver = ReaderSelectionIntentResolver()
+        // The long-press fallback delivered "light" exactly; the handle drag
+        // that follows must not be completed to the whole sentence.
+        resolver.markPrecise(after: "light")
+
+        let adjusted = try XCTUnwrap(
+            resolver.resolve(
+                highlight: "light faded",
+                before: "Intro. The evening ",
+                after: " behind the hills. Another sentence."
+            )
+        )
+
+        XCTAssertEqual(adjusted.text, "light faded")
+        XCTAssertEqual(adjusted.trigger, .preciseSelection)
+    }
+
     func testQuickSentenceSegmentationHandlesEnglishAbbreviations() throws {
         let paragraph = "Dr. Smith looked up. The evening sky was clear! He smiled."
         let offset = (paragraph as NSString).range(of: "sky").location
@@ -2798,6 +2906,63 @@ final class ReaderServicesTests: XCTestCase {
 
         XCTAssertEqual(segment.text, "The evening sky was clear!")
         XCTAssertEqual(segment.contextText, paragraph)
+    }
+
+    func testShortTapWordSegmentationReturnsWholeEnglishWordWithSentence() throws {
+        let paragraph = "Dr. Smith looked up. The evening sky was clear! He smiled."
+        let offset = (paragraph as NSString).range(of: "evening").location + 3
+        let segment = try XCTUnwrap(
+            ReaderWordSegmenter.word(
+                in: paragraph,
+                utf16Offset: offset,
+                language: .english
+            )
+        )
+
+        XCTAssertEqual(segment.text, "evening")
+        XCTAssertEqual(segment.contextText, "The evening sky was clear!")
+        XCTAssertEqual(
+            segment.utf16Range,
+            (paragraph as NSString).range(of: "evening").location
+                ..< NSMaxRange((paragraph as NSString).range(of: "evening"))
+        )
+    }
+
+    func testShortTapWordSegmentationIgnoresNumbersAndBlankText() {
+        let paragraph = "It rose 3.14 percent."
+        let offset = (paragraph as NSString).range(of: "3.14").location + 1
+        XCTAssertNil(ReaderWordSegmenter.word(in: paragraph, utf16Offset: offset, language: .english))
+        XCTAssertNil(ReaderWordSegmenter.word(in: "   ", utf16Offset: 1, language: .english))
+    }
+
+    func testShortTapWordSegmentationJoinsJapaneseInflection() throws {
+        let paragraph = "彼はパンを食べました。"
+        for probe in ["食", "まし"] {
+            let offset = (paragraph as NSString).range(of: probe).location
+            let segment = try XCTUnwrap(
+                ReaderWordSegmenter.word(
+                    in: paragraph,
+                    utf16Offset: offset,
+                    language: .japanese
+                ),
+                probe
+            )
+            XCTAssertEqual(segment.text, "食べました", probe)
+            XCTAssertEqual(segment.contextText, paragraph, probe)
+        }
+    }
+
+    func testShortTapWordSegmentationDoesNotJoinNegationOntoNoun() throws {
+        let paragraph = "それは問題ない。"
+        let offset = (paragraph as NSString).range(of: "問題").location
+        let segment = try XCTUnwrap(
+            ReaderWordSegmenter.word(
+                in: paragraph,
+                utf16Offset: offset,
+                language: .japanese
+            )
+        )
+        XCTAssertEqual(segment.text, "問題")
     }
 
     func testQuickSentenceSegmentationKeepsEnglishTitleWithFirstSentence() throws {
@@ -3007,6 +3172,73 @@ final class ReaderServicesTests: XCTestCase {
         )
 
         XCTAssertEqual(segment.text, "『彼は「行く」と言った。』")
+    }
+
+    func testJapaneseSpokenLinesWithoutTerminatorsAreSeparateSentences() throws {
+        let paragraph = "「待てよ」「どういうことだ」敦也がいった。"
+        let expected = ["待て": "「待てよ」", "どういう": "「どういうことだ」", "敦也": "敦也がいった。"]
+        for (target, sentence) in expected {
+            let segment = try XCTUnwrap(
+                ReaderSentenceSegmenter.sentence(
+                    in: paragraph,
+                    utf16Offset: (paragraph as NSString).range(of: target).location,
+                    language: .japanese
+                )
+            )
+            XCTAssertEqual(segment.text, sentence, target)
+        }
+    }
+
+    func testJapaneseSpokenLinesSplitAcrossParagraphBreaks() throws {
+        let context = "「待てよ」\n　「どういうことだ」\n　敦也がいった。"
+        let segment = try XCTUnwrap(
+            ReaderSentenceSegmenter.sentence(
+                in: context,
+                utf16Offset: (context as NSString).range(of: "どういう").location,
+                language: .japanese
+            )
+        )
+
+        XCTAssertEqual(segment.text, "「どういうことだ」")
+    }
+
+    func testJapaneseQuoteUsedAsANounStaysInItsSentence() throws {
+        for paragraph in ["「待てよ」の一言で彼は止まった。", "最初の言葉は「待てよ」だった。"] {
+            let segment = try XCTUnwrap(
+                ReaderSentenceSegmenter.sentence(
+                    in: paragraph + "次の話。",
+                    utf16Offset: ((paragraph + "次の話。") as NSString).range(of: "待て").location,
+                    language: .japanese
+                )
+            )
+            XCTAssertEqual(segment.text, paragraph)
+        }
+    }
+
+    func testJapaneseSpokenLineKeepsTheMarkThatFollowsIt() throws {
+        let paragraph = "「待てよ」。敦也がいった。"
+        let segment = try XCTUnwrap(
+            ReaderSentenceSegmenter.sentence(
+                in: paragraph,
+                utf16Offset: (paragraph as NSString).range(of: "待て").location,
+                language: .japanese
+            )
+        )
+
+        XCTAssertEqual(segment.text, "「待てよ」。")
+    }
+
+    func testJapaneseAdverbAfterSpokenLineStartsANewSentence() throws {
+        let paragraph = "「待てよ」もう遅い。"
+        let segment = try XCTUnwrap(
+            ReaderSentenceSegmenter.sentence(
+                in: paragraph,
+                utf16Offset: (paragraph as NSString).range(of: "遅い").location,
+                language: .japanese
+            )
+        )
+
+        XCTAssertEqual(segment.text, "もう遅い。")
     }
 
     func testQuickSentenceContextIsBoundedAroundTheTarget() throws {
@@ -3975,7 +4207,7 @@ final class ReaderServicesTests: XCTestCase {
         XCTAssertEqual(store.directAPIConfiguration?.provider, .openAI)
     }
 
-    func testDirectAPIDefaultsExposeGPTClaudeAndKimiReadyToPasteKey() throws {
+    func testDirectAPIDefaultsStartWithDeepSeekAndPinClaudeChatGPTAndDeepSeek() throws {
         let suiteName = "JerreaderTests.DirectDefaults.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -3985,19 +4217,121 @@ final class ReaderServicesTests: XCTestCase {
             credentialStore: TestTranslationCredentialStore()
         )
 
-        XCTAssertEqual(store.directAPIProvider, .openAI)
-        XCTAssertEqual(store.directAPIModel, "gpt-5.6-luna")
-        XCTAssertEqual(DirectAIProviderChoice.anthropic.defaultModel, "claude-sonnet-5")
-        XCTAssertEqual(DirectAIProviderChoice.kimi.defaultModel, "kimi-k2.6")
+        XCTAssertEqual(store.provider, .apple)
+        XCTAssertEqual(store.directAPIProvider, .deepSeek)
+        XCTAssertEqual(store.directAPIModel, "deepseek-flash")
+        XCTAssertNil(store.directAPIConfiguration)
         XCTAssertEqual(
-            DirectAIProviderChoice.kimi.defaultEndpointText,
-            "https://api.moonshot.cn/v1/chat/completions"
+            Array(DirectAIProviderChoice.presets.prefix(3)),
+            [.anthropic, .openAI, .deepSeek]
         )
+        XCTAssertEqual(DirectAIProviderChoice.anthropic.defaultModel, "claude-haiku-5-5")
+        XCTAssertEqual(DirectAIProviderChoice.kimi.defaultModel, "kimi-k3.1-pro")
 
         store.directAPIProvider = .kimi
         store.directAPIKey = "local-kimi-key"
-        XCTAssertEqual(store.directAPIConfiguration?.provider, .kimi)
-        XCTAssertEqual(store.directAPIConfiguration?.model, "kimi-k2.6")
+        let configuration = try XCTUnwrap(store.directAPIConfiguration)
+        XCTAssertEqual(configuration.provider, .kimi)
+        XCTAssertEqual(configuration.model, "kimi-k3.1-pro")
+        XCTAssertEqual(configuration.style, .chatCompletions)
+        XCTAssertEqual(
+            configuration.endpoint.absoluteString,
+            "https://api.moonshot.cn/v1/chat/completions"
+        )
+    }
+
+    func testAddingProviderPutsItInUseOnlyWhenTheModelInUseHasNoKey() throws {
+        let suiteName = "JerreaderTests.AIProviders.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.removePersistentDomain(forName: suiteName)
+        let store = TranslationSettingsStore(
+            defaults: defaults,
+            credentialStore: TestTranslationCredentialStore()
+        )
+
+        // The untouched default gives way to the first provider with a key.
+        XCTAssertTrue(try store.addProvider(.preset(.anthropic), key: " claude-local-key "))
+        XCTAssertEqual(store.aiProviders.activeID, "anthropic")
+        XCTAssertEqual(store.aiProviders.entries.map(\.id), ["anthropic"])
+        XCTAssertEqual(store.apiKey(for: "anthropic"), "claude-local-key")
+        XCTAssertEqual(store.keyedProviderIDs, ["anthropic"])
+        XCTAssertEqual(
+            store.directAPIConfiguration?.endpoint.absoluteString,
+            "https://api.anthropic.com/v1/messages"
+        )
+        XCTAssertEqual(store.directAPIConfiguration?.style, .anthropicMessages)
+
+        // A second provider is kept, while the one in use stays in use.
+        XCTAssertFalse(try store.addProvider(.preset(.openAI), key: "openai-local-key"))
+        XCTAssertEqual(store.aiProviders.activeID, "anthropic")
+        XCTAssertEqual(store.aiProviders.entries.map(\.id), ["anthropic", "openAI"])
+
+        XCTAssertThrowsError(try store.removeProvider("anthropic")) { error in
+            XCTAssertEqual(error as? AIProviderSettingsError, .removingActiveProvider)
+        }
+        store.changeProviders { $0.activate("openAI", model: "gpt-6.1-sol") }
+        XCTAssertEqual(store.directAPIConfiguration?.model, "gpt-6.1-sol")
+        XCTAssertEqual(
+            store.directAPIConfiguration?.endpoint.absoluteString,
+            "https://api.openai.com/v1/responses"
+        )
+        try store.removeProvider("anthropic")
+        XCTAssertEqual(store.aiProviders.entries.map(\.id), ["openAI"])
+        XCTAssertEqual(store.apiKey(for: "anthropic"), "")
+        XCTAssertFalse(store.keyedProviderIDs.contains("anthropic"))
+
+        XCTAssertThrowsError(
+            try store.addProvider(
+                AIProviderEntry(
+                    id: AIProviderEntry.newCustomID(), kind: .openAICompatible, name: "Plain",
+                    baseURL: "http://plain.example.test/v1", model: "m",
+                    models: [AIModelEntry(id: "m", style: .chatCompletions)]
+                ),
+                key: "plain-key"
+            )
+        ) { error in
+            XCTAssertEqual(error as? AIProviderSettingsError, .invalidAddress)
+        }
+
+        // Providers and their models come back on the next launch; keys stay in the keychain.
+        let saved = try XCTUnwrap(defaults.string(forKey: "translation.aiProviders.v1"))
+        XCTAssertFalse(saved.contains("openai-local-key"))
+        let reopened = TranslationSettingsStore(
+            defaults: defaults,
+            credentialStore: TestTranslationCredentialStore()
+        )
+        XCTAssertEqual(reopened.aiProviders, store.aiProviders)
+    }
+
+    func testLegacyDirectAPISettingsMigrateWithTheirModelAndRequestURL() throws {
+        let suiteName = "JerreaderTests.AIProviderMigration.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults.set("anthropic", forKey: "translation.directAPI.provider")
+        defaults.set("claude-legacy", forKey: "translation.directAPI.model.anthropic")
+        defaults.set(
+            "https://compatible.example.test/v1/chat/completions",
+            forKey: "translation.directAPI.endpoint.openAICompatible"
+        )
+        defaults.set("compatible-model", forKey: "translation.directAPI.model.openAICompatible")
+        let credentials = TestTranslationCredentialStore()
+        try credentials.saveSecret("legacy-claude-key", account: "direct-api-anthropic")
+
+        let store = TranslationSettingsStore(defaults: defaults, credentialStore: credentials)
+
+        XCTAssertEqual(store.aiProviders.entries.map(\.id), ["anthropic", "openAICompatible"])
+        XCTAssertEqual(store.directAPIProvider, .anthropic)
+        XCTAssertEqual(store.directAPIKey, "legacy-claude-key")
+        let configuration = try XCTUnwrap(store.directAPIConfiguration)
+        XCTAssertEqual(configuration.model, "claude-legacy")
+        XCTAssertEqual(configuration.style, .anthropicMessages)
+        XCTAssertEqual(configuration.endpoint.absoluteString, "https://api.anthropic.com/v1/messages")
+        let compatible = try XCTUnwrap(store.aiProviders.entry("openAICompatible"))
+        XCTAssertEqual(compatible.baseURL, "https://compatible.example.test/v1")
+        XCTAssertEqual(compatible.activeModel, AIModelEntry(id: "compatible-model", style: .chatCompletions))
+        XCTAssertNotNil(defaults.string(forKey: "translation.aiProviders.v1"))
     }
 
     func testEveryDirectAIProviderHasLocalAssetSlotAndReadableFallbackMark() {

@@ -1,60 +1,76 @@
-import Combine
 import Foundation
+import Observation
 @preconcurrency import ReadiumNavigator
 @preconcurrency import ReadiumShared
 import SwiftData
 @preconcurrency import Translation
 
+/// Observed by SwiftUI through the Observation framework: a view redraws only
+/// when a property it actually read changes, instead of on every change of
+/// any published property as with `ObservableObject`. Bookkeeping state no
+/// view reads (tasks, caches, identifiers) is `@ObservationIgnored`, just as
+/// it was never published before.
 @MainActor
-final class EPUBReaderViewModel: ObservableObject {
-    @Published private(set) var loadState: ReaderLoadState = .loading
-    @Published private(set) var controller: (any PublicationReaderController)?
-    @Published private(set) var outline: [ReaderOutlineItem] = []
-    @Published private(set) var chapterTitle: String
-    @Published private(set) var progress: Double = 0
-    @Published private(set) var bookmarks: [ReadingBookmarkRecord] = []
-    @Published private(set) var annotations: [ReadingAnnotationRecord] = []
-    @Published private(set) var isCurrentLocationBookmarked = false
-    @Published private(set) var searchResults: [ReaderSearchResult] = []
-    @Published private(set) var isSearching = false
-    @Published private(set) var searchErrorMessage: String?
-    @Published private(set) var lastSearchQuery = ""
-    @Published var controlsVisible = true
-    @Published var readerAlertMessage: String?
-    @Published private(set) var readerActivityMessage: String?
+@Observable
+final class EPUBReaderViewModel {
+    private(set) var loadState: ReaderLoadState = .loading
+    private(set) var controller: (any PublicationReaderController)?
+    private(set) var outline: [ReaderOutlineItem] = []
+    private(set) var chapterTitle: String
+    private(set) var progress: Double = 0
+    private(set) var bookmarks: [ReadingBookmarkRecord] = []
+    private(set) var annotations: [ReadingAnnotationRecord] = []
+    private(set) var isCurrentLocationBookmarked = false
+    let searchModel = ReaderSearchModel()
+    let companion: ReaderCompanionModel
+    var searchResults: [ReaderSearchResult] { searchModel.results }
+    var isSearching: Bool { searchModel.isSearching }
+    var searchErrorMessage: String? { searchModel.errorMessage }
+    var lastSearchQuery: String { searchModel.lastQuery }
+    /// Whether the reader asked for its bars. In the standard layout the bars
+    /// never leave the screen, so read `isChromeVisible` to know what shows.
+    var controlsVisible = true
+    /// Standard keeps the bars and lays the page out between them; immersive
+    /// gives the page the whole screen and shows the bars only on request.
+    private(set) var layoutMode: ReaderLayoutMode
+    var isChromeVisible: Bool {
+        layoutMode == .standard || controlsVisible
+    }
+    var readerAlertMessage: String?
+    private(set) var readerActivityMessage: String?
 
-    @Published private(set) var fontSize: Double
-    @Published private(set) var theme: ReaderThemeChoice
-    @Published private(set) var fontChoice: ReaderFontChoice
-    @Published private(set) var lineHeight: Double
-    @Published private(set) var paragraphSpacing: Double
-    @Published private(set) var pageMargins: Double
-    @Published private(set) var customBackgroundHex: String
-    @Published private(set) var customSelectionColorHex: String
-    @Published private(set) var textOrientation: ReaderTextOrientationChoice
-    @Published private(set) var readingMode: ReaderReadingMode
-    @Published private(set) var publicationLayout: ReaderPublicationLayout
-    @Published private(set) var isPageLocked = true
+    private(set) var fontSize: Double
+    private(set) var theme: ReaderThemeChoice
+    private(set) var fontChoice: ReaderFontChoice
+    private(set) var lineHeight: Double
+    private(set) var paragraphSpacing: Double
+    private(set) var pageMargins: Double
+    private(set) var customBackgroundHex: String
+    private(set) var customSelectionColorHex: String
+    private(set) var textOrientation: ReaderTextOrientationChoice
+    private(set) var readingMode: ReaderReadingMode
+    private(set) var publicationLayout: ReaderPublicationLayout
+    private(set) var isPageLocked = true
 
-    @Published private(set) var translationConfiguration: TranslationSession.Configuration?
-    @Published private(set) var translationState: ReaderTranslationState = .idle
-    @Published private(set) var translationAnchorFrame: CGRect?
-    @Published private(set) var isSpeakingTranslationSource = false
-    @Published private(set) var speechRate: Double
-    @Published private(set) var isCurrentTranslationFavorite = false
-    @Published private(set) var isCurrentSelectionInVocabulary = false
-    @Published private(set) var isAddingCurrentSelectionToVocabulary = false
-    @Published private(set) var isExpandingCrossPageTranslation = false
-    @Published private(set) var isTranslationRetryCoolingDown = false
-    @Published private(set) var isCurrentSelectionAnnotated = false
-    @Published var presentedAnnotationEditor: ReaderAnnotationEditorDraft?
-    @Published private(set) var contextExplanationState: ReaderContextExplanationState = .idle
-    @Published var isShowingContextExplanation = false
-    @Published private(set) var isQuickSentenceTranslationEnabled: Bool
-    @Published private(set) var isQuickTranslationIndicatorVisible: Bool
-    @Published private(set) var quickTranslationUnit: ReaderQuickTranslationUnit
-    @Published private(set) var disablesTapPageTurnsDuringQuickTranslation: Bool
-    @Published private(set) var isPDFPaperModeEnabled: Bool
+    private(set) var translationConfiguration: TranslationSession.Configuration?
+    private(set) var translationState: ReaderTranslationState = .idle
+    private(set) var translationAnchorFrame: CGRect?
+    private(set) var isSpeakingTranslationSource = false
+    private(set) var speechRate: Double
+    private(set) var isCurrentTranslationFavorite = false
+    private(set) var isCurrentSelectionInVocabulary = false
+    private(set) var isAddingCurrentSelectionToVocabulary = false
+    private(set) var isExpandingCrossPageTranslation = false
+    private(set) var isTranslationRetryCoolingDown = false
+    private(set) var isCurrentSelectionAnnotated = false
+    var presentedAnnotationEditor: ReaderAnnotationEditorDraft?
+    private(set) var contextExplanationState: ReaderContextExplanationState = .idle
+    var isShowingContextExplanation = false
+    private(set) var isQuickSentenceTranslationEnabled: Bool
+    private(set) var isQuickTranslationIndicatorVisible: Bool
+    private(set) var quickTranslationUnit: ReaderQuickTranslationUnit
+    private(set) var disablesTapPageTurnsDuringQuickTranslation: Bool
+    private(set) var isPDFPaperModeEnabled: Bool
 
     private let initialLocatorJSON: String?
     let book: BookRecord
@@ -128,34 +144,40 @@ final class EPUBReaderViewModel: ObservableObject {
     private let quickTranslationIndicatorTiming: ReaderQuickTranslationIndicatorTiming
     private let backendTranslationServiceFactory:
         (BackendTranslationConfiguration) -> any TranslationService
-    private var publication: Publication?
-    private var activePublicationService: (any ReaderPublicationOpening)?
-    private var pendingLocator: Locator?
-    private var currentLocator: Locator?
-    private var saveTask: Task<Void, Never>?
-    private var searchTask: Task<Void, Never>?
-    private var backendTranslationTask: Task<Void, Never>?
-    private var translationWatchdogTask: Task<Void, Never>?
-    private var translationWatchdogRequestID: UUID?
-    private var inFlightTranslationRequestID: UUID?
-    private var translationRetryCooldownTask: Task<Void, Never>?
-    private var quickTranslationIndicatorAutoExitTask: Task<Void, Never>?
-    private var contextExplanationTask: Task<Void, Never>?
-    private var contextExplanationWatchdogTask: Task<Void, Never>?
-    private var crossPageExpansionTask: Task<Void, Never>?
-    @Published var isShowingContextualLookup = false
-    private var vocabularyLookupTask: Task<Void, Never>?
-    private var speechPlaybackID: UUID?
-    private var contextExplanationCache: [String: ContextExplanationResult] = [:]
-    private var translationRetryDeadlines:
+    @ObservationIgnored private var publication: Publication?
+    @ObservationIgnored private var activePublicationService: (any ReaderPublicationOpening)?
+    @ObservationIgnored private var pendingLocator: Locator?
+    @ObservationIgnored private var currentLocator: Locator?
+    @ObservationIgnored private var saveTask: Task<Void, Never>?
+    @ObservationIgnored private var backendTranslationTask: Task<Void, Never>?
+    @ObservationIgnored private var translationWatchdogTask: Task<Void, Never>?
+    @ObservationIgnored private var translationWatchdogRequestID: UUID?
+    @ObservationIgnored private var inFlightTranslationRequestID: UUID?
+    @ObservationIgnored private var translationRetryCooldownTask: Task<Void, Never>?
+    @ObservationIgnored private var quickTranslationIndicatorAutoExitTask: Task<Void, Never>?
+    @ObservationIgnored private var chromeAutoHideTask: Task<Void, Never>?
+    /// Tests shorten this; the app always uses the shared default.
+    @ObservationIgnored var chromeAutoHideDelay = ReaderInterfaceDefaults.immersiveChromeAutoHideDelay
+    @ObservationIgnored private var isChromeAutoHideSuspended = false
+    @ObservationIgnored private var contextExplanationTask: Task<Void, Never>?
+    @ObservationIgnored private var contextExplanationWatchdogTask: Task<Void, Never>?
+    @ObservationIgnored private var crossPageExpansionTask: Task<Void, Never>?
+    var isShowingContextualLookup = false
+    /// The word a short tap looked up. The lookup sheet opens on it instead
+    /// of the translation card's text; nil once that sheet has gone.
+    private(set) var shortTapLookup: ReaderShortTapLookup?
+    @ObservationIgnored private var vocabularyLookupTask: Task<Void, Never>?
+    @ObservationIgnored private var speechPlaybackID: UUID?
+    @ObservationIgnored private var contextExplanationCache: [String: ContextExplanationResult] = [:]
+    @ObservationIgnored private var translationRetryDeadlines:
         [ReaderTranslationRetryIdentity: ContinuousClock.Instant] = [:]
-    private var readingSessionStartedAt: Date?
-    private var loadAttemptID: UUID?
-    private var publicationOpenTask: Task<Publication, Error>?
-    private var loadWatchdogTask: Task<Void, Never>?
-    private var isClosed = false
-    private var isReadingSceneActive = false
-    private var hasReportedPersistenceFailure = false
+    @ObservationIgnored private var readingSessionStartedAt: Date?
+    @ObservationIgnored private var loadAttemptID: UUID?
+    @ObservationIgnored private var publicationOpenTask: Task<Publication, Error>?
+    @ObservationIgnored private var loadWatchdogTask: Task<Void, Never>?
+    @ObservationIgnored private var isClosed = false
+    @ObservationIgnored private var isReadingSceneActive = false
+    @ObservationIgnored private var hasReportedPersistenceFailure = false
 
     init(
         book: BookRecord,
@@ -189,6 +211,9 @@ final class EPUBReaderViewModel: ObservableObject {
         self.loadTiming = loadTiming
         self.translationTiming = translationTiming
         self.quickTranslationIndicatorTiming = quickTranslationIndicatorTiming
+        let layoutMode = ReaderInterfaceDefaults.layoutMode()
+        self.layoutMode = layoutMode
+        controlsVisible = layoutMode == .standard
         self.backendTranslationServiceFactory = backendTranslationServiceFactory
         self.translationSettings = translationSettings ?? TranslationSettingsStore()
         let quickTranslationEnabled =
@@ -204,6 +229,7 @@ final class EPUBReaderViewModel: ObservableObject {
         bookmarkStore = ReadingBookmarkStore(modelContext: modelContext)
         annotationStore = ReadingAnnotationStore(modelContext: modelContext)
         chapterTitle = book.title
+        companion = ReaderCompanionModel(bookID: book.id, bookTitle: book.title)
         fontSize = ReaderFontSizing.clampedScale(book.readerFontSize)
         theme = ReaderThemeChoice(rawValue: book.readerTheme) ?? .coolGray
         fontChoice = ReaderFontChoice(rawValue: book.readerFontFamily) ?? .serif
@@ -513,13 +539,17 @@ final class EPUBReaderViewModel: ObservableObject {
                 self?.receive(locator: locator)
             }
             controller.onSelectedText = { [weak self] payload in
-                self?.requestTranslation(for: payload)
+                if payload.trigger == .quickWord {
+                    self?.requestWordLookup(for: payload)
+                } else {
+                    self?.requestTranslation(for: payload)
+                }
             }
             controller.onSelectionFrameChange = { [weak self] frame in
                 self?.receiveSelectionFrame(frame)
             }
             controller.onContentTap = { [weak self] in
-                self?.controlsVisible.toggle()
+                self?.handleContentTap()
             }
             controller.onReaderError = { [weak self] message in
                 self?.readerAlertMessage = message
@@ -566,6 +596,7 @@ final class EPUBReaderViewModel: ObservableObject {
             activePublicationService?.reassertBookFileMetadata()
             finishLoadAttempt(attemptID)
             loadState = .ready
+            companion.bookOpened(atProgress: progress)
             if isReadingSceneActive {
                 resumeReadingSession()
             }
@@ -835,50 +866,11 @@ final class EPUBReaderViewModel: ObservableObject {
     }
 
     func search(_ query: String) {
-        let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        searchTask?.cancel()
-        searchTask = nil
-        searchErrorMessage = nil
-        lastSearchQuery = normalized
-        searchResults = []
-
-        guard !normalized.isEmpty else {
-            isSearching = false
-            return
-        }
-        guard let controller else {
-            searchErrorMessage = ReaderSearchError.unavailable.localizedDescription
-            return
-        }
-
-        isSearching = true
-        searchTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            defer {
-                if lastSearchQuery == normalized {
-                    isSearching = false
-                    searchTask = nil
-                }
-            }
-            do {
-                let locators = try await controller.search(normalized)
-                try Task.checkCancellation()
-                guard lastSearchQuery == normalized else { return }
-                searchResults = locators.map(ReaderSearchResult.init(locator:))
-            } catch is CancellationError {
-                return
-            } catch {
-                guard lastSearchQuery == normalized else { return }
-                searchErrorMessage = (error as? LocalizedError)?.errorDescription
-                    ?? ReaderSearchError.failed.localizedDescription
-            }
-        }
+        searchModel.search(query, in: controller)
     }
 
     func cancelSearch() {
-        searchTask?.cancel()
-        searchTask = nil
-        isSearching = false
+        searchModel.cancel()
     }
 
     func toggleBookmark() {
@@ -1086,7 +1078,8 @@ final class EPUBReaderViewModel: ObservableObject {
         isQuickTranslationIndicatorVisible = enabled
         translationSettings.quickSentenceTranslationEnabled = enabled
         controller?.setQuickSentenceTranslationEnabled(enabled)
-        controlsVisible = true
+        // Through the countdown, so the immersive layout still hides its bars.
+        showReaderControls()
     }
 
     func setQuickTranslationUnit(_ unit: ReaderQuickTranslationUnit) {
@@ -1095,7 +1088,7 @@ final class EPUBReaderViewModel: ObservableObject {
         quickTranslationUnit = unit
         translationSettings.quickTranslationUnit = unit
         controller?.setQuickTranslationUnit(unit)
-        controlsVisible = true
+        showReaderControls()
     }
 
     func setPDFPaperModeEnabled(_ enabled: Bool) {
@@ -1107,7 +1100,7 @@ final class EPUBReaderViewModel: ObservableObject {
         book.readerPDFPaperModeEnabled = enabled
         controller?.setPDFPaperModeEnabled(enabled)
         saveModelChanges()
-        controlsVisible = true
+        showReaderControls()
     }
 
     /// The compact right-edge affordance is intentionally temporary. It is
@@ -1164,6 +1157,79 @@ final class EPUBReaderViewModel: ObservableObject {
 
     func showReaderControls() {
         controlsVisible = true
+        scheduleChromeAutoHide()
+    }
+
+    func setLayoutMode(_ mode: ReaderLayoutMode) {
+        guard layoutMode != mode else { return }
+        layoutMode = mode
+        cancelChromeAutoHide()
+        // Switching happens from the settings sheet: the standard layout brings
+        // the bars back for good, the immersive one starts with them away.
+        controlsVisible = mode == .standard
+    }
+
+    /// A tap on the page that neither turned it nor hit text to translate.
+    /// The standard layout keeps its bars, so only the immersive one reacts.
+    func handleContentTap() {
+        guard layoutMode == .immersive else {
+            controlsVisible = true
+            return
+        }
+        controlsVisible.toggle()
+        if controlsVisible {
+            scheduleChromeAutoHide()
+        } else {
+            cancelChromeAutoHide()
+        }
+    }
+
+    /// Any touch on the bars restarts the immersive auto-hide countdown.
+    func noteChromeInteraction() {
+        guard layoutMode == .immersive, controlsVisible else { return }
+        scheduleChromeAutoHide()
+    }
+
+    /// Dragging the progress slider must not lose the bars mid-drag.
+    func setChromeAutoHideSuspended(_ suspended: Bool) {
+        isChromeAutoHideSuspended = suspended
+        if suspended {
+            cancelChromeAutoHide()
+        } else {
+            noteChromeInteraction()
+        }
+    }
+
+    private func scheduleChromeAutoHide() {
+        cancelChromeAutoHide()
+        guard layoutMode == .immersive,
+              controlsVisible,
+              !isChromeAutoHideSuspended,
+              !isClosed
+        else { return }
+        let delay = chromeAutoHideDelay
+        // Detached for the same reason as the quick-translation reminder: a
+        // task inherited from a view transaction can be cancelled with it.
+        chromeAutoHideTask = Task.detached { [weak self] in
+            do {
+                try await Task.sleep(for: delay)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            await self?.hideChromeAfterIdle()
+        }
+    }
+
+    private func hideChromeAfterIdle() {
+        chromeAutoHideTask = nil
+        guard layoutMode == .immersive, !isChromeAutoHideSuspended else { return }
+        controlsVisible = false
+    }
+
+    private func cancelChromeAutoHide() {
+        chromeAutoHideTask?.cancel()
+        chromeAutoHideTask = nil
     }
 
     func requestTranslation(for payload: ReaderSelectionPayload) {
@@ -1253,6 +1319,34 @@ final class EPUBReaderViewModel: ObservableObject {
         isCurrentSelectionInVocabulary = false
         translationState = .loading(request)
         startTranslation(for: request)
+    }
+
+    /// Short tap on a word: straight to the contextual lookup, which also
+    /// writes the learning record, with the tapped sentence as context.
+    func requestWordLookup(for payload: ReaderSelectionPayload) {
+        let word = TranslationCacheStore.normalizedText(payload.text)
+        guard !word.isEmpty else { return }
+        let context = payload.contextText
+            .map(TranslationCacheStore.normalizedText)
+            .flatMap { $0.isEmpty ? nil : $0 } ?? word
+        // Only an open card is dismissed: dismissing also clears the page
+        // highlight, which should stay on the word while the sheet is up.
+        if translationState != .idle {
+            dismissTranslation()
+        }
+        controlsVisible = false
+        shortTapLookup = ReaderShortTapLookup(
+            word: word,
+            context: context,
+            language: preferredSourceLanguage(for: context)
+        )
+        isShowingContextualLookup = true
+    }
+
+    func contextualLookupDismissed() {
+        guard shortTapLookup != nil else { return }
+        shortTapLookup = nil
+        controller?.clearSelection()
     }
 
     func changeTranslationSource(_ language: LanguageCode?) {
@@ -1543,7 +1637,13 @@ final class EPUBReaderViewModel: ObservableObject {
         }
     }
 
-    func requestContextExplanation(ignoreCache: Bool = false) {
+    /// `lensMode` nil is the plain sentence-structure analysis; a mode asks
+    /// one of the AI reading lens questions, shaped by the companion mode and
+    /// by how this book's lookups and reviews have gone.
+    func requestContextExplanation(
+        ignoreCache: Bool = false,
+        lensMode: AIReadingLensMode? = nil
+    ) {
         guard let translationRequest = translationState.request,
               !translationRequest.sourceText.isEmpty
         else {
@@ -1573,6 +1673,17 @@ final class EPUBReaderViewModel: ObservableObject {
                 responseLanguage: translationSettings.targetLanguage
             )
         )
+        let lens = lensMode.map { mode in
+            ReadingLensOptions(
+                mode: mode,
+                companionMode: companion.mode,
+                assist: AdaptiveReadingAssistPolicy.resolve(
+                    readingSignals(),
+                    mode: companion.mode,
+                    bookID: companion.bookID
+                )
+            )
+        }
         let request = ReaderContextExplanationRequest(
             id: UUID(),
             focusedText: prepared.focusedText,
@@ -1580,7 +1691,8 @@ final class EPUBReaderViewModel: ObservableObject {
             sourceLanguage: prepared.sourceLanguage,
             responseLanguage: prepared.responseLanguage,
             providerIdentifier: resolved.identifier,
-            providerVersion: resolved.version
+            providerVersion: resolved.version,
+            lens: lens
         )
         let cacheKey = contextExplanationCacheKey(for: request)
         isShowingContextExplanation = true
@@ -1599,7 +1711,8 @@ final class EPUBReaderViewModel: ObservableObject {
                         focusedText: request.focusedText,
                         contextText: request.contextText,
                         sourceLanguage: request.sourceLanguage,
-                        responseLanguage: request.responseLanguage
+                        responseLanguage: request.responseLanguage,
+                        lens: request.lens
                     )
                 )
                 guard let result = ContextExplanationOutputPolicy.validated(
@@ -1637,7 +1750,49 @@ final class EPUBReaderViewModel: ObservableObject {
     }
 
     func retryContextExplanation() {
-        requestContextExplanation(ignoreCache: true)
+        requestContextExplanation(
+            ignoreCache: true,
+            lensMode: currentContextExplanationRequest?.lens?.mode
+        )
+    }
+
+    private var currentContextExplanationRequest: ReaderContextExplanationRequest? {
+        switch contextExplanationState {
+        case .idle:
+            return nil
+        case let .loading(request), let .success(request, _):
+            return request
+        case let .failure(request, _):
+            return request
+        }
+    }
+
+    // MARK: - Reading companion
+
+    func presentReadingCompanion() {
+        companion.present(
+            signals: readingSignals(),
+            chapterTitle: chapterTitle == book.title ? "" : chapterTitle
+        )
+    }
+
+    /// What a lens answer was based on, shown under its title.
+    func readingLensBasis(for request: ReaderContextExplanationRequest) -> String? {
+        guard let lens = request.lens else { return nil }
+        var parts = [request.contextText == nil ? "依据：当前选区" : "依据：当前选区 + 有限前后文"]
+        if chapterTitle != book.title, !ReadingCompanionText.isBlank(chapterTitle) {
+            parts.append(chapterTitle)
+        }
+        parts.append("\(lens.companionMode.title)伴读")
+        parts.append(lens.assistLevel.title)
+        parts.append("防剧透")
+        return parts.joined(separator: " · ")
+    }
+
+    /// The reader's lookups and review results; read on demand, never sent anywhere.
+    private func readingSignals() -> [ReadingErrorSignal] {
+        let records = (try? modelContext.fetch(FetchDescriptor<WordLookupRecord>())) ?? []
+        return ReadingCompanionSignals.from(records)
     }
 
     func dismissContextExplanation() {
@@ -1757,6 +1912,7 @@ final class EPUBReaderViewModel: ObservableObject {
         guard !isClosed else { return }
         isClosed = true
         quickTranslationIndicatorDidDisappear()
+        cancelChromeAutoHide()
         loadAttemptID = nil
         publicationOpenTask?.cancel()
         publicationOpenTask = nil
@@ -1764,8 +1920,7 @@ final class EPUBReaderViewModel: ObservableObject {
         loadWatchdogTask = nil
         dismissTranslation()
         flushProgress()
-        searchTask?.cancel()
-        searchTask = nil
+        searchModel.cancel()
         controller?.onLocationChange = nil
         controller?.onSelectedText = nil
         controller?.onSelectionFrameChange = nil
@@ -1787,6 +1942,8 @@ final class EPUBReaderViewModel: ObservableObject {
             dismissTranslation()
         }
         pendingLocator = locator
+        let previousOutlineIndex = currentOutlineIndex
+        let previousChapterTitle = chapterTitle
         currentLocator = locator
         // The outline is checked first because its titles can be repaired from
         // document headings; a raw locator title is whatever the publication's
@@ -1798,6 +1955,15 @@ final class EPUBReaderViewModel: ObservableObject {
             bookTitle: book.title
         )
         progress = min(max(locator.locations.totalProgression ?? 0, 0), 1)
+        // Reading on into the next chapter offers its 90-second loop through
+        // the AI button's dot; nothing pops up over the page.
+        if let previousOutlineIndex,
+           currentOutlineIndex == previousOutlineIndex + 1,
+           previousChapterTitle != book.title,
+           previousChapterTitle != chapterTitle
+        {
+            companion.chapterFinished(previousChapterTitle)
+        }
         isCurrentLocationBookmarked = bookmarkStore.isBookmarked(
             bookID: book.id,
             locator: locator
@@ -2336,7 +2502,8 @@ final class EPUBReaderViewModel: ObservableObject {
                 focusedText: request.focusedText,
                 contextText: request.contextText,
                 sourceLanguage: request.sourceLanguage,
-                responseLanguage: request.responseLanguage
+                responseLanguage: request.responseLanguage,
+                lens: request.lens
             ),
             providerIdentifier: request.providerIdentifier,
             providerVersion: request.providerVersion

@@ -747,7 +747,7 @@ struct LibraryBackupVault: @unchecked Sendable {
     ) async throws -> LibraryBackupPruneResult {
         let access = try directoryAccess(create: true)
         defer { withExtendedLifetime(access) {} }
-        var backups = try await listBackups(in: access.url)
+        let backups = try await listBackups(in: access.url)
         guard !backups.isEmpty else {
             return LibraryBackupPruneResult(
                 removedCount: 0,
@@ -757,38 +757,23 @@ struct LibraryBackupVault: @unchecked Sendable {
             )
         }
 
+        let plan = LibraryBackupPruner.plan(
+            backups,
+            limits: LibraryBackupPruner.Limits(
+                retentionDays: policy.retentionDays,
+                maximumBackupCount: policy.maximumBackupCount,
+                maximumTotalBytes: policy.maximumTotalBytes
+            ),
+            now: Date(),
+            createdAt: \.createdAt,
+            size: \.fileSize
+        )
         var removedCount = 0
         var reclaimedBytes: Int64 = 0
-        let now = Date()
-
-        func removeOldest(where shouldRemove: (LibraryBackupArchiveInfo) -> Bool) {
-            while backups.count > 1,
-                  let index = backups.lastIndex(where: shouldRemove)
-            {
-                let backup = backups.remove(at: index)
-                if (try? FileManager.default.removeItem(at: backup.url)) != nil {
-                    removedCount += 1
-                    reclaimedBytes += backup.fileSize
-                }
-            }
-        }
-
-        if policy.retentionDays > 0 {
-            let cutoff = Calendar.current.date(
-                byAdding: .day,
-                value: -policy.retentionDays,
-                to: now
-            ) ?? .distantPast
-            removeOldest { $0.createdAt < cutoff }
-        }
-
-        removeOldest { _ in backups.count > max(policy.maximumBackupCount, 1) }
-
-        if policy.maximumTotalBytes > 0 {
-            removeOldest { _ in
-                backups.reduce(0) { $0 + $1.fileSize }
-                    > policy.maximumTotalBytes
-            }
+        for backup in plan.removed {
+            guard (try? FileManager.default.removeItem(at: backup.url)) != nil else { continue }
+            removedCount += 1
+            reclaimedBytes += backup.fileSize
         }
 
         // Re-read the directory so a file-system deletion failure is reflected

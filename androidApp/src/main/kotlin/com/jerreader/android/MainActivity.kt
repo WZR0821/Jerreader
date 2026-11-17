@@ -37,16 +37,16 @@ import com.jerreader.android.ui.AndroidAppTab
 import com.jerreader.android.ui.AppNavigationBar
 import com.jerreader.android.ui.SettingsRoute
 import com.jerreader.android.ui.SettingsScreen
-import com.jerreader.android.ui.TranslationSettingsActions
+import com.jerreader.android.ui.testTranslationConnection
+import com.jerreader.android.ui.translationSettingsActions
 import com.jerreader.android.settings.AppThemeChoice
 import com.jerreader.android.reader.encodeStoredReaderPreferences
-import com.jerreader.shared.domain.LanguageCode
 import com.jerreader.shared.library.LibraryBook
-import com.jerreader.shared.translation.TranslationRequest
 import com.jerreader.shared.ui.JerreaderLibraryApp
 import com.jerreader.shared.ui.JerreaderTheme
 import android.net.Uri
 import androidx.core.content.IntentCompat
+import androidx.core.net.toUri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -134,16 +134,7 @@ class MainActivity : ComponentActivity() {
                 tabStates.SaveableStateProvider(selectedTab.name) { when (selectedTab) {
                     AndroidAppTab.LIBRARY -> JerreaderLibraryApp(
                         state = state,
-                        onImport = {
-                            choosePublication.launch(
-                                arrayOf(
-                                    "application/epub+zip",
-                                    "application/pdf",
-                                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                    "text/plain"
-                                )
-                            )
-                        },
+                        onImport = { mimeTypes -> choosePublication.launch(mimeTypes.toTypedArray()) },
                         onOpenBook = ::openBook,
                         onDeleteBook = viewModel::deleteBook,
                         onRestoreBackup = {
@@ -162,7 +153,7 @@ class MainActivity : ComponentActivity() {
                             chooseCover.launch(arrayOf("image/*"))
                         },
                         coverDraftContent = { uri -> AndroidCoverDraft(uri) },
-                        onSaveCover = { id, uri -> viewModel.updateCover(id, Uri.parse(uri)) },
+                        onSaveCover = { id, uri -> viewModel.updateCover(id, uri.toUri()) },
                         onUpdateBook = viewModel::updateBook,
                         onBatchUpdateBooks = { ids, category, series, language, tags ->
                             viewModel.updateBooks(
@@ -224,51 +215,11 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         preferences = translationPreferences,
-                        directApiKey = graph.translationSettings.directApiKey(),
                         backendToken = graph.translationSettings.backendAccessToken(),
-                        actions = TranslationSettingsActions(
-                            updateProviderMode = graph.translationSettings::updateProviderMode,
-                            updateDirectProvider = graph.translationSettings::updateDirectProvider,
-                            updateDirectEndpoint = graph.translationSettings::updateDirectEndpoint,
-                            updateDirectModel = graph.translationSettings::updateDirectModel,
-                            updateDirectApiKey = graph.translationSettings::updateDirectApiKey,
-                            updateBackendEndpoint = graph.translationSettings::updateBackendEndpoint,
-                            updateBackendModel = graph.translationSettings::updateBackendModel,
-                            updateBackendToken = graph.translationSettings::updateBackendAccessToken,
-                            updateSourceChoice = graph.translationSettings::updateSourceChoice,
-                            updateTargetLanguage = graph.translationSettings::updateTargetLanguage,
-                            updateQuickEnabled = graph.translationSettings::updateQuickTranslationEnabled,
-                            updateQuickUnit = graph.translationSettings::updateQuickTranslationUnit,
-                            updateDisablesTapPageTurns = graph.translationSettings::updateDisablesTapPageTurns,
-                            updateDisplayMode = graph.translationSettings::updateDisplayMode,
-                            updateTranslationHaptics = graph.translationSettings::updateTranslationHaptics,
-                            updateAutomaticRetry = graph.translationSettings::updateAutomaticRetry,
-                            updateFallbackMode = graph.translationSettings::updateFallbackMode,
-                            updatePrompt = graph.translationSettings::updateTranslationPrompt,
-                            updateGrammarPrompt = graph.translationSettings::updateGrammarPrompt
-                        ),
-                        onTestConnection = {
-                            val sourceLanguage = if (
-                                translationPreferences.targetLanguage == LanguageCode.ENGLISH
-                            ) {
-                                LanguageCode.JAPANESE
-                            } else {
-                                LanguageCode.ENGLISH
-                            }
-                            runCatching {
-                                graph.translationService.translate(
-                                    TranslationRequest(
-                                        text = if (sourceLanguage == LanguageCode.JAPANESE) "こんにちは" else "Hello",
-                                        sourceLanguage = sourceLanguage,
-                                        targetLanguage = translationPreferences.targetLanguage
-                                    )
-                                )
-                            }.fold(
-                                onSuccess = { "连接成功：${it.translatedText}" },
-                                onFailure = { it.message ?: "连接失败，请检查配置。" }
-                            )
-                        },
-                        bottomBar = bottomBar
+                        actions = remember(graph) { translationSettingsActions(graph.translationSettings) },
+                        onTestConnection = { testTranslationConnection(graph, translationPreferences) },
+                        bottomBar = bottomBar,
+                        bookCount = state.books.size
                     )
                 } }
             }
@@ -334,7 +285,7 @@ class MainActivity : ComponentActivity() {
         val preview by produceState<Pair<String, android.graphics.Bitmap?>?>(null, source) {
             val bitmap = withContext(Dispatchers.IO) {
                 runCatching {
-                    val uri = Uri.parse(source)
+                    val uri = source.toUri()
                     val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
                     contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
                     check(bounds.outWidth > 0 && bounds.outHeight > 0)

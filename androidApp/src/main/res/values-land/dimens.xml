@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Readium ships a 20dp landscape value; keep the iOS 14pt gap there too. -->
+    <dimen name="readium_navigator_epub_vertical_padding">14dp</dimen>
+</resources>

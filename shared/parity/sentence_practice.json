@@ -1,0 +1,89 @@
+{
+  "about": "SentencePractice.make on iOS (Jerreader/Features/Learning/SentencePractice.swift) and Android (shared learning/SentencePractice.kt). expected null means no card is made.",
+  "cases": [
+    {
+      "name": "surrounding spaces are trimmed and every occurrence is masked",
+      "source": "猫は猫です。",
+      "answer": " 猫 ",
+      "expected": {
+        "answer": "猫",
+        "prompt": "［____］は［____］です。"
+      }
+    },
+    {
+      "name": "full-width spaces are trimmed",
+      "source": "猫は猫です。",
+      "answer": "　猫　",
+      "expected": {
+        "answer": "猫",
+        "prompt": "［____］は［____］です。"
+      }
+    },
+    {
+      "name": "tabs and newlines are trimmed",
+      "source": "The cat sat.",
+      "answer": "\tcat\n",
+      "expected": {
+        "answer": "cat",
+        "prompt": "The ［____］ sat."
+      }
+    },
+    {
+      "name": "matching is literal, not a pattern",
+      "source": "a.*b",
+      "answer": ".*",
+      "expected": {
+        "answer": ".*",
+        "prompt": "a［____］b"
+      }
+    },
+    {
+      "name": "matching is case-sensitive",
+      "source": "The cat sat.",
+      "answer": "Cat",
+      "expected": null
+    },
+    {
+      "name": "an answer missing from the sentence makes no card",
+      "source": "猫は猫です。",
+      "answer": "犬",
+      "expected": null
+    },
+    {
+      "name": "a blank answer makes no card",
+      "source": "猫は猫です。",
+      "answer": " ",
+      "expected": null
+    },
+    {
+      "name": "an empty answer makes no card",
+      "source": "猫は猫です。",
+      "answer": "",
+      "expected": null
+    },
+    {
+      "name": "a full-width blank answer makes no card",
+      "source": "猫は猫です。",
+      "answer": "　",
+      "expected": null
+    },
+    {
+      "name": "occurrences inside longer words are masked too",
+      "source": "concatenate the cat",
+      "answer": "cat",
+      "expected": {
+        "answer": "cat",
+        "prompt": "con［____］enate the ［____］"
+      }
+    },
+    {
+      "name": "overlapping occurrences are masked left to right",
+      "source": "aaa",
+      "answer": "aa",
+      "expected": {
+        "answer": "aa",
+        "prompt": "［____］a"
+      }
+    }
+  ]
+}

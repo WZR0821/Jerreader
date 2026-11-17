@@ -46,7 +46,7 @@ class SafetyPolicyTests(unittest.TestCase):
 
     def test_each_resource_can_stop_work(self):
         for key, value in [("memory_free", 14), ("pressure", 2),
-                           ("pressure", 4), ("throttled", True), ("disk_gib", 11.9)]:
+                           ("pressure", 4), ("disk_gib", 11.9)]:
             with self.subTest(key=key, value=value):
                 self.assertIsNotNone(guard.unsafe(dict(good_sample(), **{key: value})))
 
@@ -55,22 +55,29 @@ class SafetyPolicyTests(unittest.TestCase):
         self.assertIsNone(guard.unsafe(sample))
         self.assertIsNotNone(guard.unsafe(sample, True))
 
-    def test_session_thermal_exception_is_opt_in_and_bounded(self):
-        self.assertFalse(guard.options(["build"], {})["allow_thermal_throttling"])
-        self.assertTrue(guard.options(["build"], {"JERREADER_SESSION_ALLOW_THERMAL_THROTTLING": "1"})["allow_thermal_throttling"])
-        for value in ("true", "2", "", "always"):
-            with self.subTest(value=value), self.assertRaises(guard.SafetyError):
-                guard.options(["build"], {"JERREADER_SESSION_ALLOW_THERMAL_THROTTLING": value})
+    def test_thermal_throttling_is_recorded_but_never_stops_or_queues(self):
+        # 2026-11-13: throttling is normal under sustained compilation and did
+        # not coincide with either documented watchdog crash.
+        sample = guard.parse_health("8", "{ 9 8 7 }", "System-wide memory free percentage: 62%", "1",
+            "CPU_Speed_Limit = 54\nCPU_Scheduler_Limit = 100", 40 * 1024**3)
+        self.assertTrue(sample["throttled"])
+        for starting in (False, True):
+            self.assertIsNone(guard.unsafe(sample, starting))
+        self.assertTrue(guard.cool(sample))
+        self.assertFalse(guard.cool(dict(sample, load=21)))
 
-    def test_session_exception_preserves_other_checks_and_cooldown(self):
+    def test_obsolete_thermal_exception_switch_is_ignored(self):
+        for value in ("0", "1", "always"):
+            with self.subTest(value=value):
+                opts = guard.options(["build"], {"JERREADER_SESSION_ALLOW_THERMAL_THROTTLING": value})
+                self.assertNotIn("allow_thermal_throttling", opts)
+
+    def test_throttled_host_keeps_memory_and_disk_checks(self):
         sample = dict(good_sample(), throttled=True)
-        self.assertIsNone(guard.unsafe(sample, allow_thermal_throttling=True))
-        self.assertTrue(guard.cool(sample, allow_thermal_throttling=True))
-        self.assertFalse(guard.cool(dict(sample, load=9), allow_thermal_throttling=True))
         for key, value in (("memory_free", 14), ("pressure", 2), ("disk_gib", 11)):
             with self.subTest(key=key):
-                self.assertIsNotNone(guard.unsafe(dict(sample, **{key: value}), allow_thermal_throttling=True))
-        self.assertIsNotNone(guard.unsafe(dict(sample, memory_free=18), starting=True, allow_thermal_throttling=True))
+                self.assertIsNotNone(guard.unsafe(dict(sample, **{key: value})))
+        self.assertIsNotNone(guard.unsafe(dict(sample, memory_free=18), starting=True))
 
     def test_session_load_exception_is_opt_in_and_keeps_memory_guard(self):
         self.assertFalse(guard.options(["build"], {})["allow_high_load"])
@@ -82,10 +89,17 @@ class SafetyPolicyTests(unittest.TestCase):
         self.assertTrue(guard.cool(dict(good_sample(), load=999), allow_high_load=True))
         self.assertFalse(guard.cool(dict(good_sample(), load=999, memory_free=10), allow_high_load=True))
 
-    def test_cooldown_stricter_than_build_admission(self):
-        sample = dict(good_sample(), load=9)
+    def test_settle_wait_prefers_low_load_but_build_admission_ignores_it(self):
+        sample = dict(good_sample(), load=21)
         self.assertIsNone(guard.unsafe(sample, True))
         self.assertFalse(guard.cool(sample))
+
+    def test_cooldown_allows_two_and_a_half_per_core(self):
+        # 2026-11-12: raised from 1/core to 2.5/core (20 on the 8-thread host).
+        self.assertTrue(guard.cool(dict(good_sample(), load=20)))
+        self.assertFalse(guard.cool(dict(good_sample(), load=20.01)))
+        self.assertTrue(guard.cool(dict(good_sample(), cpus=4, load=10)))
+        self.assertFalse(guard.cool(dict(good_sample(), cpus=4, load=10.01)))
 
     def test_load_alone_never_aborts_running_work(self):
         for cpus in (4, 8, 16):
@@ -336,26 +350,32 @@ class SupervisorTests(unittest.TestCase):
         self.assertIn("OTHER_SWIFT_FLAGS=$(inherited) -j1", args)
         self.assertIn("-only-testing:JerreaderTests", supervisor.test_arguments())
 
-    def test_admission_uses_150_as_wait_threshold_with_other_guards_intact(self):
+    def test_admission_ignores_load_and_throttling_with_other_guards_intact(self):
+        # 2026-11-13: the 150 queue threshold and the thermal stop were removed.
         supervisor = self.make_supervisor("build")
         with patch.object(supervisor, "devices", return_value=[]), patch.object(guard, "foreign_reason", return_value=None):
             for cpus in (4, 8, 16):
-                with patch.object(guard, "health", return_value=dict(good_sample(), cpus=cpus, load=150)):
-                    self.assertIsNone(supervisor.admission("test"))
-                with patch.object(guard, "health", return_value=dict(good_sample(), cpus=cpus, load=150.01)):
-                    self.assertIn("waiting", supervisor.admission("test"))
+                for load in (150, 150.01, 302, 999):
+                    with patch.object(guard, "health", return_value=dict(good_sample(), cpus=cpus, load=load)):
+                        self.assertIsNone(supervisor.admission("test"))
             with patch.object(guard, "health", return_value=dict(good_sample(), throttled=True)):
-                self.assertIn("thermal", supervisor.admission("test"))
+                self.assertIsNone(supervisor.admission("test"))
+            with patch.object(guard, "health", return_value=dict(good_sample(), load=999, memory_free=19)):
+                self.assertIn("memory", supervisor.admission("test"))
+            with patch.object(guard, "health", return_value=dict(good_sample(), pressure=2)):
+                self.assertIn("memory", supervisor.admission("test"))
             with patch.object(guard, "health", return_value=dict(good_sample(), disk_gib=11)):
                 with self.assertRaises(guard.SafetyError): supervisor.admission("test")
 
-    def test_load_exception_does_not_skip_foreign_build_queue(self):
-        supervisor = self.make_supervisor("build")
-        supervisor.opts["allow_high_load"] = True
-        with patch.object(guard, "health", return_value=dict(good_sample(), load=999)), \
-             patch.object(supervisor, "devices", return_value=[]), \
-             patch.object(guard, "foreign_reason", return_value="another build"):
-            self.assertEqual(supervisor.admission("fixture"), "another build")
+    def test_high_load_does_not_skip_foreign_build_queue(self):
+        for exception in (False, True):
+            supervisor = self.make_supervisor("build")
+            supervisor.opts["allow_high_load"] = exception
+            with self.subTest(exception=exception), \
+                 patch.object(guard, "health", return_value=dict(good_sample(), load=999)), \
+                 patch.object(supervisor, "devices", return_value=[]), \
+                 patch.object(guard, "foreign_reason", return_value="another build"):
+                self.assertEqual(supervisor.admission("fixture"), "another build")
 
     def test_wait_then_stabilize_before_admitting_once(self):
         supervisor = self.make_supervisor("build")
@@ -366,10 +386,10 @@ class SupervisorTests(unittest.TestCase):
 
     def test_known_queue_conditions_defer_inventory_but_never_skip_admission_check(self):
         supervisor = self.make_supervisor("build")
-        with patch.object(guard, "health", return_value=dict(good_sample(), load=302)), \
+        with patch.object(guard, "health", return_value=dict(good_sample(), memory_free=12)), \
              patch.object(guard, "foreign_reason") as foreign, \
              patch.object(supervisor, "devices") as inventory:
-            self.assertIn("waiting", supervisor.admission("fixture"))
+            self.assertIn("memory", supervisor.admission("fixture"))
             foreign.assert_not_called()
             inventory.assert_not_called()
         with patch.object(guard, "health", return_value=good_sample()), \
@@ -408,9 +428,8 @@ class SupervisorTests(unittest.TestCase):
             with self.assertRaises(guard.QueueTimeout): supervisor.run("fixture", ["never-launch"])
         launch.assert_not_called()
 
-    def test_missing_runtime_monitor_still_propagates_with_thermal_exception(self):
+    def test_missing_runtime_monitor_still_propagates(self):
         supervisor = self.make_supervisor("build")
-        supervisor.opts["allow_thermal_throttling"] = True
         with patch.object(guard, "health", side_effect=guard.MonitorUnavailable("fixture")), \
              patch.object(guard, "check_foreign") as foreign:
             with self.assertRaises(guard.MonitorUnavailable): supervisor.check("fixture", group=123)
@@ -422,9 +441,8 @@ class SupervisorTests(unittest.TestCase):
              patch.object(guard, "check_foreign", return_value=set()):
             self.assertEqual(supervisor.check("running", group=123)["load"], 300)
 
-    def test_authorized_thermal_exception_applies_to_admission_and_monitor(self):
+    def test_throttling_passes_admission_and_running_monitor(self):
         supervisor = self.make_supervisor("build")
-        supervisor.opts["allow_thermal_throttling"] = True
         with patch.object(guard, "health", return_value=dict(good_sample(), throttled=True)), \
              patch.object(supervisor, "devices", return_value=[]), \
              patch.object(guard, "foreign_reason", return_value=None), \
@@ -520,17 +538,27 @@ class SupervisorTests(unittest.TestCase):
 
     def test_cooldown_requires_continuous_safe_interval(self):
         supervisor = self.make_supervisor()
-        samples = [good_sample(), dict(good_sample(), load=9), good_sample(), good_sample()]
+        samples = [good_sample(), dict(good_sample(), load=21), good_sample(), good_sample()]
         with patch.object(supervisor, "check", side_effect=samples) as check, \
              patch.object(guard, "COOL_SECONDS", 0.015), patch.object(guard, "POLL_SECONDS", 0.02), \
              patch.object(guard, "COOL_TIMEOUT", 1):
             supervisor.cooldown("fixture")
         self.assertEqual(check.call_count, 4)
 
-    def test_cooldown_timeout_does_not_continue(self):
+    def test_cooldown_timeout_continues_because_load_alone_never_stops_a_run(self):
+        # 2026-11-13: was a SafetyError; a simulator boot can hold load above
+        # the settle target for longer than the wait.
         supervisor = self.make_supervisor()
-        with patch.object(supervisor, "check", return_value=dict(good_sample(), load=9)), \
-             patch.object(guard, "POLL_SECONDS", 0.01), patch.object(guard, "COOL_TIMEOUT", 0.02):
+        with patch.object(supervisor, "check", return_value=dict(good_sample(), load=250)) as check, \
+             patch.object(guard, "POLL_SECONDS", 0.01), patch.object(guard, "COOL_TIMEOUT", 0.05):
+            supervisor.cooldown("fixture")
+        self.assertGreaterEqual(check.call_count, 2)
+
+    def test_cooldown_still_stops_on_memory(self):
+        supervisor = self.make_supervisor()
+        with patch.object(guard, "health", return_value=dict(good_sample(), load=250, memory_free=10)), \
+             patch.object(guard, "check_foreign", return_value=set()), \
+             patch.object(guard, "POLL_SECONDS", 0.01), patch.object(guard, "COOL_TIMEOUT", 0.05):
             with self.assertRaises(guard.SafetyError):
                 supervisor.cooldown("fixture")
 
@@ -665,11 +693,146 @@ class AndroidDeviceSafetyTests(unittest.TestCase):
             with self.assertRaises(guard.SafetyError):
                 guard.options([mode], {"JERREADER_ANDROID_RELEASE_SMOKE": value})
 
+    def test_release_smoke_books_are_valid_publications(self):
+        import io, re, zipfile
+        from android_device_validation import smoke_epub, smoke_pdf, SMOKE_TITLE
+        with zipfile.ZipFile(io.BytesIO(smoke_epub())) as archive:
+            first = archive.infolist()[0]
+            self.assertEqual((first.filename, first.compress_type), ("mimetype", zipfile.ZIP_STORED))
+            self.assertEqual(archive.read("mimetype"), b"application/epub+zip")
+            self.assertIn(SMOKE_TITLE, archive.read("EPUB/package.opf").decode())
+            self.assertIsNone(archive.testzip())
+        pdf = smoke_pdf()
+        self.assertTrue(pdf.startswith(b"%PDF-1.4") and pdf.rstrip().endswith(b"%%EOF"))
+        start = int(re.search(rb"startxref\n(\d+)", pdf)[1])
+        self.assertTrue(pdf[start:].startswith(b"xref"))
+        offsets = [int(v) for v in re.findall(rb"(\d{10}) 00000 n", pdf)]
+        self.assertEqual(len(offsets), 6)
+        for number, offset in enumerate(offsets, 1):
+            self.assertTrue(pdf[offset:].startswith(str(number).encode() + b" 0 obj"))
+
+    def test_release_smoke_reads_activity_and_ui_state(self):
+        from android_device_validation import resumed_activity, node_center, verify_no_release_crash
+        dump = ("  topResumedActivity=ActivityRecord{1a2b u0 com.jerreader.android/.reader.ReaderActivity t9}\n"
+                "  ResumedActivity: ActivityRecord{1a2b u0 com.jerreader.android/.reader.ReaderActivity t9}")
+        self.assertEqual(resumed_activity(dump), ".reader.ReaderActivity")
+        self.assertIsNone(resumed_activity("topResumedActivity=ActivityRecord{1 u0 com.android.launcher/.Home t1}"))
+        ui = ('<hierarchy><node text="" bounds="[0,0][10,10]"><node text="学习" content-desc="" '
+              'bounds="[100,2400][300,2500]"/></node></hierarchy>')
+        self.assertEqual(node_center(ui, "学习"), (200, 2450))
+        with self.assertRaises(RuntimeError): node_center(ui, "设置")
+        verify_no_release_crash("", "123\n", "123\n")
+        for crashes, after in (("Process: com.jerreader.android, PID: 123", "123"), ("", ""), ("", "456")):
+            with self.assertRaises(RuntimeError): verify_no_release_crash(crashes, "123", after)
+
+    def test_release_package_delivers_arm64_twin_of_validated_split(self):
+        import zipfile
+        from package_release_apk import abi_element, verify_split_pair
+        elements = [dict(filters=[dict(filterType="ABI", value=abi)], outputFile=abi + ".apk")
+                    for abi in ("arm64-v8a", "x86_64")]
+        self.assertEqual(abi_element(elements, "x86_64")["outputFile"], "x86_64.apk")
+        with self.assertRaises(ValueError): abi_element(elements, "armeabi-v7a")
+        with tempfile.TemporaryDirectory() as directory:
+            def apk(name, entries):
+                path = Path(directory) / name
+                with zipfile.ZipFile(path, "w") as archive:
+                    for entry, data in entries.items(): archive.writestr(entry, data)
+                return path
+            common = {"classes.dex": b"dex", "resources.arsc": b"res", "META-INF/CERT.SF": b"sig"}
+            validated = apk("x86.apk", {**common, "lib/x86_64/libtranslate_jni.so": b"x"})
+            verify_split_pair(apk("arm.apk", {**common, "META-INF/CERT.SF": b"other",
+                                              "lib/arm64-v8a/libtranslate_jni.so": b"a"}), validated)
+            for name, entries in (
+                ("dex.apk", {**common, "classes.dex": b"changed", "lib/arm64-v8a/libtranslate_jni.so": b"a"}),
+                ("v7.apk", {**common, "lib/arm64-v8a/libtranslate_jni.so": b"a", "lib/armeabi-v7a/libtranslate_jni.so": b"a"}),
+                ("missing.apk", {**common, "lib/arm64-v8a/libother.so": b"a"}),
+            ):
+                with self.assertRaises(ValueError): verify_split_pair(apk(name, entries), validated)
+
     def test_android_empty_or_failed_report_is_not_success(self):
         from android_device_validation import verify_report
         for report in ("", "OK (0 tests)\nINSTRUMENTATION_CODE: -1", "FAILURES!!!\nINSTRUMENTATION_CODE: -1", "OK (2 tests)"):
             with self.assertRaises(RuntimeError): verify_report(report)
         self.assertEqual(verify_report("OK (2 tests)\nINSTRUMENTATION_CODE: -1"), 2)
+
+
+class BackgroundBuildTests(unittest.TestCase):
+    """scripts/background_build.py: no launchd job and no build is started here."""
+
+    def setUp(self):
+        import background_build
+        self.background = background_build
+
+    def test_job_runs_outside_the_gui_session_from_the_mirror_only(self):
+        background = self.background
+        job = background.JOBS / "20261113-000000-ipa"
+        definition = background.job_definition(job)
+        # launchd rejects a user-domain job without this key (bootstrap error 5).
+        self.assertEqual(definition["LimitLoadToSessionType"], "Background")
+        self.assertEqual(definition["ProgramArguments"],
+                         ["/usr/bin/python3", str(background.MIRROR / "scripts/background_build.py"), "run", str(job)])
+        self.assertEqual(definition["WorkingDirectory"], str(background.MIRROR))
+        self.assertNotIn("KeepAlive", definition)  # One attempt; never restarted.
+        self.assertNotIn("DEVELOPER_DIR", definition["EnvironmentVariables"])
+        home = str(Path.home())
+        self.assertTrue(str(background.MIRROR).startswith(home + "/Library/Caches/"))
+
+    def test_mirror_never_copies_signing_material_or_build_outputs(self):
+        command = self.background.mirror_command()
+        excluded = {command[i + 1] for i, value in enumerate(command) if value == "--exclude"}
+        for pattern in ("/keystore.properties", "/local.properties", "*.jks", "*.keystore", "*.p12",
+                        "*.mobileprovision", "/PrivateTestFixtures/", "/.build/", "/dist/", "/.git/", "/.tools/"):
+            self.assertIn(pattern, excluded)
+        self.assertIn("--delete", command)
+        self.assertNotIn("--delete-excluded", command)  # The mirror keeps its own .build/.
+        self.assertEqual(command[-2:], [str(guard.ROOT) + "/", str(self.background.MIRROR) + "/"])
+
+    def test_submit_refuses_unknown_mode_simulator_modes_and_a_running_job(self):
+        background = self.background
+        for mode in ("test", "ui-test", "android", "android-test", "release"):
+            with self.subTest(mode=mode), self.assertRaises(background.JobError):
+                background.submit(mode)
+        with patch.object(background, "service_state", return_value="running"), \
+             patch.object(background.subprocess, "run") as launch:
+            with self.assertRaises(background.JobError):
+                background.submit("ipa")
+        launch.assert_not_called()
+
+    def test_vanished_job_is_reported_lost_not_running(self):
+        background = self.background
+        with tempfile.TemporaryDirectory(dir=guard.ROOT / ".build") as directory:
+            job = Path(directory)
+            older = Path(directory + "-older")
+            background.write_json(job / "status.json", dict(state="running", mode="ipa", phase="build"))
+            with patch.object(background, "job_directory", return_value=job), \
+                 patch.object(background, "unload") as unload:
+                with patch.object(background, "service_state", return_value="running"):
+                    self.assertEqual(background.current(job)["state"], "running")
+                    # launchd is running the newest job, not an older unfinished one.
+                    with patch.object(background, "read_json", return_value=dict(state="running")), \
+                         patch.object(background.time, "sleep"):
+                        self.assertEqual(background.current(older)["outcome"], "lost")
+                with patch.object(background, "service_state", return_value=None), \
+                     patch.object(background.time, "sleep"):
+                    lost = background.current(job)
+                self.assertEqual((lost["state"], lost["outcome"]), ("finished", "lost"))
+                unload.assert_not_called()
+                background.write_json(job / "status.json", dict(state="finished", mode="ipa", outcome="passed"))
+                with patch.object(background, "service_state", return_value="not running"):
+                    self.assertEqual(background.current(job)["outcome"], "passed")
+                unload.assert_called_once()  # The exited definition is removed from launchd.
+
+    def test_collect_requires_a_passed_ipa_job(self):
+        background = self.background
+        with tempfile.TemporaryDirectory(dir=guard.ROOT / ".build") as directory:
+            job = Path(directory)
+            for status in (dict(state="finished", mode="build", outcome="passed"),
+                           dict(state="finished", mode="ipa", outcome="failed")):
+                background.write_json(job / "status.json", status)
+                with patch.object(background, "job_directory", return_value=job), \
+                     patch.object(background, "service_state", return_value=None), \
+                     self.assertRaises(background.JobError):
+                    background.collect(None)
 
 
 if __name__ == "__main__":

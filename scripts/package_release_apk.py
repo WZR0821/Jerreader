@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify and copy the already built, device-validated Release APK."""
+"""Verify and copy the arm64-v8a Release split whose x86_64 twin passed the emulator smoke."""
 import argparse
 from datetime import datetime
 import hashlib
@@ -38,6 +38,34 @@ def digest(path):
             value.update(block)
     return value.hexdigest()
 
+def abi_element(elements, abi):
+    matches = [item for item in elements
+               if [(f.get('filterType'), f.get('value')) for f in item.get('filters', [])] == [('ABI', abi)]]
+    if len(matches) != 1:
+        raise ValueError('Expected exactly one Release APK for ' + abi)
+    return matches[0]
+
+def shared_payload(path):
+    """CRC and size of every entry that must not depend on the ABI split."""
+    with zipfile.ZipFile(path) as archive:
+        return {info.filename: (info.CRC, info.file_size) for info in archive.infolist()
+                if not info.filename.startswith(('lib/', 'META-INF/'))}
+
+def native_libraries(path):
+    with zipfile.ZipFile(path) as archive:
+        return [name for name in archive.namelist() if name.startswith('lib/')]
+
+def verify_split_pair(delivered, validated):
+    """The phone APK may differ from the emulator-validated APK only in its native code."""
+    if shared_payload(delivered) != shared_payload(validated):
+        raise ValueError('The arm64-v8a APK differs from the validated x86_64 APK outside lib/')
+    arm = native_libraries(delivered)
+    x86 = native_libraries(validated)
+    if not arm or any(not name.startswith('lib/arm64-v8a/') for name in arm):
+        raise ValueError('The delivered APK must carry arm64-v8a native code only')
+    if sorted(n.split('/', 2)[2] for n in arm) != sorted(n.split('/', 2)[2] for n in x86 if n.startswith('lib/x86_64/')):
+        raise ValueError('The two ABI splits do not carry the same native libraries')
+
 def certificate(apksigner, path):
     result = subprocess.run([str(apksigner), 'verify', '--verbose', '--print-certs', str(path)],
         capture_output=True, text=True, check=True)
@@ -62,26 +90,34 @@ def main():
         raise ValueError('Release installation and launch were not confirmed')
     apk_root = ROOT / 'androidApp/build/outputs/apk/release'
     metadata = json.loads((apk_root / 'output-metadata.json').read_text())['elements']
-    if len(metadata) != 1:
-        raise ValueError('Expected one universal Release APK')
-    item = metadata[0]
+    if len(metadata) != 2:
+        raise ValueError('Expected exactly the arm64-v8a and x86_64 Release splits')
+    item = abi_element(metadata, 'arm64-v8a')
+    validated_item = abi_element(metadata, 'x86_64')
     version_source = (ROOT / 'androidApp/build.gradle.kts').read_text()
     version = re.search(r'versionName\s*=\s*"([^"]+)"', version_source)[1]
     build = int(re.search(r'versionCode\s*=\s*(\d+)', version_source)[1])
-    if item['versionName'] != version or item['versionCode'] != build:
-        raise ValueError('Unexpected application version')
+    for element in (item, validated_item):
+        if element['versionName'] != version or element['versionCode'] != build:
+            raise ValueError('Unexpected application version')
     source = apk_root / item['outputFile']
+    validated = apk_root / validated_item['outputFile']
     device = json.loads((args.device_log / 'android-device.json').read_text())
     instrumentation = (args.device_log / 'instrumentation.txt').read_text()
     total = sum(map(int, re.findall(r'OK \((\d+) tests?\)', instrumentation)))
     minimum = 22 if device['scope'] == 'full' else 5
     if total < minimum or len(re.findall(r'^INSTRUMENTATION_STATUS_CODE: 0\s*$', instrumentation, re.MULTILINE)) != total or 'thousandLearningRecordsRemainSearchableAndScrollable' not in instrumentation:
         raise ValueError('The current reviewed UI set must pass, including large-list navigation')
-    if (args.device_log / 'release-apk.sha256').read_text().split()[0] != digest(source):
+    if (args.device_log / 'release-apk.sha256').read_text().split()[0] != digest(validated):
         raise ValueError('The APK differs from the installed and launched Release candidate')
+    smoke = (args.device_log / 'release-smoke.txt').read_text()
+    if not all(text in smoke for text in ('opened epub in ReaderActivity', 'opened pdf in ReaderActivity')):
+        raise ValueError('The Release candidate did not open an EPUB and a PDF on the emulator')
+    verify_split_pair(source, validated)
     sdk = Path(os.environ['ANDROID_HOME']) / 'build-tools'
     toolset = next(p for p in sorted(sdk.iterdir(), reverse=True) if (p / 'apksigner').is_file() and (p / 'aapt2').is_file())
-    if certificate(toolset / 'apksigner', source) != certificate(toolset / 'apksigner', args.previous_apk):
+    if not (certificate(toolset / 'apksigner', source) == certificate(toolset / 'apksigner', validated)
+            == certificate(toolset / 'apksigner', args.previous_apk)):
         raise ValueError('The APK would change the established signing identity')
     badging = subprocess.check_output([str(toolset / 'aapt2'), 'dump', 'badging', str(source)], text=True)
     if "name='com.jerreader.android'" not in badging or 'application-debuggable' in badging:
@@ -122,7 +158,9 @@ def main():
         raise ValueError('Packaged APK differs from the verified APK')
     target.with_suffix('.apk.sha256').write_text(sha + '  ' + target.name + '\n')
     result = dict(file=str(target), version=version, build=build, bytes=target.stat().st_size,
-        min_sdk=int(minimum[1]) if minimum else None, sha256=sha,
+        min_sdk=int(minimum[1]) if minimum else None, sha256=sha, abi='arm64-v8a',
+        emulator_validated_split=dict(file=validated.name, sha256=digest(validated), abi='x86_64'),
+        identical_outside_native_code=True,
         verified_signature=True, signing_identity_matches_previous=True,
         duplicate_class_definitions=0, class_definitions=len(seen), debug_fixture=False)
     target.with_suffix('.apk.validation.json').write_text(json.dumps(result, indent=2) + '\n')

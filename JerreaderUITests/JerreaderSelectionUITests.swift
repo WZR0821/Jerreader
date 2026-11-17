@@ -404,6 +404,36 @@ final class JerreaderSelectionUITests: XCTestCase {
         libraryAttachment.lifetime = .keepAlways
         add(libraryAttachment)
 
+        // "+" first asks for a format. The sheet opens at full height, so the
+        // button that opens the system picker shows without scrolling.
+        app.buttons["导入电子书"].tap()
+        XCTAssertTrue(app.staticTexts["先选择文件格式"].waitForExistence(timeout: 5))
+        let chooseDocument = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "选择文档")
+        ).firstMatch
+        XCTAssertTrue(chooseDocument.waitForExistence(timeout: 5))
+        XCTAssertTrue(chooseDocument.isHittable, "选择文档 must show without scrolling")
+        Thread.sleep(forTimeInterval: 0.6)
+        let importAttachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        importAttachment.name = "ios-import-options"
+        importAttachment.lifetime = .keepAlways
+        add(importAttachment)
+        app.buttons["只选 PDF 文件"].tap()
+        XCTAssertTrue(
+            app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "选择 PDF 文件"))
+                .firstMatch.waitForExistence(timeout: 5)
+        )
+        Thread.sleep(forTimeInterval: 0.4)
+        let pdfAttachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        pdfAttachment.name = "ios-import-options-pdf"
+        pdfAttachment.lifetime = .keepAlways
+        add(pdfAttachment)
+        app.navigationBars["导入电子书"].buttons["取消"].tap()
+        XCTAssertTrue(
+            app.staticTexts["先选择文件格式"].waitForNonExistence(timeout: 5),
+            "The import sheet did not close"
+        )
+
         let learningTab = app.tabBars.buttons["学习"]
         XCTAssertTrue(learningTab.waitForExistence(timeout: 5))
         learningTab.tap()
@@ -698,7 +728,7 @@ final class JerreaderSelectionUITests: XCTestCase {
         revealReaderSetting(bottomOpacity, in: app)
         XCTAssertTrue(bottomOpacity.waitForExistence(timeout: 5))
         bottomOpacity.adjust(toNormalizedSliderPosition: 0.75)
-        let immersion = app.switches["沉浸阅读（隐藏状态栏）"]
+        let immersion = app.switches["隐藏状态栏"]
         revealReaderSetting(immersion, in: app)
         XCTAssertTrue(immersion.exists)
         let initialImmersionValue = try XCTUnwrap(immersion.value as? String)
@@ -729,7 +759,7 @@ final class JerreaderSelectionUITests: XCTestCase {
         statusOption.lifetime = .keepAlways
         add(statusOption)
         tapVisibleControlByCoordinate(app.buttons["阅读设置"], in: app)
-        let restoreImmersion = app.switches["沉浸阅读（隐藏状态栏）"]
+        let restoreImmersion = app.switches["隐藏状态栏"]
         revealReaderSetting(restoreImmersion, in: app)
         XCTAssertTrue(restoreImmersion.waitForExistence(timeout: 5))
         tapReaderSwitch(restoreImmersion, in: app)
@@ -1128,6 +1158,341 @@ final class JerreaderSelectionUITests: XCTestCase {
             : "physical-ruby-long-press-\(orientation)"
         attachment.lifetime = .keepAlways
         add(attachment)
+        app.terminate()
+    }
+}
+
+/// 设置 and 学习 › 翻译 each fill the room between their bars exactly: the
+/// content is as tall as the room, nothing moves on a drag, and the last
+/// element ends just above the tab bar. Meant for the 440 × 956 iPhone 16 Pro
+/// Max, the tallest iPhone: `--jerreader-fixture-shorter` takes height off the
+/// bottom of a page to stand in for a shorter phone. The AI model pages are
+/// checked on the way. Every sheet is cancelled, so nothing is saved.
+@MainActor
+final class JerreaderOneScreenUITests: XCTestCase {
+    private var app: XCUIApplication!
+
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+    }
+
+    private func launch(_ extra: [String] = []) {
+        app = XCUIApplication()
+        app.launchArguments = [
+            "--jerreader-learning-ui-fixture", "--jerreader-learning-ui-empty",
+            "--jerreader-standalone-translator-ui-test", "--jerreader-one-screen-probe",
+            "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN", "-ApplePersistenceIgnoreState", "YES"
+        ] + extra
+        app.launch()
+        XCTAssertTrue(app.navigationBars["学习"].waitForExistence(timeout: 20))
+    }
+
+    private func element(_ identifier: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+    }
+
+    private func attach(_ name: String) {
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    private var translateLast: XCUIElement { element("standalone-translation-provider-help") }
+    private var settingsLast: XCUIElement { element("appVersionLabel") }
+
+    /// What the page's scroll view reports about itself in test builds.
+    private func reading(_ page: String) -> [String: CGFloat] {
+        let probe = element(page + "Probe")
+        XCTAssertTrue(probe.waitForExistence(timeout: 5), page)
+        var values: [String: CGFloat] = [:]
+        for part in probe.label.split(separator: " ") {
+            let pair = part.split(separator: "=")
+            if pair.count == 2, let number = Double(pair[1]) { values[String(pair[0])] = CGFloat(number) }
+        }
+        return values
+    }
+
+    /// Drags from the middle of `element` by `dy` points. A drag that starts
+    /// on a label moves the page itself, not an input or a result that
+    /// scrolls on its own.
+    private func drag(from element: XCUIElement, by dy: CGFloat) {
+        let start = element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: dy)))
+    }
+
+    /// The page is one screen: content as tall as its room, still after drags
+    /// both ways, and `last` ending `gap` points above the tab bar.
+    private func assertOneScreen(_ page: String, last: XCUIElement, gap: ClosedRange<CGFloat>,
+                                 shorter: CGFloat = 0, _ name: String) {
+        XCTAssertTrue(last.waitForExistence(timeout: 5), name)
+        let before = last.frame
+        for _ in 0..<2 {
+            drag(from: last, by: -260)
+            drag(from: last, by: 60)
+        }
+        let values = reading(page)
+        let space = app.tabBars.firstMatch.frame.minY - shorter - last.frame.maxY
+        print("ONESCREEN \(name) \(values) space=\(space) last=\(last.frame) window=\(app.windows.firstMatch.frame)")
+        XCTAssertEqual(values["content"] ?? -1, values["room"] ?? -2, accuracy: 0.5, "\(name): \(values)")
+        XCTAssertEqual(values["moved"] ?? -1, 0, accuracy: 0.5, "\(name) moved: \(values)")
+        XCTAssertEqual(last.frame.minY, before.minY, accuracy: 0.5, name)
+        XCTAssertTrue(gap.contains(space), "\(name): \(space) points under the last element")
+    }
+
+    private func showSettings() {
+        app.tabBars.buttons["设置"].tap()
+        XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 5))
+    }
+
+    func testBothMainScreensFillOneScreen() {
+        launch()
+        assertOneScreen("standalone-translation-page", last: translateLast, gap: 12...24, "翻译")
+        attach("one-screen-translate")
+        showSettings()
+        let title = app.navigationBars["设置"].frame.height
+        assertOneScreen("settingsHome", last: settingsLast, gap: 4...16, "设置")
+        XCTAssertEqual(app.navigationBars["设置"].frame.height, title, accuracy: 0.5, "The large title stays large")
+        attach("one-screen-settings")
+        app.terminate()
+    }
+
+    func testBothMainScreensInDarkAppearance() {
+        launch(["--jerreader-learning-ui-dark"])
+        assertOneScreen("standalone-translation-page", last: translateLast, gap: 12...24, "翻译 深色")
+        attach("one-screen-translate-dark")
+        showSettings()
+        assertOneScreen("settingsHome", last: settingsLast, gap: 4...16, "设置 深色")
+        attach("one-screen-settings-dark")
+        element("aiModelsSettingsLink").tap()
+        XCTAssertTrue(app.navigationBars["AI 大模型"].waitForExistence(timeout: 5))
+        attach("ai-models-dark")
+        app.terminate()
+    }
+
+    // On the 16 Pro Max (956 points, 62 under the status bar) taking these
+    // off the bottom leaves the room of a 932-point phone with 59 (15 Pro Max,
+    // 16 Plus), of the 874-point 16 Pro with 62, and of the 852-point 16 with
+    // 59. One phone per test keeps each well inside its time allowance.
+    private func assertShorterPhoneGetsOneScreen(_ shorter: Int) {
+        launch(["--jerreader-fixture-shorter=\(shorter)"])
+        assertOneScreen("standalone-translation-page", last: translateLast, gap: 12...24,
+                        shorter: CGFloat(shorter), "翻译 −\(shorter)")
+        attach("one-screen-translate-shorter-\(shorter)")
+        showSettings()
+        assertOneScreen("settingsHome", last: settingsLast, gap: 4...16,
+                        shorter: CGFloat(shorter), "设置 −\(shorter)")
+        attach("one-screen-settings-shorter-\(shorter)")
+        app.terminate()
+    }
+
+    func testOneScreenOn932PointPhone() { assertShorterPhoneGetsOneScreen(21) }
+
+    func testOneScreenOn874PointPhone() { assertShorterPhoneGetsOneScreen(82) }
+
+    func testOneScreenOn852PointPhone() { assertShorterPhoneGetsOneScreen(101) }
+
+    func testAIModelPagesListClaudeChatGPTAndDeepSeekFirst() {
+        launch()
+        showSettings()
+        let link = element("aiModelsSettingsLink")
+        XCTAssertTrue(link.waitForExistence(timeout: 5))
+        link.tap()
+        XCTAssertTrue(app.navigationBars["AI 大模型"].waitForExistence(timeout: 5))
+        XCTAssertTrue(element("activeModelCard").exists)
+        XCTAssertTrue(element("provider-deepSeek").exists)
+        attach("ai-models")
+
+        // One list, no domestic or overseas groups, Claude, ChatGPT and DeepSeek on top.
+        element("addProviderButton").tap()
+        XCTAssertTrue(app.navigationBars["添加供应商"].waitForExistence(timeout: 5))
+        let presets = ["anthropic", "openAI", "deepSeek", "qwen", "doubao", "kimi", "zhipu", "minimax", "gemini"]
+            .map { element("preset-" + $0) }
+        XCTAssertTrue(presets[0].waitForExistence(timeout: 5))
+        XCTAssertTrue(presets[1].exists && presets[2].exists && presets[3].exists)
+        let tops = presets.filter { $0.exists }.map { $0.frame.minY }
+        XCTAssertEqual(tops, tops.sorted(), "Presets out of order: \(tops)")
+        XCTAssertFalse(app.staticTexts["国内"].exists)
+        XCTAssertFalse(app.staticTexts["海外"].exists)
+        attach("ai-add-provider")
+        element("cancelAddProvider").tap()
+        XCTAssertTrue(app.navigationBars["AI 大模型"].waitForExistence(timeout: 5))
+
+        element("provider-deepSeek").tap()
+        XCTAssertTrue(app.navigationBars["DeepSeek"].waitForExistence(timeout: 5))
+        let flash = element("model-deepseek-flash")
+        XCTAssertTrue(flash.waitForExistence(timeout: 5))
+        XCTAssertTrue(element("model-deepseek-v4-pro").exists)
+        attach("ai-provider-deepseek")
+        flash.tap()
+        XCTAssertTrue(app.navigationBars["模型"].waitForExistence(timeout: 5))
+        XCTAssertTrue(element("apiStylePicker").exists)
+        XCTAssertTrue(element("reasoningPicker").exists)
+        // The model already in use needs the key to translate, not to be put in use.
+        XCTAssertTrue(app.staticTexts["这个供应商还没有填 API Key，填好后才能翻译。"].exists)
+        XCTAssertFalse(app.staticTexts["这个供应商还没有填 API Key，填好后才能设为正在用。"].exists)
+        attach("ai-model-deepseek-flash")
+        app.navigationBars["模型"].buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["DeepSeek"].waitForExistence(timeout: 5))
+        app.navigationBars["DeepSeek"].buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["AI 大模型"].waitForExistence(timeout: 5))
+
+        element("switchModelButton").tap()
+        XCTAssertTrue(app.navigationBars["换模型"].waitForExistence(timeout: 5))
+        XCTAssertTrue(element("switch-deepSeek-deepseek-flash").exists)
+        attach("ai-switch-model")
+        element("closeModelSwitcher").tap()
+        XCTAssertTrue(app.navigationBars["AI 大模型"].waitForExistence(timeout: 5))
+
+        element("aiHelpButton").tap()
+        XCTAssertTrue(app.navigationBars["说明"].waitForExistence(timeout: 5))
+        attach("ai-help")
+        element("closeAIHelp").tap()
+        XCTAssertTrue(app.navigationBars["AI 大模型"].waitForExistence(timeout: 5))
+        app.terminate()
+    }
+}
+
+/// The two reader layouts on the book a tester copied into the simulator's
+/// `tmp/JerreaderUITestBook.epub`, or on a generated Japanese TXT without one.
+/// The book file is only read; the screenshots are kept as attachments.
+@MainActor
+final class JerreaderReaderLayoutUITests: XCTestCase {
+    private var app: XCUIApplication!
+
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+    }
+
+    private var readerSettings: XCUIElement { app.buttons["阅读设置"] }
+
+    /// The bars only fade out and are hidden from VoiceOver, so XCUITest still
+    /// finds their buttons. Whether they show is read from the reveal strips,
+    /// which exist only while the immersive layout has its bars away.
+    private var revealTop: XCUIElement { app.buttons["reader-reveal-top"] }
+    private var revealBottom: XCUIElement { app.buttons["reader-reveal-bottom"] }
+
+    /// Taps a reveal strip near its left end. The top strip's centre lies on
+    /// the Dynamic Island, which keeps the touch from the app, and the bottom
+    /// one's on the home indicator.
+    private func tapStrip(_ strip: XCUIElement, dy: CGFloat) {
+        strip.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: dy)).tap()
+    }
+
+    /// Opens 阅读设置 with a touch at its centre. In the immersive layout the
+    /// page runs under the bars, and XCUITest's accessibility hit test finds
+    /// the web view there, so an element tap gives up as not hittable.
+    private func openReaderSettings() {
+        readerSettings.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+    }
+
+    private func waitUntilGone(_ element: XCUIElement, timeout: TimeInterval, _ message: String) {
+        let gone = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: element
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: timeout), .completed, message)
+    }
+
+    private func attach(_ name: String) {
+        // Let the bars finish fading before the frame is kept.
+        Thread.sleep(forTimeInterval: 0.8)
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    /// Picks a layout in 阅读设置 → 阅读界面 and closes the sheet.
+    private func chooseLayout(_ title: String) {
+        XCTAssertTrue(readerSettings.waitForExistence(timeout: 10))
+        if revealTop.exists {
+            tapStrip(revealTop, dy: 0.8)
+            waitUntilGone(revealTop, timeout: 3, "the bars come back before 阅读设置")
+        }
+        openReaderSettings()
+        let sheet = app.navigationBars["阅读与翻译"]
+        XCTAssertTrue(sheet.waitForExistence(timeout: 5))
+        let segment = app.segmentedControls
+            .containing(.button, identifier: "沉浸")
+            .buttons[title]
+        for _ in 0 ..< 4 where !segment.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(segment.isHittable, "界面布局 must be reachable")
+        segment.tap()
+        XCTAssertTrue(segment.isSelected)
+        sheet.buttons["完成"].tap()
+        waitUntilGone(sheet, timeout: 5, "the settings sheet closes")
+    }
+
+    /// Keeps the 阅读与翻译 sheet section by section, and its 翻译与 AI page,
+    /// for the side-by-side check against Android.
+    private func captureSettingsSheet() {
+        openReaderSettings()
+        let sheet = app.navigationBars["阅读与翻译"]
+        XCTAssertTrue(sheet.waitForExistence(timeout: 5))
+        attach("reader-sheet-1")
+        for page in 2 ... 4 {
+            app.swipeUp()
+            attach("reader-sheet-\(page)")
+        }
+        let translation = app.buttons
+            .matching(NSPredicate(format: "label BEGINSWITH '翻译与 AI'"))
+            .firstMatch
+        for _ in 0 ..< 3 where !translation.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(translation.isHittable, "翻译与 AI must be reachable")
+        translation.tap()
+        let detail = app.navigationBars["翻译与 AI"]
+        XCTAssertTrue(detail.waitForExistence(timeout: 5))
+        attach("reader-sheet-translation")
+        let back = detail.buttons["阅读与翻译"]
+        (back.exists ? back : detail.buttons.firstMatch).tap()
+        XCTAssertTrue(sheet.waitForExistence(timeout: 5))
+        sheet.buttons["完成"].tap()
+        waitUntilGone(sheet, timeout: 5, "the settings sheet closes")
+    }
+
+    func testStandardAndImmersiveLayouts() {
+        app = XCUIApplication()
+        app.launchArguments = [
+            "--jerreader-sample-book-ui-test",
+            "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN",
+            "-ApplePersistenceIgnoreState", "YES",
+        ]
+        app.launch()
+
+        // The bars stay in the element tree either way, so this only waits
+        // for the book. A run that stopped early may have left the immersive
+        // layout on; chooseLayout brings its bars back first.
+        XCTAssertTrue(readerSettings.waitForExistence(timeout: 60), "The sample book must open")
+
+        chooseLayout("标准")
+        XCTAssertFalse(revealTop.exists)
+        Thread.sleep(forTimeInterval: 5)
+        XCTAssertFalse(revealTop.exists, "the standard layout keeps its bars")
+        attach("reader-layout-standard")
+        captureSettingsSheet()
+
+        chooseLayout("沉浸")
+        XCTAssertTrue(revealTop.waitForExistence(timeout: 6), "the immersive layout starts without bars")
+        XCTAssertTrue(revealBottom.exists)
+        attach("reader-layout-immersive")
+
+        tapStrip(revealTop, dy: 0.8)
+        waitUntilGone(revealTop, timeout: 3, "the top strip brings the bars back")
+        attach("reader-layout-immersive-bars")
+        XCTAssertTrue(revealTop.waitForExistence(timeout: 9), "the bars hide again on their own")
+
+        XCTAssertTrue(revealBottom.exists)
+        tapStrip(revealBottom, dy: 0.4)
+        waitUntilGone(revealBottom, timeout: 3, "the bottom strip brings the bars back")
+
+        // Leave the simulator in the default layout.
+        chooseLayout("标准")
+        XCTAssertFalse(revealTop.exists)
         app.terminate()
     }
 }

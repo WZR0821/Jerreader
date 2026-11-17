@@ -8,8 +8,10 @@ struct EPUBReaderScreen: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
 
-    @StateObject private var model: EPUBReaderViewModel
+    // `@State` owns the observable model for the life of the screen.
+    @State private var model: EPUBReaderViewModel
     @State private var isShowingNavigation = false
+    @State private var navigationSection: ReaderNavigationSection = .contents
     @State private var isShowingSettings = false
     @State private var scrubbedProgress: Double?
     @AppStorage(ReaderAppearanceDefaults.showsProgressKey)
@@ -20,6 +22,12 @@ struct EPUBReaderScreen: View {
     private var topBarTransparency = ReaderInterfaceDefaults.barTransparency
     @AppStorage(ReaderInterfaceDefaults.bottomTransparencyKey)
     private var bottomBarTransparency = ReaderInterfaceDefaults.barTransparency
+    @AppStorage(ReaderInterfaceDefaults.layoutModeKey)
+    private var layoutModeRawValue = ReaderLayoutMode.standard.rawValue
+    /// Measured, so the page sits exactly between the bars in the standard
+    /// layout whatever the text size or the progress-row setting.
+    @State private var topChromeHeight: CGFloat = 44
+    @State private var bottomChromeHeight: CGFloat = 78
 
     init(
         book: BookRecord,
@@ -27,8 +35,8 @@ struct EPUBReaderScreen: View {
         translationSettings: TranslationSettingsStore,
         initialLocatorJSON: String? = nil
     ) {
-        _model = StateObject(
-            wrappedValue: EPUBReaderViewModel(
+        _model = State(
+            initialValue: EPUBReaderViewModel(
                 book: book,
                 modelContext: modelContext,
                 translationSettings: translationSettings,
@@ -39,26 +47,33 @@ struct EPUBReaderScreen: View {
 
     var body: some View {
         ZStack {
+            // Only the layout mode moves the page: showing or hiding the bars
+            // in the immersive layout must never make Readium paginate again.
             readerContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
-                .padding(.top, ReaderInterfaceDefaults.topContentInset)
-                .padding(.bottom, ReaderInterfaceDefaults.bottomContentInset)
+                .padding(.top, reservesChromeSpace ? topChromeHeight : 0)
+                .padding(.bottom, reservesChromeSpace ? bottomChromeHeight : 0)
 
             readerChrome
-                .opacity(model.controlsVisible ? 1 : 0)
-                .scaleEffect(model.controlsVisible ? 1 : 0.985)
-                .allowsHitTesting(model.controlsVisible)
-                .accessibilityHidden(!model.controlsVisible)
+                .opacity(model.isChromeVisible ? 1 : 0)
+                .scaleEffect(model.isChromeVisible ? 1 : 0.985)
+                .allowsHitTesting(model.isChromeVisible)
+                .accessibilityHidden(!model.isChromeVisible)
                 .animation(
                     reduceMotion ? nil : JerreaderMotion.stateChange,
-                    value: model.controlsVisible
+                    value: model.isChromeVisible
                 )
                 .zIndex(1)
 
+            if model.layoutMode == .immersive, !model.isChromeVisible {
+                immersiveRevealZones
+                    .zIndex(1)
+            }
+
             if model.isQuickSentenceTranslationEnabled,
                model.isQuickTranslationIndicatorVisible,
-               !model.controlsVisible,
+               !model.isChromeVisible,
                model.presentedTranslationRequest == nil,
                model.readerActivityMessage == nil
             {
@@ -73,7 +88,11 @@ struct EPUBReaderScreen: View {
             }
 
             if model.presentedTranslationRequest != nil {
-                ReaderTranslationLayer(model: model)
+                ReaderTranslationLayer(
+                    model: model,
+                    topChromeHeight: topChromeHeight,
+                    bottomChromeHeight: bottomChromeHeight
+                )
                 .transition(.opacity.combined(with: .scale(scale: 0.96)))
                 .zIndex(2)
             }
@@ -93,7 +112,9 @@ struct EPUBReaderScreen: View {
             reduceMotion ? nil : JerreaderMotion.stateChange,
             value: model.readerActivityMessage
         )
-        .statusBarHidden(immersiveReading)
+        // The immersive layout is full screen by definition; the standard one
+        // keeps the separate status-bar choice.
+        .statusBarHidden(immersiveReading || model.layoutMode == .immersive)
         .preferredColorScheme(prefersDarkReaderChrome ? .dark : .light)
         .sensoryFeedback(
             .impact(weight: .light),
@@ -116,7 +137,7 @@ struct EPUBReaderScreen: View {
             await model.performPendingTranslation(using: service)
         }
         .sheet(isPresented: $isShowingNavigation) {
-            ReaderNavigationSheet(model: model) {
+            ReaderNavigationSheet(model: model, initialSection: navigationSection) {
                 isShowingNavigation = false
             }
             .presentationDetents([.medium, .large])
@@ -140,12 +161,19 @@ struct EPUBReaderScreen: View {
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
-        .sheet(isPresented: $model.isShowingContextualLookup) {
+        .sheet(
+            isPresented: $model.isShowingContextualLookup,
+            onDismiss: { model.contextualLookupDismissed() }
+        ) {
             NavigationStack {
                 LookupView(translationSettings: model.translationSettings,
-                    initialWord: model.translationState.request?.sourceText ?? "",
-                    initialContext: model.translationState.request?.contextText ?? model.translationState.request?.sourceText ?? "",
-                    language: model.translationState.request?.sourceLanguage,
+                    initialWord: model.shortTapLookup?.word
+                        ?? model.translationState.request?.sourceText ?? "",
+                    initialContext: model.shortTapLookup?.context
+                        ?? model.translationState.request?.contextText
+                        ?? model.translationState.request?.sourceText ?? "",
+                    language: model.shortTapLookup?.language
+                        ?? model.translationState.request?.sourceLanguage,
                     sourceBookID: model.book.id, sourceBookTitle: model.book.title)
                     .navigationTitle("语境查词")
                     .navigationBarTitleDisplayMode(.inline)
@@ -159,6 +187,11 @@ struct EPUBReaderScreen: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
+        .modifier(ReaderCompanionSheets(companion: model.companion) { term in
+            model.search(term)
+            navigationSection = .search
+            isShowingNavigation = true
+        })
         .alert(
             "阅读器提示",
             isPresented: Binding(
@@ -172,6 +205,9 @@ struct EPUBReaderScreen: View {
         }
         .onChange(of: scenePhase) {
             model.setReadingActive(scenePhase == .active)
+        }
+        .onChange(of: layoutModeRawValue) {
+            model.setLayoutMode(ReaderLayoutMode(rawValue: layoutModeRawValue) ?? .standard)
         }
         .onDisappear {
             model.close()
@@ -210,93 +246,157 @@ struct EPUBReaderScreen: View {
         }
     }
 
+    /// The standard layout lays the page out between the bars; the immersive
+    /// one lets them float over a full-screen page.
+    private var reservesChromeSpace: Bool {
+        model.layoutMode == .standard
+    }
+
+    /// Hairlines only where the bars float over text. In the standard layout
+    /// the bars are page-coloured margins and a rule would cut them off.
+    private var showsChromeDividers: Bool {
+        model.layoutMode == .immersive
+    }
+
     private var readerChrome: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                chromeButton(systemImage: "xmark") {
-                    model.flushProgress()
-                    dismiss()
-                }
-                .accessibilityLabel("关闭阅读器")
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(model.chapterTitle)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                    Text(model.book.title)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+            topChromeBar
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                    if abs(height - topChromeHeight) > 0.5 { topChromeHeight = height }
                 }
 
-                Spacer(minLength: 4)
+            Spacer(minLength: 0)
 
-                chromeButton(systemImage: "list.bullet.rectangle") {
-                    isShowingNavigation = true
+            bottomChromeBar
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                    if abs(height - bottomChromeHeight) > 0.5 { bottomChromeHeight = height }
                 }
-                .accessibilityLabel("目录与阅读导航")
+        }
+    }
 
-                // Bookmarking is a one-tap, frequently repeated action and its
-                // state is worth showing continuously; burying it in a menu
-                // hid both the action and whether the page was already saved.
-                chromeButton(
-                    systemImage: model.isCurrentLocationBookmarked
-                        ? "bookmark.fill"
-                        : "bookmark",
-                    isActive: model.isCurrentLocationBookmarked
-                ) {
-                    model.toggleBookmark()
-                }
-                .accessibilityLabel(
-                    model.isCurrentLocationBookmarked
-                        ? "移除当前书签"
-                        : "添加当前书签"
+    /// In the immersive layout a tap on the text looks a word up or
+    /// translates, so the blank strips above and below the text bring the bars
+    /// back. Each covers the safe area and the page's own edge inset, never a
+    /// line of text.
+    private var immersiveRevealZones: some View {
+        GeometryReader { geometry in
+            let edge = ReaderInterfaceDefaults.contentEdgeInset - 2
+            VStack(spacing: 0) {
+                immersiveRevealZone(
+                    height: geometry.safeAreaInsets.top + edge,
+                    identifier: "reader-reveal-top"
                 )
-                .accessibilityAddTraits(
-                    model.isCurrentLocationBookmarked ? .isSelected : []
+                Spacer(minLength: 0)
+                immersiveRevealZone(
+                    height: geometry.safeAreaInsets.bottom + edge,
+                    identifier: "reader-reveal-bottom"
                 )
-
-                chromeButton(systemImage: "textformat") {
-                    isShowingSettings = true
-                }
-                .accessibilityLabel("阅读设置")
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 4)
-            .frame(maxWidth: 780)
-            .frame(maxWidth: .infinity)
-            .background(readerBackground.opacity(ReaderInterfaceDefaults.backgroundOpacity(topBarTransparency)))
-            .overlay(alignment: .bottom) {
+            .ignoresSafeArea()
+        }
+    }
+
+    private func immersiveRevealZone(height: CGFloat, identifier: String) -> some View {
+        Button {
+            model.showReaderControls()
+        } label: {
+            Color.clear
+                .frame(maxWidth: .infinity)
+                .frame(height: height)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("显示阅读控制")
+        .accessibilityIdentifier(identifier)
+    }
+
+    private var topChromeBar: some View {
+        HStack(spacing: 2) {
+            chromeButton(systemImage: "xmark") {
+                model.flushProgress()
+                dismiss()
+            }
+            .accessibilityLabel("关闭阅读器")
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(model.chapterTitle)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Text(model.book.title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .padding(.leading, 4)
+
+            Spacer(minLength: 4)
+
+            chromeButton(systemImage: "list.bullet.rectangle") {
+                navigationSection = .contents
+                isShowingNavigation = true
+            }
+            .accessibilityLabel("目录与阅读导航")
+
+            // Bookmarking is a one-tap, frequently repeated action and its
+            // state is worth showing continuously; burying it in a menu
+            // hid both the action and whether the page was already saved.
+            chromeButton(
+                systemImage: model.isCurrentLocationBookmarked
+                    ? "bookmark.fill"
+                    : "bookmark",
+                isActive: model.isCurrentLocationBookmarked
+            ) {
+                model.toggleBookmark()
+            }
+            .accessibilityLabel(
+                model.isCurrentLocationBookmarked
+                    ? "移除当前书签"
+                    : "添加当前书签"
+            )
+            .accessibilityAddTraits(
+                model.isCurrentLocationBookmarked ? .isSelected : []
+            )
+
+            ReaderCompanionChromeButton(companion: model.companion) {
+                model.noteChromeInteraction()
+                model.presentReadingCompanion()
+            }
+
+            chromeButton(systemImage: "textformat") {
+                isShowingSettings = true
+            }
+            .accessibilityLabel("阅读设置")
+        }
+        .padding(.horizontal, 6)
+        .frame(maxWidth: 780)
+        .frame(maxWidth: .infinity)
+        .background(readerBackground.opacity(ReaderInterfaceDefaults.backgroundOpacity(topBarTransparency)))
+        .overlay(alignment: .bottom) {
+            if showsChromeDividers {
                 Rectangle()
                     .fill(JerreaderTheme.line)
                     .frame(height: 0.5)
             }
+        }
+    }
 
-            Spacer()
-
-            VStack(spacing: 8) {
-                if showsReadingProgress {
-                    // While dragging, the chapter the thumb is over matters far
-                    // more than the raw percentage, so it gets the prominent
-                    // line and the percentage becomes secondary.
-                    HStack(spacing: 6) {
-                        Text(scrubbedProgress == nil ? currentChapterLabel : scrubTargetLabel)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(
-                                scrubbedProgress == nil ? .secondary : JerreaderTheme.accent
-                            )
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .animation(nil, value: scrubbedProgress)
-
-                        Spacer(minLength: 6)
-
-                        Text(progressLabel)
-                            .font(.caption.monospacedDigit().weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .contentTransition(.numericText())
-                    }
-                    .padding(.horizontal, 2)
+    /// One slim row for the position and one for the page buttons, which are
+    /// bare glyphs on the page colour rather than filled tiles.
+    private var bottomChromeBar: some View {
+        VStack(spacing: 0) {
+            if showsReadingProgress {
+                // While dragging, the chapter the thumb is over matters far
+                // more than the raw percentage, so it takes the accent colour.
+                HStack(spacing: 10) {
+                    Text(scrubbedProgress == nil ? currentChapterLabel : scrubTargetLabel)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(
+                            scrubbedProgress == nil ? .secondary : JerreaderTheme.accent
+                        )
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: 104, alignment: .leading)
+                        .animation(nil, value: scrubbedProgress)
 
                     Slider(
                         value: readerProgressBinding,
@@ -310,61 +410,73 @@ struct EPUBReaderScreen: View {
                             ? "\(currentChapterLabel)，\(progressLabel)"
                             : "\(scrubTargetLabel)，\(progressLabel)"
                     )
+
+                    Text(progressLabel)
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .contentTransition(.numericText())
+                        .frame(minWidth: 34, alignment: .trailing)
+                }
+                .padding(.horizontal, 6)
+                .frame(minHeight: 32)
+            }
+
+            HStack(spacing: 0) {
+                if model.canGoToAdjacentChapter {
+                    pageButton(systemImage: "chevron.left.2") {
+                        model.goToPreviousChapter()
+                    }
+                    .accessibilityLabel("上一章")
                 }
 
-                HStack(spacing: 12) {
-                    if model.canGoToAdjacentChapter {
-                        pageButton(systemImage: "chevron.left.2") {
-                            model.goToPreviousChapter()
-                        }
-                        .accessibilityLabel("上一章")
-                    }
+                pageButton(systemImage: "chevron.left") {
+                    model.goBackward()
+                }
+                .accessibilityLabel("上一页")
 
-                    pageButton(systemImage: "chevron.left") {
-                        model.goBackward()
-                    }
-                    .accessibilityLabel("上一页")
-
-                    if model.supportsQuickSentenceTranslation {
-                        pageButton(
-                            systemImage: model.isQuickSentenceTranslationEnabled
-                                ? "character.bubble.fill"
-                                : "character.bubble",
-                            isActive: model.isQuickSentenceTranslationEnabled
-                        ) {
-                            model.setQuickSentenceTranslationEnabled(
-                                !model.isQuickSentenceTranslationEnabled
-                            )
-                        }
-                        .accessibilityLabel(
-                            model.isQuickSentenceTranslationEnabled
-                                ? "关闭轻点翻译"
-                                : "开启轻点翻译"
-                        )
-                        .accessibilityHint(
-                            "开启后轻点正文即可翻译当前\(model.quickTranslationUnit.title)"
+                if model.supportsQuickSentenceTranslation {
+                    pageButton(
+                        systemImage: model.isQuickSentenceTranslationEnabled
+                            ? "character.bubble.fill"
+                            : "character.bubble",
+                        isActive: model.isQuickSentenceTranslationEnabled
+                    ) {
+                        model.setQuickSentenceTranslationEnabled(
+                            !model.isQuickSentenceTranslationEnabled
                         )
                     }
+                    .accessibilityLabel(
+                        model.isQuickSentenceTranslationEnabled
+                            ? "关闭轻点翻译"
+                            : "开启轻点翻译"
+                    )
+                    .accessibilityHint(
+                        model.isQuickSentenceTranslationEnabled && model.isReflowableBook
+                            ? "关闭后轻点词语直接查词"
+                            : "开启后轻点正文即可翻译当前\(model.quickTranslationUnit.title)"
+                    )
+                }
 
-                    pageButton(systemImage: "chevron.right") {
-                        model.goForward()
-                    }
-                    .accessibilityLabel("下一页")
+                pageButton(systemImage: "chevron.right") {
+                    model.goForward()
+                }
+                .accessibilityLabel("下一页")
 
-                    if model.canGoToAdjacentChapter {
-                        pageButton(systemImage: "chevron.right.2") {
-                            model.goToNextChapter()
-                        }
-                        .accessibilityLabel("下一章")
+                if model.canGoToAdjacentChapter {
+                    pageButton(systemImage: "chevron.right.2") {
+                        model.goToNextChapter()
                     }
+                    .accessibilityLabel("下一章")
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .frame(maxWidth: 660)
-            .frame(maxWidth: .infinity)
-            .background(readerBackground.opacity(ReaderInterfaceDefaults.backgroundOpacity(bottomBarTransparency)))
-            .overlay(alignment: .top) {
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 2)
+        .frame(maxWidth: 660)
+        .frame(maxWidth: .infinity)
+        .background(readerBackground.opacity(ReaderInterfaceDefaults.backgroundOpacity(bottomBarTransparency)))
+        .overlay(alignment: .top) {
+            if showsChromeDividers {
                 Rectangle()
                     .fill(JerreaderTheme.line)
                     .frame(height: 0.5)
@@ -377,7 +489,10 @@ struct EPUBReaderScreen: View {
         isActive: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
+        Button {
+            model.noteChromeInteraction()
+            action()
+        } label: {
             Group {
                 if systemImage == "textformat" {
                     Text("格式").font(.body.weight(.semibold))
@@ -397,24 +512,30 @@ struct EPUBReaderScreen: View {
         .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.90))
     }
 
+    /// A bare glyph in the page's own colours; only the active translation
+    /// toggle gets a filled capsule, so its state still reads at a glance.
     private func pageButton(
         systemImage: String,
         isActive: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
+        Button {
+            model.noteChromeInteraction()
+            action()
+        } label: {
             Image(uiImage: JerreaderIconImage.image(systemImage))
-                .resizable().scaledToFit().frame(width: 26, height: 26)
-                .foregroundStyle(isActive ? JerreaderTheme.onPrimaryAction : Color.primary)
-                .frame(maxWidth: .infinity)
-                .frame(minHeight: 48)
+                .resizable().scaledToFit().frame(width: 22, height: 22)
+                .foregroundStyle(isActive ? JerreaderTheme.onPrimaryAction : Color.primary.opacity(0.62))
+                .frame(width: 52, height: 32)
+                .background {
+                    if isActive {
+                        Capsule().fill(JerreaderTheme.accent)
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: 44)
                 .contentShape(Rectangle())
-                .background(
-                    isActive ? JerreaderTheme.accent : JerreaderTheme.accentFill.opacity(0.72),
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                )
         }
-        .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.965))
+        .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.92))
     }
 
     private func readerFailure(_ message: String) -> some View {
@@ -473,6 +594,7 @@ struct EPUBReaderScreen: View {
     }
 
     private func handleProgressEditing(_ isEditing: Bool) {
+        model.setChromeAutoHideSuspended(isEditing)
         if isEditing {
             if scrubbedProgress == nil {
                 scrubbedProgress = model.progress
@@ -571,7 +693,10 @@ struct EPUBReaderScreen: View {
 
 private struct ReaderTranslationLayer: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @ObservedObject var model: EPUBReaderViewModel
+    let model: EPUBReaderViewModel
+    /// The bars' measured heights, which the card keeps clear of while they show.
+    let topChromeHeight: CGFloat
+    let bottomChromeHeight: CGFloat
     @ObservedObject private var settings: TranslationSettingsStore
     @State private var cardHeight: CGFloat = 108
     @State private var manualPosition: CGPoint?
@@ -580,8 +705,10 @@ private struct ReaderTranslationLayer: View {
     @State private var selectionSettleTask: Task<Void, Never>?
     @GestureState private var dragState = TranslationOverlayDragState.inactive
 
-    init(model: EPUBReaderViewModel) {
+    init(model: EPUBReaderViewModel, topChromeHeight: CGFloat, bottomChromeHeight: CGFloat) {
         self.model = model
+        self.topChromeHeight = topChromeHeight
+        self.bottomChromeHeight = bottomChromeHeight
         _settings = ObservedObject(wrappedValue: model.translationSettings)
     }
 
@@ -898,11 +1025,11 @@ private struct ReaderTranslationLayer: View {
     }
 
     private func topInset(in geometry: GeometryProxy) -> CGFloat {
-        max(geometry.safeAreaInsets.top, model.controlsVisible ? ReaderInterfaceDefaults.topContentInset + 12 : 12)
+        max(geometry.safeAreaInsets.top, model.isChromeVisible ? topChromeHeight + 12 : 12)
     }
 
     private func bottomInset(in geometry: GeometryProxy) -> CGFloat {
-        max(geometry.safeAreaInsets.bottom, model.controlsVisible ? ReaderInterfaceDefaults.bottomContentInset + 12 : 12)
+        max(geometry.safeAreaInsets.bottom, model.isChromeVisible ? bottomChromeHeight + 12 : 12)
     }
 
     private func beginSelectionAdjustment() {
@@ -984,7 +1111,7 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
     @AppStorage(ReaderInterfaceDefaults.japaneseFuriganaKey)
     private var japaneseFuriganaEnabled = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @ObservedObject var model: EPUBReaderViewModel
+    let model: EPUBReaderViewModel
     let maximumCardHeight: CGFloat
     let usesCompactHeader: Bool
     let isDragging: Bool
@@ -1253,6 +1380,12 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
                 model.requestContextExplanation()
             } label: {
                 Label("AI 句子结构分析", systemImage: "text.line.magnify")
+            }
+
+            Button {
+                model.requestContextExplanation(lensMode: .comprehension)
+            } label: {
+                Label("AI 阅读透镜", systemImage: "sparkle.magnifyingglass")
             }
 
             Button { model.isShowingContextualLookup = true } label: {
@@ -1648,29 +1781,35 @@ private struct ReaderAnnotationEditor: View {
 private struct ReaderContextExplanationSheet: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var model: EPUBReaderViewModel
+    let model: EPUBReaderViewModel
 
     var body: some View {
         NavigationStack {
-            Group {
-                switch model.contextExplanationState {
-                case .idle:
-                    ProgressView()
-                case let .loading(request):
-                    explanationLoading(request)
-                case let .success(request, result):
-                    explanationResult(request: request, result: result)
-                case let .failure(request, error):
-                    explanationFailure(request: request, error: error)
+            VStack(spacing: 0) {
+                if activeLensMode != nil {
+                    lensSelector
+                    Divider()
                 }
+                Group {
+                    switch model.contextExplanationState {
+                    case .idle:
+                        ProgressView()
+                    case let .loading(request):
+                        explanationLoading(request)
+                    case let .success(request, result):
+                        explanationResult(request: request, result: result)
+                    case let .failure(request, error):
+                        explanationFailure(request: request, error: error)
+                    }
+                }
+                .id(explanationPhaseIdentity)
+                .transition(
+                    .opacity.combined(with: .scale(scale: 0.985, anchor: .top))
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .id(explanationPhaseIdentity)
-            .transition(
-                .opacity.combined(with: .scale(scale: 0.985, anchor: .top))
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(JerreaderCanvasBackground())
-            .navigationTitle("AI 句子结构分析")
+            .navigationTitle(activeLensMode == nil ? "AI 句子结构分析" : "AI 阅读透镜")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -1704,9 +1843,9 @@ private struct ReaderContextExplanationSheet: View {
             JerreaderLoadingGlyph(systemImage: "sparkles", size: 72)
 
             VStack(spacing: 6) {
-                Text("正在分析句子结构与语法…")
+                Text(request.lens.map { "正在生成“\($0.mode.title)”…" } ?? "正在分析句子结构与语法…")
                     .font(.headline)
-                Text("前后文只用于判断省略、指代与词义")
+                Text(request.lens == nil ? "前后文只用于判断省略、指代与词义" : "只依据选中文字和有限前后文，不剧透")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -1726,7 +1865,10 @@ private struct ReaderContextExplanationSheet: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 focusedText(request.focusedText)
-                SaveGrammarNoteButton(draft: model.grammarNoteDraft(request: request, result: result))
+                // Only grammar answers belong in the grammar notebook.
+                if request.lens == nil || request.lens?.mode == .grammar {
+                    SaveGrammarNoteButton(draft: model.grammarNoteDraft(request: request, result: result))
+                }
 
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 11) {
@@ -1740,12 +1882,19 @@ private struct ReaderContextExplanationSheet: View {
                             )
 
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("语法与结构分析")
+                            Text(request.lens?.mode.title ?? "语法与结构分析")
                                 .font(.headline)
-                            Text("拆解句子成分、修饰关系与重点语法")
+                            Text(request.lens?.mode.detail ?? "拆解句子成分、修饰关系与重点语法")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
+                    }
+
+                    if let basis = model.readingLensBasis(for: request) {
+                        Text(basis)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     Text(result.explanation)
@@ -1785,7 +1934,7 @@ private struct ReaderContextExplanationSheet: View {
                 .foregroundStyle(.orange)
                 .frame(width: 72, height: 72)
                 .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 22))
-            Text("暂时无法完成语法分析")
+            Text(request?.lens == nil ? "暂时无法完成语法分析" : "AI 阅读透镜暂不可用")
                 .font(.title3.bold())
             Text(error.message)
                 .foregroundStyle(.secondary)
@@ -1845,9 +1994,54 @@ private struct ReaderContextExplanationSheet: View {
     }
 }
 
+extension ReaderContextExplanationSheet {
+    fileprivate var activeLensMode: AIReadingLensMode? {
+        switch model.contextExplanationState {
+        case .idle:
+            return nil
+        case let .loading(request), let .success(request, _):
+            return request.lens?.mode
+        case let .failure(request, _):
+            return request?.lens?.mode
+        }
+    }
+
+    /// Switching lens asks the same passage a different question.
+    fileprivate var lensSelector: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(AIReadingLensMode.allCases) { mode in
+                    let isActive = mode == activeLensMode
+                    Button {
+                        guard !isActive else { return }
+                        model.requestContextExplanation(lensMode: mode)
+                    } label: {
+                        Text(mode.title)
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .foregroundStyle(isActive ? JerreaderTheme.onPrimaryAction : Color.primary)
+                            .background(
+                                isActive ? JerreaderTheme.primaryAction : JerreaderTheme.raisedPaper,
+                                in: Capsule()
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint(mode.detail)
+                    .accessibilityAddTraits(isActive ? .isSelected : [])
+                    .accessibilityIdentifier("ai_reading_lens_\(mode.rawValue)")
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+        }
+    }
+}
+
 private struct ReaderNavigationSheet: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @ObservedObject var model: EPUBReaderViewModel
+    let model: EPUBReaderViewModel
+    var initialSection: ReaderNavigationSection = .contents
     let onNavigate: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var section: ReaderNavigationSection = .contents
@@ -1890,6 +2084,7 @@ private struct ReaderNavigationSheet: View {
         )
         .sensoryFeedback(.selection, trigger: section)
         .onAppear {
+            section = initialSection
             query = model.lastSearchQuery
         }
         .onDisappear {

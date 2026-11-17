@@ -20,6 +20,10 @@ class LearningRecordRepository(
     suspend fun deleteGrammarNote(id: String) = dao.deleteGrammarNote(id)
 
     fun observeWords(): Flow<List<WordLookupEntity>> = dao.observeWords()
+
+    /** Every word met in a book, as the confusion map and AI lens read it. */
+    suspend fun readingErrorSignals(): List<com.jerreader.shared.learning.ReadingErrorSignal> =
+        ReadingErrorSignals.from(dao.allWords())
     fun observeTranslationFavorites(): Flow<List<TranslationFavoriteEntity>> =
         dao.observeTranslationFavorites()
 

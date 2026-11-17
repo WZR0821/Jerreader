@@ -1,0 +1,293 @@
+{
+  "about": "Backup pruning on iOS (Jerreader/Data/Services/LibraryBackupPruner.swift) and Android (shared library/LibraryBackupPolicy.kt LibraryBackupPruner). removed is in deletion order (oldest first), remaining is newest first. A day is 86400000 ms.",
+  "nowMs": 1780000000000,
+  "cases": [
+    {
+      "name": "retention drops archives older than the cutoff",
+      "retentionDays": 30,
+      "maximumBackupCount": 20,
+      "maximumTotalBytes": 0,
+      "backups": [
+        {
+          "name": "a",
+          "createdAtMs": 1779913600000,
+          "sizeBytes": 10
+        },
+        {
+          "name": "b",
+          "createdAtMs": 1779136000000,
+          "sizeBytes": 10
+        },
+        {
+          "name": "c",
+          "createdAtMs": 1777321600000,
+          "sizeBytes": 10
+        },
+        {
+          "name": "d",
+          "createdAtMs": 1776544000000,
+          "sizeBytes": 10
+        }
+      ],
+      "removed": [
+        "d",
+        "c"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "isOverLimit": false
+    },
+    {
+      "name": "an archive exactly at the cutoff stays",
+      "retentionDays": 30,
+      "maximumBackupCount": 20,
+      "maximumTotalBytes": 0,
+      "backups": [
+        {
+          "name": "new",
+          "createdAtMs": 1780000000000,
+          "sizeBytes": 10
+        },
+        {
+          "name": "edge",
+          "createdAtMs": 1777408000000,
+          "sizeBytes": 10
+        }
+      ],
+      "removed": [],
+      "remaining": [
+        "new",
+        "edge"
+      ],
+      "isOverLimit": false
+    },
+    {
+      "name": "an archive one millisecond past the cutoff goes",
+      "retentionDays": 30,
+      "maximumBackupCount": 20,
+      "maximumTotalBytes": 0,
+      "backups": [
+        {
+          "name": "new",
+          "createdAtMs": 1780000000000,
+          "sizeBytes": 10
+        },
+        {
+          "name": "past",
+          "createdAtMs": 1777407999999,
+          "sizeBytes": 10
+        }
+      ],
+      "removed": [
+        "past"
+      ],
+      "remaining": [
+        "new"
+      ],
+      "isOverLimit": false
+    },
+    {
+      "name": "the newest archive survives even when every archive is too old",
+      "retentionDays": 7,
+      "maximumBackupCount": 20,
+      "maximumTotalBytes": 0,
+      "backups": [
+        {
+          "name": "x",
+          "createdAtMs": 1771360000000,
+          "sizeBytes": 10
+        },
+        {
+          "name": "y",
+          "createdAtMs": 1775680000000,
+          "sizeBytes": 10
+        }
+      ],
+      "removed": [
+        "x"
+      ],
+      "remaining": [
+        "y"
+      ],
+      "isOverLimit": false
+    },
+    {
+      "name": "the count limit keeps the newest ones whatever the input order",
+      "retentionDays": 0,
+      "maximumBackupCount": 2,
+      "maximumTotalBytes": 0,
+      "backups": [
+        {
+          "name": "c",
+          "createdAtMs": 1779740800000,
+          "sizeBytes": 10
+        },
+        {
+          "name": "a",
+          "createdAtMs": 1779913600000,
+          "sizeBytes": 10
+        },
+        {
+          "name": "d",
+          "createdAtMs": 1779654400000,
+          "sizeBytes": 10
+        },
+        {
+          "name": "b",
+          "createdAtMs": 1779827200000,
+          "sizeBytes": 10
+        }
+      ],
+      "removed": [
+        "d",
+        "c"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "isOverLimit": false
+    },
+    {
+      "name": "the size limit drops oldest first until the total fits",
+      "retentionDays": 0,
+      "maximumBackupCount": 20,
+      "maximumTotalBytes": 300,
+      "backups": [
+        {
+          "name": "a",
+          "createdAtMs": 1779913600000,
+          "sizeBytes": 100
+        },
+        {
+          "name": "b",
+          "createdAtMs": 1779827200000,
+          "sizeBytes": 150
+        },
+        {
+          "name": "c",
+          "createdAtMs": 1779740800000,
+          "sizeBytes": 120
+        },
+        {
+          "name": "d",
+          "createdAtMs": 1779654400000,
+          "sizeBytes": 50
+        }
+      ],
+      "removed": [
+        "d",
+        "c"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "isOverLimit": false
+    },
+    {
+      "name": "a newest archive bigger than the limit is kept and reported",
+      "retentionDays": 0,
+      "maximumBackupCount": 20,
+      "maximumTotalBytes": 100,
+      "backups": [
+        {
+          "name": "a",
+          "createdAtMs": 1779913600000,
+          "sizeBytes": 500
+        },
+        {
+          "name": "b",
+          "createdAtMs": 1779827200000,
+          "sizeBytes": 10
+        }
+      ],
+      "removed": [
+        "b"
+      ],
+      "remaining": [
+        "a"
+      ],
+      "isOverLimit": true
+    },
+    {
+      "name": "age goes first, then count, then size",
+      "retentionDays": 30,
+      "maximumBackupCount": 3,
+      "maximumTotalBytes": 1000,
+      "backups": [
+        {
+          "name": "a",
+          "createdAtMs": 1780000000000,
+          "sizeBytes": 400
+        },
+        {
+          "name": "b",
+          "createdAtMs": 1779568000000,
+          "sizeBytes": 400
+        },
+        {
+          "name": "c",
+          "createdAtMs": 1779136000000,
+          "sizeBytes": 400
+        },
+        {
+          "name": "d",
+          "createdAtMs": 1778272000000,
+          "sizeBytes": 100
+        },
+        {
+          "name": "e",
+          "createdAtMs": 1776544000000,
+          "sizeBytes": 50
+        }
+      ],
+      "removed": [
+        "e",
+        "d",
+        "c"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "isOverLimit": false
+    },
+    {
+      "name": "zero limits remove nothing",
+      "retentionDays": 0,
+      "maximumBackupCount": 0,
+      "maximumTotalBytes": 0,
+      "backups": [
+        {
+          "name": "a",
+          "createdAtMs": 1779913600000,
+          "sizeBytes": 10
+        },
+        {
+          "name": "b",
+          "createdAtMs": 1745440000000,
+          "sizeBytes": 1000000000000
+        }
+      ],
+      "removed": [],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "isOverLimit": false
+    },
+    {
+      "name": "an empty folder has nothing to prune",
+      "retentionDays": 30,
+      "maximumBackupCount": 5,
+      "maximumTotalBytes": 100,
+      "backups": [],
+      "removed": [],
+      "remaining": [],
+      "isOverLimit": false
+    }
+  ]
+}

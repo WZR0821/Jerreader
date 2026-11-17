@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.horizontalScroll
@@ -51,6 +50,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Checkbox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -61,6 +61,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -80,7 +81,8 @@ data class LibraryUiState(
 @Composable
 fun JerreaderLibraryApp(
     state: LibraryUiState,
-    onImport: () -> Unit,
+    /** Opens the system picker limited to the MIME types chosen in the import sheet. */
+    onImport: (mimeTypes: List<String>) -> Unit,
     onOpenBook: (String) -> Unit,
     onDeleteBook: (String) -> Unit,
     /**
@@ -133,6 +135,7 @@ fun JerreaderLibraryApp(
     var selectedFormat by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
     var sortOrder by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(LibrarySortOrder.RECENT) }
     var isBatchEditing by remember { mutableStateOf(false) }
+    var isShowingImportOptions by rememberSaveable { mutableStateOf(false) }
     var isLibraryMenuExpanded by remember { mutableStateOf(false) }
     val categories = remember(state.books) { state.books.map(LibraryBook::category)
         .filter(String::isNotBlank)
@@ -187,7 +190,7 @@ fun JerreaderLibraryApp(
                     LibraryToolbarButton(
                         icon = JerreaderIcon.PLUS,
                         enabled = !state.isImporting,
-                        onClick = onImport,
+                        onClick = { isShowingImportOptions = true },
                         modifier = Modifier.semantics { contentDescription = "导入电子书" }
                     )
                     Box {
@@ -236,7 +239,7 @@ fun JerreaderLibraryApp(
             when {
                 state.isLoading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                 state.books.isEmpty() -> EmptyLibrary(
-                    onImport = onImport,
+                    onImport = { isShowingImportOptions = true },
                     onRestoreBackup = onRestoreBackup,
                     modifier = Modifier.align(Alignment.Center)
                 )
@@ -385,6 +388,18 @@ fun JerreaderLibraryApp(
             }
         )
     }
+    if (isShowingImportOptions) {
+        BookImportOptionsSheet(
+            isImporting = state.isImporting,
+            onDismiss = { isShowingImportOptions = false },
+            onChooseFile = { mimeTypes ->
+                // The system picker covers the app anyway; iOS also closes this
+                // sheet once its picker returns, picked or cancelled.
+                isShowingImportOptions = false
+                onImport(mimeTypes)
+            }
+        )
+    }
     if (isBatchEditing) {
         BatchBookEditDialog(
             books = state.books,
@@ -452,7 +467,7 @@ private fun EmptyLibrary(
     onImport: () -> Unit,
     onRestoreBackup: (() -> Unit)? = null,
     modifier: Modifier = Modifier
-) {
+) = SystemLineHeights {
     Column(
         modifier = modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -493,7 +508,8 @@ private fun EmptyLibrary(
             EmptyLibraryAction(text = "从备份恢复", icon = JerreaderIcon.RESTORE, primary = false, onClick = onRestoreBackup)
             Text(
                 "装过 Jerreader 的话，选择以前的备份文件夹即可恢复书架、进度和备份计划。",
-                modifier = Modifier.padding(top = 6.dp),
+                // iOS: 10 points under the button; the 44-point tap box already adds 6.
+                modifier = Modifier.padding(top = 4.dp),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
@@ -618,27 +634,38 @@ private fun BookEditDialog(
     var category by remember(book.id) { mutableStateOf(book.category) }
     var series by remember(book.id) { mutableStateOf(book.series) }
     var tags by remember(book.id) { mutableStateOf(book.tags.joinToString("，")) }
+    val sheetTop = pageSheetTop()
     androidx.compose.material3.ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        dragHandle = null, containerColor = MaterialTheme.colorScheme.background
+        shape = PageSheetShape, dragHandle = null, containerColor = MaterialTheme.colorScheme.background
     ) {
-        Column(Modifier.fillMaxHeight(.95f)) {
-            Box(Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
-                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.CenterStart)) { Text("取消") }
+        Column(Modifier.pageSheetHeight(sheetTop)) {
+            // The inline navigation bar of an iOS sheet is 56 points tall.
+            Box(Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
+                PageSheetGrabber()
+                // Bar buttons in body size, their text 20 points from the edges.
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.CenterStart).padding(start = 8.dp)) {
+                    Text("取消", style = MaterialTheme.typography.bodyLarge)
+                }
                 Text("管理书籍", modifier = Modifier.align(Alignment.Center), style = MaterialTheme.typography.titleMedium)
                 TextButton(onClick = {
                     pendingCover?.let(onSaveCover)
                     onSave(title.trim(), author.ifBlank { null }, language.ifBlank { null }, category, series,
                         tags.split(',', '，').map(String::trim).filter(String::isNotBlank))
                 }, enabled = title.isNotBlank(),
-                    modifier = Modifier.align(Alignment.CenterEnd)) { Text("保存") }
+                    modifier = Modifier.align(Alignment.CenterEnd).padding(end = 8.dp)) {
+                    Text("保存", style = MaterialTheme.typography.bodyLarge)
+                }
             }
-            Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(28.dp)) {
+            // Spaced like the iOS `Form` this sheet holds.
+            Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState())
+                .padding(start = 20.dp, end = 20.dp, top = 14.6.dp, bottom = 20.dp),
+                verticalArrangement = Arrangement.spacedBy(PlainFormGroupSpacing)) {
+              CompositionLocalProvider(LocalGroupedFormSpacing provides PlainFormSpacing) {
                 SettingsGroup("书籍") {
-                    SettingsInsetRow {
-                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    SettingsInsetRow(showDivider = false) {
+                        Row(Modifier.padding(vertical = 1.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                             Box(Modifier.width(82.dp).height(123.dp).clip(RoundedCornerShape(8.dp))) {
                                 val candidate = pendingCover
                                 if (candidate != null && coverDraftContent != null) coverDraftContent(candidate)
@@ -649,10 +676,13 @@ private fun BookEditDialog(
                                     modifier = Modifier.clickable(enabled = onPickCover != null) {
                                         onPickCover?.invoke { uri -> pendingCover = uri }
                                     }) {
-                                    Row(Modifier.heightIn(min = 34.dp).padding(horizontal = 12.dp, vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    // A bordered iOS button around a `Label`: 135 by 34.3 points.
+                                    Row(Modifier.heightIn(min = 34.dp).padding(start = 17.dp, end = 12.6.dp, top = 6.9.dp, bottom = 6.9.dp),
+                                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.3.dp)) {
                                         JerreaderGlyph(JerreaderIcon.PHOTO, MaterialTheme.colorScheme.primary, Modifier.size(18.dp))
-                                        Text("更换封面", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.primary)
+                                        Text("更换封面", style = MaterialTheme.typography.bodyLarge.copy(
+                                            lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None)
+                                        ), color = MaterialTheme.colorScheme.primary)
                                     }
                                 }
                                 if (pendingCover != null) TextButton(onClick = { pendingCover = null }) {
@@ -661,6 +691,8 @@ private fun BookEditDialog(
                             }
                         }
                     }
+                    // iOS starts this separator under the button's title.
+                    JerreaderRowSeparator(start = 174.dp)
                     SettingsTextFieldRow("书名", title, { title = it })
                     SettingsTextFieldRow("作者", author, { author = it })
                     val languageOptions = listOf("" to "未指定", "ja" to "日语", "en" to "英语", "zh-Hans" to "简体中文")
@@ -673,9 +705,10 @@ private fun BookEditDialog(
                 }
                 SettingsGroup("整理") {
                     SettingsTextFieldRow("文件夹，例如：日本文学", category, { category = it })
-                    SettingsTextFieldRow("标签，用逗号分隔", tags, { tags = it })
+                    SettingsTextFieldRow("标签，用逗号分隔", tags, { tags = it }, minLines = 2, maxLines = 4)
                     SettingsFootnote("文件夹会显示在书架顶部；系列与标签都参与搜索。", showDivider = false)
                 }
+              }
             }
         }
     }

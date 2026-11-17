@@ -17,11 +17,14 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
+import com.jerreader.shared.ui.ExactSystemLineHeight
 import com.jerreader.shared.ui.LocalJerreaderColors
+import com.jerreader.shared.ui.withSystemLineHeights
 
 /** One scroll owner per tool, including large vocabulary collections. */
 @Composable
@@ -34,10 +37,15 @@ fun LearningPage(modifier: Modifier = Modifier, content: LazyListScope.() -> Uni
     }
 }
 
-/** Matches SwiftUI body/headline/subheadline/caption metrics in the learning tools. */
+/**
+ * Matches SwiftUI body/headline/subheadline/caption metrics in the learning
+ * tools, including SwiftUI's line height for lines of Chinese (without it a
+ * practice tool row was 78 points tall against 71 on iOS).
+ */
 @Composable
 fun LearningTypography(content: @Composable () -> Unit) {
-    val base = MaterialTheme.typography
+    val theme = MaterialTheme.typography
+    val base = remember(theme) { theme.withSystemLineHeights(ExactSystemLineHeight) }
     val body = base.bodyLarge.copy(fontSize = 17.sp, lineHeight = 20.5.sp, letterSpacing = 0.sp)
     MaterialTheme(typography = base.copy(
         bodyLarge = body, bodyMedium = body.copy(fontSize = 15.sp, lineHeight = 18.sp),

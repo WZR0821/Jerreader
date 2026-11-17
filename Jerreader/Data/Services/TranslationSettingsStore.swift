@@ -93,39 +93,11 @@ final class TranslationSettingsStore: ObservableObject {
         didSet { defaults.set(fallbackProvider.rawValue, forKey: Keys.fallbackProvider) }
     }
 
-    @Published var directAPIProvider: DirectAIProviderChoice {
-        didSet {
-            defaults.set(directAPIProvider.rawValue, forKey: Keys.directAPIProvider)
-            loadDirectAPISettings()
-        }
-    }
+    /// Every AI provider that was set up, and the one in use.
+    @Published private(set) var aiProviders: AIProviderSettings
 
-    @Published var directAPIKey: String {
-        didSet {
-            guard !isLoadingDirectAPISettings else { return }
-            persistDirectAPIKey()
-        }
-    }
-
-    @Published var directAPIModel: String {
-        didSet {
-            guard !isLoadingDirectAPISettings else { return }
-            defaults.set(
-                directAPIModel,
-                forKey: Keys.directAPIModel(provider: directAPIProvider)
-            )
-        }
-    }
-
-    @Published var directAPIEndpoint: String {
-        didSet {
-            guard !isLoadingDirectAPISettings else { return }
-            defaults.set(
-                directAPIEndpoint,
-                forKey: Keys.directAPIEndpoint(provider: directAPIProvider)
-            )
-        }
-    }
+    /// The providers whose API key is in the keychain.
+    @Published private(set) var keyedProviderIDs: Set<String>
 
     @Published var backendEndpoint: String {
         didSet { defaults.set(backendEndpoint, forKey: Keys.backendEndpoint) }
@@ -143,7 +115,8 @@ final class TranslationSettingsStore: ObservableObject {
 
     private let defaults: UserDefaults
     private let credentialStore: any TranslationCredentialStoring
-    private var isLoadingDirectAPISettings = false
+    /// Keys read from the keychain, by provider entry.
+    private var apiKeys: [String: String]
 
     init(
         defaults: UserDefaults = .standard,
@@ -151,11 +124,11 @@ final class TranslationSettingsStore: ObservableObject {
     ) {
         let resolvedCredentialStore = credentialStore
             ?? KeychainTranslationCredentialStore()
-        let selectedDirectProvider = DirectAIProviderChoice(
-            rawValue: defaults.string(forKey: Keys.directAPIProvider) ?? ""
-        ) ?? .openAI
+        let restoredProviders = Self.restoredProviders(
+            defaults: defaults,
+            credentialStore: resolvedCredentialStore
+        )
         var restoredBackendToken = ""
-        var restoredDirectAPIKey = ""
         var restoredCredentialError: String?
 
         do {
@@ -165,11 +138,11 @@ final class TranslationSettingsStore: ObservableObject {
         } catch {
             restoredCredentialError = "无法从钥匙串读取代理凭据。"
         }
-        do {
-            restoredDirectAPIKey = try resolvedCredentialStore.readSecret(
-                account: CredentialAccounts.directAPI(provider: selectedDirectProvider)
-            ) ?? ""
-        } catch {
+        let restoredKeys = Self.readKeys(
+            for: restoredProviders,
+            credentialStore: resolvedCredentialStore
+        )
+        if restoredKeys.failed {
             restoredCredentialError = "无法从钥匙串读取 API Key。"
         }
 
@@ -231,67 +204,170 @@ final class TranslationSettingsStore: ObservableObject {
         fallbackProvider = TranslationFallbackChoice(
             rawValue: defaults.string(forKey: Keys.fallbackProvider) ?? ""
         ) ?? .none
-        directAPIProvider = selectedDirectProvider
-        directAPIKey = restoredDirectAPIKey
-        directAPIModel = defaults.string(
-            forKey: Keys.directAPIModel(provider: selectedDirectProvider)
-        ) ?? selectedDirectProvider.defaultModel
-        directAPIEndpoint = defaults.string(
-            forKey: Keys.directAPIEndpoint(provider: selectedDirectProvider)
-        ) ?? selectedDirectProvider.defaultEndpointText
+        aiProviders = restoredProviders
+        apiKeys = restoredKeys.keys
+        keyedProviderIDs = Set(restoredKeys.keys.filter { !$0.value.isEmpty }.keys)
         backendEndpoint = defaults.string(forKey: Keys.backendEndpoint) ?? ""
         backendModel = defaults.string(forKey: Keys.backendModel) ?? ""
         backendAccessToken = restoredBackendToken
         credentialErrorMessage = restoredCredentialError
+        persistProviders()
+    }
+
+    // MARK: AI providers
+
+    /// The provider in use. Setting it puts that preset in use, adding it
+    /// first when it was never set up.
+    var directAPIProvider: DirectAIProviderChoice {
+        get { aiProviders.active.kind }
+        set {
+            changeProviders { providers in
+                let id = newValue.rawValue
+                if providers.entry(id) == nil {
+                    providers.entries.append(.preset(newValue))
+                }
+                providers.activate(id)
+            }
+        }
+    }
+
+    /// The API key of the provider in use. Setting it saves it to the keychain.
+    var directAPIKey: String {
+        get { apiKey(for: aiProviders.activeID) }
+        set { try? saveKey(newValue, for: aiProviders.activeID) }
+    }
+
+    /// The model in use. Setting it adds the model to its provider when needed.
+    var directAPIModel: String {
+        get { aiProviders.active.model }
+        set {
+            let model = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            changeProviders { providers in
+                if model.isEmpty {
+                    providers.update(providers.activeID) { $0.model = "" }
+                } else {
+                    providers.activate(providers.activeID, model: model)
+                }
+            }
+        }
     }
 
     var directAPIConfiguration: DirectAITranslationConfiguration? {
-        let endpointText = (
-            directAPIProvider.usesCustomEndpoint
-                ? directAPIEndpoint
-                : directAPIProvider.defaultEndpointText
-        ).trimmingCharacters(in: .whitespacesAndNewlines)
-        let model = directAPIModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        let key = directAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let entry = aiProviders.active
+        return try? configuration(entry: entry, model: entry.activeModel, key: apiKey(for: entry.id))
+    }
 
-        guard let endpoint = URL(string: endpointText),
-              endpoint.scheme?.lowercased() == "https",
-              endpoint.host?.isEmpty == false,
-              !model.isEmpty,
-              !key.isEmpty
-        else {
-            return nil
+    /// One line on the state of the provider in use.
+    var directAPIConfigurationMessage: String {
+        let entry = aiProviders.active
+        do {
+            _ = try configuration(entry: entry, model: entry.activeModel, key: apiKey(for: entry.id))
+        } catch {
+            return (error as? LocalizedError)?.errorDescription ?? "配置无效，请检查 API 地址、模型和密钥。"
         }
+        if credentialErrorMessage != nil {
+            return "配置可用，但 API Key 未能安全保存。"
+        }
+        return "\(entry.displayName) · \(entry.model)"
+    }
 
+    func apiKey(for id: String) -> String {
+        apiKeys[id] ?? ""
+    }
+
+    /// A request configuration for one model of a provider, which need not be
+    /// saved yet. Throws the reason it cannot be used.
+    func configuration(
+        entry: AIProviderEntry,
+        model: AIModelEntry,
+        key: String
+    ) throws -> DirectAITranslationConfiguration {
+        let modelID = model.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        let apiKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !apiKey.isEmpty else { throw AIProviderSettingsError.missingKey(entry.displayName) }
+        guard !modelID.isEmpty else { throw AIProviderSettingsError.missingModel }
+        guard let endpoint = AIEndpoint.url(base: entry.baseURL, style: model.style) else {
+            throw AIProviderSettingsError.invalidAddress
+        }
         return DirectAITranslationConfiguration(
-            provider: directAPIProvider,
+            provider: entry.kind,
             endpoint: endpoint,
-            model: model,
-            apiKey: key,
+            model: modelID,
+            apiKey: apiKey,
+            style: model.style,
+            reasoning: model.reasoning,
             translationPromptTemplate: translationPromptTemplate,
             grammarAnalysisPromptTemplate: grammarAnalysisPromptTemplate
         )
     }
 
-    var directAPIConfigurationMessage: String {
-        if directAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "粘贴 \(directAPIProvider.title) API Key 后即可使用。"
+    /// Applies a change to the providers and saves it.
+    func changeProviders(_ change: (inout AIProviderSettings) throws -> Void) rethrows {
+        var value = aiProviders
+        try change(&value)
+        guard value != aiProviders else { return }
+        aiProviders = value
+        persistProviders()
+    }
+
+    /// Saves a provider's key to the keychain; an empty key removes it.
+    func saveKey(_ key: String, for id: String) throws {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            try credentialStore.saveSecret(
+                trimmed.isEmpty ? nil : trimmed,
+                account: CredentialAccounts.directAPI(id: id)
+            )
+            credentialErrorMessage = nil
+        } catch {
+            credentialErrorMessage = "无法将 API Key 安全保存到钥匙串。"
+            throw AIProviderSettingsError.keychainUnavailable
         }
-        if directAPIModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "请填写模型名称。"
+        apiKeys[id] = trimmed
+        if trimmed.isEmpty {
+            keyedProviderIDs.remove(id)
+        } else {
+            keyedProviderIDs.insert(id)
         }
-        if directAPIProvider.usesCustomEndpoint,
-           directAPIEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        {
-            return "请填写兼容服务的 HTTPS 请求地址。"
+    }
+
+    /// Adds a provider with its key.
+    /// - Returns: whether it is now in use, which it is only when the provider
+    ///   in use had no key.
+    @discardableResult
+    func addProvider(_ entry: AIProviderEntry, key: String) throws -> Bool {
+        guard AIEndpoint.isValid(base: entry.baseURL) else { throw AIProviderSettingsError.invalidAddress }
+        let activeHasKey = keyedProviderIDs.contains(aiProviders.activeID)
+        try saveKey(key, for: entry.id)
+        var activated = false
+        changeProviders { activated = $0.add(entry, activeHasKey: activeHasKey) }
+        return activated
+    }
+
+    /// Saves a provider's name, address and key together.
+    func saveProvider(_ id: String, name: String?, baseURL: String, key: String) throws {
+        guard aiProviders.entry(id) != nil else { throw AIProviderSettingsError.unknownProvider }
+        let address = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard AIEndpoint.isValid(base: address) else { throw AIProviderSettingsError.invalidAddress }
+        if key.trimmingCharacters(in: .whitespacesAndNewlines) != apiKey(for: id) {
+            try saveKey(key, for: id)
         }
-        guard directAPIConfiguration != nil else {
-            return "配置无效，请检查 HTTPS 地址、模型和 API Key。"
+        changeProviders { providers in
+            providers.update(id) { entry in
+                entry.baseURL = address
+                if entry.kind.isCustom {
+                    let label = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    entry.name = label.isEmpty ? nil : label
+                }
+            }
         }
-        if credentialErrorMessage != nil {
-            return "配置可用，但 API Key 未能安全保存。"
-        }
-        return "配置已就绪；API Key 只保存在本机钥匙串中。"
+    }
+
+    /// Removes a provider and its key. The provider in use cannot be removed.
+    func removeProvider(_ id: String) throws {
+        guard id != aiProviders.activeID else { throw AIProviderSettingsError.removingActiveProvider }
+        try saveKey("", for: id)
+        try changeProviders { try $0.remove(id) }
     }
 
     var backendConfiguration: BackendTranslationConfiguration? {
@@ -354,6 +430,7 @@ final class TranslationSettingsStore: ObservableObject {
             Keys.automaticRetryEnabled,
             Keys.fallbackProvider,
             Keys.directAPIProvider,
+            Keys.aiProviders,
             Keys.backendEndpoint,
             Keys.backendModel,
         ] + DirectAIProviderChoice.allCases.flatMap {
@@ -410,9 +487,17 @@ final class TranslationSettingsStore: ObservableObject {
         fallbackProvider = TranslationFallbackChoice(
             rawValue: defaults.string(forKey: Keys.fallbackProvider) ?? ""
         ) ?? .none
-        directAPIProvider = DirectAIProviderChoice(
-            rawValue: defaults.string(forKey: Keys.directAPIProvider) ?? ""
-        ) ?? .openAI
+        aiProviders = Self.restoredProviders(
+            defaults: defaults,
+            credentialStore: credentialStore
+        )
+        let keys = Self.readKeys(for: aiProviders, credentialStore: credentialStore)
+        apiKeys = keys.keys
+        keyedProviderIDs = Set(keys.keys.filter { !$0.value.isEmpty }.keys)
+        if keys.failed {
+            credentialErrorMessage = "无法从钥匙串读取 API Key。"
+        }
+        persistProviders()
         backendEndpoint = defaults.string(forKey: Keys.backendEndpoint) ?? ""
         backendModel = defaults.string(forKey: Keys.backendModel) ?? ""
     }
@@ -430,38 +515,63 @@ final class TranslationSettingsStore: ObservableObject {
         }
     }
 
-    private func loadDirectAPISettings() {
-        isLoadingDirectAPISettings = true
-        defer { isLoadingDirectAPISettings = false }
-
-        directAPIModel = defaults.string(
-            forKey: Keys.directAPIModel(provider: directAPIProvider)
-        ) ?? directAPIProvider.defaultModel
-        directAPIEndpoint = defaults.string(
-            forKey: Keys.directAPIEndpoint(provider: directAPIProvider)
-        ) ?? directAPIProvider.defaultEndpointText
-        do {
-            directAPIKey = try credentialStore.readSecret(
-                account: CredentialAccounts.directAPI(provider: directAPIProvider)
-            ) ?? ""
-            credentialErrorMessage = nil
-        } catch {
-            directAPIKey = ""
-            credentialErrorMessage = "无法从钥匙串读取 API Key。"
-        }
+    private func persistProviders() {
+        guard let data = try? Self.providerEncoder.encode(aiProviders),
+              let text = String(data: data, encoding: .utf8)
+        else { return }
+        defaults.set(text, forKey: Keys.aiProviders)
     }
 
-    private func persistDirectAPIKey() {
-        do {
-            let key = directAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            try credentialStore.saveSecret(
-                key.isEmpty ? nil : key,
-                account: CredentialAccounts.directAPI(provider: directAPIProvider)
-            )
-            credentialErrorMessage = nil
-        } catch {
-            credentialErrorMessage = "无法将 API Key 安全保存到钥匙串。"
+    private static let providerEncoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return encoder
+    }()
+
+    /// The saved providers, or, when none were saved yet, the ones built from
+    /// the settings kept before providers had a list of models.
+    private static func restoredProviders(
+        defaults: UserDefaults,
+        credentialStore: any TranslationCredentialStoring
+    ) -> AIProviderSettings {
+        if let text = defaults.string(forKey: Keys.aiProviders),
+           let decoded = try? JSONDecoder().decode(AIProviderSettings.self, from: Data(text.utf8)),
+           !decoded.entries.isEmpty {
+            return decoded
         }
+        var keyed: Set<DirectAIProviderChoice> = []
+        var models: [DirectAIProviderChoice: String] = [:]
+        var endpoints: [DirectAIProviderChoice: String] = [:]
+        for kind in DirectAIProviderChoice.legacyCases {
+            let key = try? credentialStore.readSecret(account: CredentialAccounts.directAPI(id: kind.rawValue))
+            if let key, !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { keyed.insert(kind) }
+            models[kind] = defaults.string(forKey: Keys.directAPIModel(provider: kind))
+            endpoints[kind] = defaults.string(forKey: Keys.directAPIEndpoint(provider: kind))
+        }
+        return AIProviderSettings.migrated(
+            selected: DirectAIProviderChoice(rawValue: defaults.string(forKey: Keys.directAPIProvider) ?? ""),
+            keyed: keyed,
+            storedModels: models,
+            storedEndpoints: endpoints
+        )
+    }
+
+    private static func readKeys(
+        for providers: AIProviderSettings,
+        credentialStore: any TranslationCredentialStoring
+    ) -> (keys: [String: String], failed: Bool) {
+        var keys: [String: String] = [:]
+        var failed = false
+        for entry in providers.entries {
+            do {
+                keys[entry.id] = try credentialStore.readSecret(
+                    account: CredentialAccounts.directAPI(id: entry.id)
+                )?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            } catch {
+                failed = true
+            }
+        }
+        return (keys, failed)
     }
 
     private enum Keys {
@@ -481,6 +591,7 @@ final class TranslationSettingsStore: ObservableObject {
         static let automaticRetryEnabled = "translation.automaticRetryEnabled"
         static let fallbackProvider = "translation.fallbackProvider"
         static let directAPIProvider = "translation.directAPI.provider"
+        static let aiProviders = "translation.aiProviders.v1"
         static let backendEndpoint = "translation.backendEndpoint"
         static let backendModel = "translation.backendModel"
 
@@ -496,8 +607,10 @@ final class TranslationSettingsStore: ObservableObject {
     private enum CredentialAccounts {
         static let backendProxy = "proxy-access-token"
 
-        static func directAPI(provider: DirectAIProviderChoice) -> String {
-            "direct-api-\(provider.rawValue)"
+        /// The keychain account of a provider entry. A preset's entry id is
+        /// its raw value, so keys saved before providers had a list still match.
+        static func directAPI(id: String) -> String {
+            "direct-api-\(id)"
         }
     }
 }

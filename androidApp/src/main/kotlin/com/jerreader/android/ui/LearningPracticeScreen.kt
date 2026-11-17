@@ -9,11 +9,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import com.jerreader.shared.learning.ReadingConfusionMap
 import com.jerreader.shared.ui.*
 
 /** A visible entry point for the existing learning tools; no separate learning store. */
 @Composable
-fun LearningPracticeScreen(wordCount: Int, sentenceCount: Int, onOpen: (String) -> Unit) {
+fun LearningPracticeScreen(
+    wordCount: Int,
+    sentenceCount: Int,
+    confusion: ReadingConfusionMap? = null,
+    onOpen: (String) -> Unit
+) {
     LearningPage {
         item {
             LearningCard {
@@ -37,6 +43,8 @@ fun LearningPracticeScreen(wordCount: Int, sentenceCount: Int, onOpen: (String) 
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+        // Real reading difficulties across books, built locally from lookups and reviews.
+        confusion?.let { map -> item { ReadingConfusionMapCard(confusion = map, showBookTitle = true) } }
         item { Text("练习与积累", style = MaterialTheme.typography.titleMedium) }
         item {
             Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface,

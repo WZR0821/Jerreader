@@ -4,6 +4,7 @@ import androidx.core.content.edit
 import android.content.Context
 import com.jerreader.shared.library.ReaderAppearance
 import com.jerreader.shared.library.ReaderFontOption
+import com.jerreader.shared.library.ReaderLayoutMode
 import com.jerreader.shared.library.ReaderTextOrientation
 import com.jerreader.shared.library.ReaderThemeOption
 import com.jerreader.shared.ui.JerreaderAccent
@@ -25,7 +26,9 @@ data class AndroidAppPreferences(
     val topBarTransparency: Float = 0.15f,
     val bottomBarTransparency: Float = 0.15f,
     val japaneseFuriganaEnabled: Boolean = false,
+    /** Hides the status bar in the standard layout; the immersive one always does. */
     val immersiveReading: Boolean = true,
+    val layoutMode: ReaderLayoutMode = ReaderLayoutMode.STANDARD,
     val applyReaderDefaultsToExistingBooks: Boolean = false
 )
 
@@ -89,6 +92,11 @@ class AndroidAppSettingsStore(context: Context) {
         mutablePreferences.value = mutablePreferences.value.copy(immersiveReading = value)
     }
 
+    fun updateLayoutMode(value: ReaderLayoutMode) {
+        storage.edit { putString(KEY_LAYOUT_MODE, value.storageValue) }
+        mutablePreferences.value = mutablePreferences.value.copy(layoutMode = value)
+    }
+
     fun updateJapaneseFurigana(value: Boolean) {
         storage.edit { putBoolean(KEY_FURIGANA, value) }
         mutablePreferences.value = mutablePreferences.value.copy(japaneseFuriganaEnabled = value)
@@ -118,6 +126,11 @@ class AndroidAppSettingsStore(context: Context) {
             bottomBarTransparency = payload.optDouble("bottomBarTransparency", current.bottomBarTransparency.toDouble()).toFloat(),
             japaneseFuriganaEnabled = payload.optBoolean("japaneseFuriganaEnabled", current.japaneseFuriganaEnabled),
             immersiveReading = payload.optBoolean("immersiveReading", current.immersiveReading),
+            layoutMode = if (payload.has("layoutMode")) {
+                ReaderLayoutMode.fromStorage(payload.optString("layoutMode"))
+            } else {
+                current.layoutMode
+            },
             defaultReaderAppearance = appearance?.let {
                 ReaderAppearance(
                     fontScale = it.optDouble("fontScale", current.defaultReaderAppearance.fontScale),
@@ -171,6 +184,7 @@ class AndroidAppSettingsStore(context: Context) {
         updateBottomBarTransparency(restored.bottomBarTransparency)
         updateJapaneseFurigana(restored.japaneseFuriganaEnabled)
         updateImmersiveReading(restored.immersiveReading)
+        updateLayoutMode(restored.layoutMode)
         updateApplyReaderDefaultsToExistingBooks(restored.applyReaderDefaultsToExistingBooks)
     }
 
@@ -198,6 +212,7 @@ class AndroidAppSettingsStore(context: Context) {
         bottomBarTransparency = storage.getFloat(KEY_BOTTOM_TRANSPARENCY, 0.15f).let { if (it.isFinite()) it.coerceIn(0f, 1f) else 0.15f },
         japaneseFuriganaEnabled = storage.getBoolean(KEY_FURIGANA, false),
         immersiveReading = storage.getBoolean(KEY_IMMERSIVE, true),
+        layoutMode = ReaderLayoutMode.fromStorage(storage.getString(KEY_LAYOUT_MODE, null)),
         applyReaderDefaultsToExistingBooks = storage.getBoolean(KEY_APPLY_TO_EXISTING, false)
     )
 
@@ -222,6 +237,8 @@ class AndroidAppSettingsStore(context: Context) {
         const val KEY_BOTTOM_TRANSPARENCY = "reader.bottomBarTransparency"
         const val KEY_FURIGANA = "translation.japaneseFuriganaEnabled"
         const val KEY_IMMERSIVE = "reader.immersiveReading"
+        // Same key and raw values as iOS `ReaderInterfaceDefaults.layoutModeKey`.
+        const val KEY_LAYOUT_MODE = "reader.layoutMode"
         const val KEY_APPLY_TO_EXISTING = "reader.applyDefaultsToExisting"
     }
 }

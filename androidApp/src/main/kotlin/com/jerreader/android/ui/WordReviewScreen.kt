@@ -16,6 +16,8 @@ import androidx.compose.ui.unit.dp
 import com.jerreader.android.data.WordLookupEntity
 import com.jerreader.android.learning.LearningRecordRepository
 import com.jerreader.android.learning.WordReviewCodec
+import com.jerreader.android.speech.AndroidSpeechService
+import com.jerreader.shared.domain.LanguageCode
 import com.jerreader.shared.learning.ReviewGrade
 import com.jerreader.shared.learning.WordReviewState
 import kotlinx.coroutines.delay
@@ -28,7 +30,11 @@ import java.text.DateFormat
 import java.util.Date
 
 @Composable
-fun WordReviewScreen(words: List<WordLookupEntity>, repository: LearningRecordRepository) {
+fun WordReviewScreen(
+    words: List<WordLookupEntity>,
+    repository: LearningRecordRepository,
+    speech: AndroidSpeechService? = null
+) {
     var queue by remember { mutableStateOf<List<String>>(emptyList()) }
     var completed by remember { mutableIntStateOf(0) }
     var revealed by remember { mutableStateOf(false) }
@@ -50,6 +56,17 @@ fun WordReviewScreen(words: List<WordLookupEntity>, repository: LearningRecordRe
     val dueKeys = remember(snapshot, now) { snapshot?.dueKeys(now).orEmpty() }
     LaunchedEffect(current?.lookupKey) { revealed = false }
     LaunchedEffect(Unit) { while (true) { now = System.currentTimeMillis(); delay(30_000) } }
+    DisposableEffect(speech) { onDispose { speech?.stop() } }
+    fun speak(text: String) {
+        val service = speech ?: return
+        if (text.isBlank()) return
+        scope.launch {
+            try {
+                service.speak(text.trim(), LanguageCode.JAPANESE)
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e
+            } catch (e: Exception) { error = e.message ?: "无法朗读，请检查系统语音。" }
+        }
+    }
     fun save(word: WordLookupEntity, state: WordReviewState, graded: Boolean = false) {
         if (saving) return
         saving = true
@@ -79,6 +96,19 @@ fun WordReviewScreen(words: List<WordLookupEntity>, repository: LearningRecordRe
                 current.sourceBookTitle?.let { Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 if (revealed) {
                     current.reading?.let { Text(it) }
+                    // Hear the word, then the real sentence, and say it back.
+                    if (speech != null && LanguageCode.fromTag(current.language) == LanguageCode.JAPANESE) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            LearningButton(kind = LearningButtonKind.TINTED, onClick = { speak(current.surfaceForm) }) {
+                                Text("朗读单词")
+                            }
+                            current.sentenceContext?.takeIf(String::isNotBlank)?.let { sentence ->
+                                LearningButton(kind = LearningButtonKind.TINTED, onClick = { speak(sentence) }) {
+                                    Text("朗读原句·跟读")
+                                }
+                            }
+                        }
+                    }
                     Text(current.definitionsText.replace(LearningRecordRepository.DEFINITION_SEPARATOR, "；"))
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         ReviewGrade.entries.forEach { grade ->

@@ -157,6 +157,7 @@ final class LibraryBackupServiceTests: XCTestCase {
         sourceDefaults.set(0.75, forKey: ReaderInterfaceDefaults.bottomTransparencyKey)
         sourceDefaults.set(true, forKey: ReaderInterfaceDefaults.japaneseFuriganaKey)
         sourceDefaults.set(false, forKey: ReaderInterfaceDefaults.immersiveReadingKey)
+        sourceDefaults.set(ReaderLayoutMode.immersive.rawValue, forKey: ReaderInterfaceDefaults.layoutModeKey)
         sourceDefaults.set(
             "must-not-leave-device",
             forKey: "test.secret.apiKey"
@@ -211,6 +212,7 @@ final class LibraryBackupServiceTests: XCTestCase {
         XCTAssertEqual(targetDefaults.double(forKey: ReaderInterfaceDefaults.bottomTransparencyKey), 0.75)
         XCTAssertTrue(targetDefaults.bool(forKey: ReaderInterfaceDefaults.japaneseFuriganaKey))
         XCTAssertFalse(targetDefaults.bool(forKey: ReaderInterfaceDefaults.immersiveReadingKey))
+        XCTAssertEqual(ReaderInterfaceDefaults.layoutMode(defaults: targetDefaults), .immersive)
         XCTAssertNil(targetDefaults.object(forKey: "test.secret.apiKey"))
     }
 

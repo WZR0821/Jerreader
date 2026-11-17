@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Readium leaves this gap above and below a reflowable page, inside the
+        space the reader already reserves for its bars and the system bars.
+        Its own 40dp (20dp in landscape) on top of that was most of the dead
+        band around the text; iOS keeps the same 14pt
+        (ReaderInterfaceDefaults.contentEdgeInset).
+    -->
+    <dimen name="readium_navigator_epub_vertical_padding">14dp</dimen>
+</resources>

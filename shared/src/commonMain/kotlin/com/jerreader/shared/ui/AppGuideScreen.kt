@@ -21,6 +21,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,12 +49,14 @@ fun AppGuideScreen(
         topBar = { JerreaderNavigationBar("操作指南", "设置", onBack) },
         bottomBar = bottomBar
     ) { padding ->
+        // The iOS guide is a grouped list spaced like the settings forms.
+        CompositionLocalProvider(LocalGroupedFormSpacing provides PlainFormSpacing) {
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
                 .padding(horizontal = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(28.dp),
+            verticalArrangement = Arrangement.spacedBy(PlainFormGroupSpacing),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 16.dp)
         ) {
             item { QuickStartSection() }
@@ -64,6 +67,7 @@ fun AppGuideScreen(
             item { TranslationSection() }
             item { BackupSection() }
             item { FormatSection() }
+        }
         }
     }
 }
@@ -83,7 +87,7 @@ private fun ImportSection() {
     GuideSection("如何导入") {
         GuideItem(
             "从“文件”导入",
-            "书架 → 右上角“＋” → 先选格式 → 选择文件。选 PDF 时系统文件列表只显示 PDF；导入后直接进入阅读，重复文件会打开书架中的现有副本。支持设备存储、下载目录、云盘和外接存储。"
+            "书架 → 右上角“＋” → 先选格式 → 选择文件。选 PDF 时系统文件列表里只有 PDF 能选，其他格式会变灰；导入后直接进入阅读，重复文件会打开书架中的现有副本。支持设备存储、下载目录、云盘和外接存储。"
         )
         GuideItem(
             "从其他 App 导入",
@@ -132,7 +136,7 @@ private fun FeatureSection() {
         GuideItem("目录、搜索、书签与批注", "阅读器的“导航”按钮集中提供章节目录、全文搜索、书签和划线批注；点正文上的高亮可直接编辑该条批注。")
         GuideItem("查词与生词本", "“学习”栏包含翻译、生词本、练习与工具和历史四部分；词典查询合并在翻译的“词语”模式里，译出一个词的同时会补充词典形、读音、词性和释义。阅读时长按一个词，从菜单选“查词”也可直接加入生词本。")
         GuideItem("日语学习增强", "日语词条会显示词典形、假名、词性、常见活用和例句；配置 AI 后可结合书中原句继续分析词语的语法角色与语境义。")
-        GuideItem("AI 句子结构分析", "译文卡片的“AI 解析”可分析句子主干、成分、从句或修饰关系，以及英语时态、日语助词和活用等语法点；需要先配置 AI API 或代理。")
+        GuideItem("AI 句子结构分析", "译文卡片的“AI 解析”可分析句子主干、成分、从句或修饰关系，以及英语时态、日语助词和活用等语法点；需要先设置 AI 大模型或 AI 代理。")
         GuideItem("学习内容导出", "在“学习”页选择 CSV、Markdown 或 Anki TSV，分享导出到其他应用。")
         GuideItem("书籍管理与统计", "书架显示累计阅读时长和进度；每本书的更多菜单可更换封面，修改书名、作者、语言、系列、文件夹和标签，顶部批量整理可一次处理多本书。")
         GuideItem("离线能力", "阅读、书架、已缓存的翻译与查词结果可离线使用；默认的本机翻译在语言模型下载完成后也可离线运行。")
@@ -153,18 +157,18 @@ private fun JapaneseSection() {
 private fun TranslationSection() {
     GuideSection("翻译 API 如何使用") {
         GuideDisclosure("方案一：本机翻译（默认，无需 API Key）") {
-            GuideBody("在“设置 → 翻译与 AI”选择“本机翻译”即可，这是默认选项。")
+            GuideBody("在“设置 → 翻译与 AI”选择“Android 本机翻译”即可，这是默认选项。")
             GuideBody("在“设置 → 翻译与 AI → 离线资源”中点“准备中日翻译”。首次准备需要网络，完成后即可离线翻译。")
             GuideBody("本机模型适合快速理解句意；需要更高质量的文学翻译时，可改用下面的 AI 方案。")
         }
 
-        GuideDisclosure("方案二：直接填写 AI API Key") {
-            GuideStepRow(1, "选择服务商", "在“设置 → 翻译与 AI”选择“AI API（直接）”，再点 GPT、Claude、Kimi、DeepSeek、Gemini 或兼容服务。")
-            GuideStepRow(2, "粘贴 API Key", "直接粘贴对应平台创建的 Key；官方请求地址和推荐模型已经自动填写。")
-            GuideStepRow(3, "测试连接", "点“测试连接”。测试只发送固定的短句，不会发送书籍内容。")
-            GuideStepRow(4, "开始翻译", "测试成功后，轻点或框选正文即可。只有你主动选择的文字和必要上下文会发送给该服务商。")
-            GuideFootnote("原文语言可自动识别，也可固定为中文、英语或日语；目标语言可在三者间自由选择。翻译与句子结构分析的提示词都可以自行修改。")
-            GuideFootnote("每个平台的 Key 独立保存在本机的加密存储中，不会写入书籍、日志或安装包。同一句译文命中缓存时不会再次请求；短暂网络失败可自动重试一次，也可指定备用翻译服务。直接 API 会产生服务商费用，建议在平台设置用量上限并定期更换 Key。")
+        GuideDisclosure("方案二：AI 大模型（填写 API Key）") {
+            GuideStepRow(1, "添加供应商", "打开“设置 → AI 大模型”，点“添加供应商”。Claude、ChatGPT、DeepSeek 排在最前，通义千问、豆包、Kimi、智谱、MiniMax、Gemini 依次在后；列表里没有的服务用“自定义”添加。")
+            GuideStepRow(2, "粘贴 API Key", "粘贴在该平台创建的 Key，勾选要用的模型。官方请求地址和常用模型已经填好，也可以“获取可用模型”从账户返回的列表里选。")
+            GuideStepRow(3, "测试并添加", "点“测试连接”，通过后点“添加”。测试只发送固定的短句，不会发送书籍内容。")
+            GuideStepRow(4, "开始翻译", "在“设置 → 翻译与 AI”把翻译服务选为“AI 大模型”，之后轻点或框选正文即可。以后用“换模型”在已添加的供应商之间切换。只有你主动选择的文字和必要上下文会发送给该服务商。")
+            GuideFootnote("原文语言可自动识别，也可固定为中文、英语或日语；目标语言可在三者间自由选择。展开“提示词与 AI 行为”可以分别修改翻译和句子结构分析提示词。")
+            GuideFootnote("每个平台的 Key 独立保存在本机的加密存储中，不会写入书籍、日志或安装包。同一句译文命中缓存时不会再次请求；短暂网络失败可自动重试一次，也可在设置中指定备用翻译服务。每个模型可单独设置接口格式和思考强度。AI 大模型会产生服务商费用，建议在平台设置用量上限并定期更换 Key。")
         }
 
         GuideDisclosure("方案三：自建 AI 翻译代理（进阶）") {
@@ -187,10 +191,10 @@ private fun TranslationSection() {
             )
             GuideBody("代理成功响应（二选一字段）")
             GuideCodeBlock("{ \"translatedText\": \"译文\" }")
-            GuideFootnote("如填写了代理访问凭据，客户端会使用 Authorization: Bearer <token>。代理应在 30 秒内返回 2xx 与 JSON。401/403 会显示鉴权失败，其他异常可以在翻译卡片中重试。")
+            GuideFootnote("如填写了代理访问凭据，客户端会使用 Authorization: Bearer <token>。代理应在 30 秒内返回 2xx 与 JSON。出错时显示代理返回的 error 信息，没有时显示 HTTP 状态码；失败的请求可以在翻译卡片中重试。")
         }
 
-        GuideFootnote("直接 API 适合个人自用；准备公开分发时，仍建议用自建代理，避免让共享密钥存在客户端。")
+        GuideFootnote("AI 大模型适合个人自用；准备公开分发时，仍建议用自建代理，避免让共享密钥存在客户端。")
     }
 }
 
@@ -246,7 +250,8 @@ private fun GuideValueRow(title: String, detail: String) {
 @Composable
 private fun GuideSection(title: String, content: @Composable () -> Unit) {
     SettingsGroup(title = title) {
-        Column { content() }
+        // Rows only: the section title keeps the settings header metrics.
+        SystemLineHeights { Column { content() } }
     }
 }
 
@@ -337,8 +342,7 @@ private fun GuideDisclosure(title: String, content: @Composable () -> Unit) {
             .heightIn(min = 44.dp).padding(horizontal = 20.dp, vertical = 11.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-            JerreaderGlyph(if (expanded) JerreaderIcon.CHEVRON_DOWN else JerreaderIcon.CHEVRON_FORWARD,
-                MaterialTheme.colorScheme.primary, Modifier.size(14.dp))
+            JerreaderDisclosureChevron(expanded)
         }
         if (expanded) {
             Column(

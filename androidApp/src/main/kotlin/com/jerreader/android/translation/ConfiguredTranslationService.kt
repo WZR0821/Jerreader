@@ -1,7 +1,7 @@
 package com.jerreader.android.translation
 
 import com.jerreader.shared.domain.LanguageCode
-import com.jerreader.shared.translation.DirectAIProtocol
+import com.jerreader.shared.translation.AIReadingLensPromptPolicy
 import com.jerreader.shared.translation.ContextExplanationRequest
 import com.jerreader.shared.translation.ContextExplanationResult
 import com.jerreader.shared.translation.ContextExplanationService
@@ -24,6 +24,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 data class TranslationHttpResponse(val statusCode: Int, val body: String)
+
+/** One request, already in the format of the service it goes to. */
+internal data class PreparedRequest(
+    val url: String,
+    val headers: Map<String, String>,
+    val body: String
+)
 
 fun interface TranslationHttpTransport {
     suspend fun post(url: String, headers: Map<String, String>, body: String): TranslationHttpResponse
@@ -106,14 +113,13 @@ class ConfiguredTranslationService(
         val configuration = settings.currentServiceConfiguration(mode, promptTemplate)
         validateConfiguration(configuration)
         val source = request.sourceLanguage ?: detectLanguage(request.text)
-        val translated = performTextRequest(
-            configuration = configuration,
-            text = request.text,
-            source = source,
-            target = request.targetLanguage,
-            prompt = configuration.preferences.renderedPrompt(source),
-            operation = "translate"
-        )
+        val prompt = configuration.preferences.renderedPrompt(source)
+        val prepared = if (configuration.isProxy) {
+            AIProxyProtocol.translation(configuration, request.text, source, request.targetLanguage, prompt)
+        } else {
+            directRequest(configuration.requireDirect(), request.text, prompt, quick = true)
+        }
+        val translated = performTextRequest(configuration, prepared, isExplanation = false)
         return TranslationResult(
             translatedText = translated,
             sourceLanguage = source,
@@ -129,39 +135,91 @@ class ConfiguredTranslationService(
         val configuration = settings.currentServiceConfiguration(mode)
         validateConfiguration(configuration)
         val source = request.sourceLanguage ?: detectLanguage(focused)
-        val userText = buildString {
-            append("需要解析的内容：\n")
-            append(focused)
-            if (request.isWordLookup) request.dictionaryEntry?.let {
-                append("\n\n词典候选资料（仅供参考，若不适合原句请指出）：\n")
-                append(it.take(1_000))
-            }
-            request.contextText?.trim()?.takeIf(String::isNotBlank)?.let { context ->
-                append("\n\n上下文：\n")
-                append(context.take(2_000))
-            }
+        val grammarPrompt = configuration.preferences.renderedGrammarPrompt(source)
+        val lens = request.lens
+        val prompt = if (lens != null) {
+            AIReadingLensPromptPolicy.rendered(
+                options = lens,
+                sourceLanguage = source,
+                responseLanguage = LanguageCode.CHINESE_SIMPLIFIED,
+                grammarPrompt = grammarPrompt
+            )
+        } else {
+            grammarPrompt +
+                if (request.isWordLookup) "\n本次是语境查词。先给出该词在原句中的简短中文含义，再说明词典形与关键活用。区分推测和确定信息；缺少原句或无法消歧时明确说明，不编造读音、词源或词典依据。" else ""
         }
-        val explanation = performTextRequest(
-            configuration = configuration,
-            text = userText,
-            source = source,
-            target = LanguageCode.CHINESE_SIMPLIFIED,
-            prompt = configuration.preferences.renderedGrammarPrompt(source) +
-                if (request.isWordLookup) "\n本次是语境查词。先给出该词在原句中的简短中文含义，再说明词典形与关键活用。区分推测和确定信息；缺少原句或无法消歧时明确说明，不编造读音、词源或词典依据。" else "",
-            operation = "explain"
-        )
+        val prepared = if (configuration.isProxy) {
+            AIProxyProtocol.explanation(configuration, request, focused, source, prompt)
+        } else {
+            val userText = if (lens != null) {
+                lensUserText(focused, request.contextText)
+            } else {
+                grammarUserText(focused, request)
+            }
+            directRequest(configuration.requireDirect(), userText, prompt, quick = false)
+        }
+        val explanation = performTextRequest(configuration, prepared, isExplanation = true)
         return ContextExplanationResult(explanation, providerIdentifier(configuration))
     }
 
+    /**
+     * Sends “Hello.” to one model, saved or not, and returns how long the
+     * answer took in seconds. Throws the provider's reason when it fails.
+     */
+    suspend fun testConnection(direct: DirectAIConfiguration): Double {
+        val preferences = settings.preferences.value.copy(
+            providerMode = TranslationProviderMode.DIRECT_API,
+            // One try, so the time shown is the time of one request.
+            automaticRetryEnabled = false
+        )
+        val configuration = TranslationServiceConfiguration(
+            preferences = preferences,
+            endpoint = direct.endpoint,
+            model = direct.model,
+            credential = direct.apiKey,
+            direct = direct
+        )
+        val prompt = preferences.copy(targetLanguage = LanguageCode.CHINESE_SIMPLIFIED)
+            .renderedPrompt(LanguageCode.ENGLISH)
+        val prepared = directRequest(direct, "Hello.", prompt, quick = true)
+        val started = System.nanoTime()
+        performTextRequest(configuration, prepared, isExplanation = false)
+        return (System.nanoTime() - started) / 1_000_000_000.0
+    }
+
+    /** The labels the lens prompt refers to; the same ones iOS sends. */
+    private fun lensUserText(focused: String, context: String?): String = buildString {
+        append("SELECTED TEXT:\n")
+        append(focused)
+        context?.trim()?.takeIf(String::isNotBlank)?.takeIf { it != focused }?.let {
+            append("\n\nREADING CONTEXT:\n")
+            append(it.take(2_000))
+        }
+    }
+
+    /** The sentence analysis as a model called directly is sent it. */
+    private fun grammarUserText(focused: String, request: ContextExplanationRequest): String = buildString {
+        append("需要解析的内容：\n")
+        append(focused)
+        if (request.isWordLookup) request.dictionaryEntry?.let {
+            append("\n\n词典候选资料（仅供参考，若不适合原句请指出）：\n")
+            append(it.take(1_000))
+        }
+        request.contextText?.trim()?.takeIf(String::isNotBlank)?.let { context ->
+            append("\n\n上下文：\n")
+            append(context.take(2_000))
+        }
+    }
+
+    /**
+     * Sends [prepared], built once so that a retry is the same request, with
+     * the same idempotency key for the AI 代理.
+     */
     private suspend fun performTextRequest(
         configuration: TranslationServiceConfiguration,
-        text: String,
-        source: LanguageCode,
-        target: LanguageCode,
-        prompt: String,
-        operation: String
+        prepared: PreparedRequest,
+        isExplanation: Boolean
     ): String {
-        val prepared = prepareRequest(configuration, text, source, target, prompt, operation)
         val attempts = if (configuration.preferences.automaticRetryEnabled) 2 else 1
         var lastFailure: Throwable? = null
         repeat(attempts) { attempt ->
@@ -175,7 +233,7 @@ class ConfiguredTranslationService(
                     lastFailure = TranslationFailure.ProviderRejected(message)
                     return@repeat
                 }
-                val translated = parseTranslation(configuration, response.body).trim()
+                val translated = parseTranslation(configuration, response.body, isExplanation).trim()
                 if (!TranslationInputPolicy.isVisiblyNonEmpty(translated)) {
                     throw TranslationFailure.ServiceUnavailable
                 }
@@ -193,167 +251,162 @@ class ConfiguredTranslationService(
     }
 
     private fun validateConfiguration(configuration: TranslationServiceConfiguration) {
-        if (configuration.endpoint.isBlank() || configuration.model.isBlank() &&
-            configuration.preferences.providerMode == TranslationProviderMode.DIRECT_API
-        ) {
-            throw TranslationFailure.ConfigurationMissing
+        if (configuration.preferences.providerMode == TranslationProviderMode.DIRECT_API) {
+            if (configuration.direct != null) return
+            throw when (configuration.directIssue) {
+                is AIProviderSettingsError.InvalidAddress -> TranslationFailure.InvalidConfiguration
+                else -> TranslationFailure.AIModelNotReady
+            }
         }
-        if (configuration.preferences.providerMode == TranslationProviderMode.DIRECT_API &&
-            configuration.credential.isNullOrBlank()
-        ) {
-            throw TranslationFailure.ConfigurationMissing
-        }
+        if (configuration.endpoint.isBlank()) throw TranslationFailure.ConfigurationMissing
         val uri = runCatching { URI(configuration.endpoint) }.getOrNull()
         if (uri?.scheme?.lowercase() != "https" || uri.host.isNullOrBlank()) {
             throw TranslationFailure.InvalidConfiguration
         }
     }
 
-    private fun prepareRequest(
-        configuration: TranslationServiceConfiguration,
+    /** The AI 代理 gets the requests iOS sends; see [AIProxyProtocol]. */
+    private val TranslationServiceConfiguration.isProxy: Boolean
+        get() = preferences.providerMode == TranslationProviderMode.BACKEND_PROXY
+
+    private fun TranslationServiceConfiguration.requireDirect(): DirectAIConfiguration =
+        direct ?: throw TranslationFailure.AIModelNotReady
+
+    /** The request of one model in its format, the same body iOS sends. */
+    private fun directRequest(
+        direct: DirectAIConfiguration,
         text: String,
-        source: LanguageCode,
-        target: LanguageCode,
         prompt: String,
-        operation: String
+        quick: Boolean
     ): PreparedRequest {
-        if (configuration.preferences.providerMode == TranslationProviderMode.BACKEND_PROXY) {
-            val body = JSONObject()
-                .put("text", text)
-                .put("sourceLanguage", source.tag)
-                .put("targetLanguage", target.tag)
-                .put("operation", operation)
-                .put("prompt", prompt)
-            if (configuration.model.isNotBlank()) body.put("model", configuration.model)
-            return PreparedRequest(
-                url = configuration.endpoint,
-                headers = jsonHeaders(configuration.credential),
-                body = body.toString()
-            )
-        }
+        val body = when (direct.style) {
+            AIAPIStyle.RESPONSES -> JSONObject()
+                .put("model", direct.model)
+                .put("instructions", prompt)
+                .put("input", text)
 
-        val provider = configuration.preferences.directProvider
-        return when (provider.protocol) {
-            DirectAIProtocol.OPENAI_CHAT_COMPLETIONS -> PreparedRequest(
-                url = configuration.endpoint,
-                headers = jsonHeaders(configuration.credential),
-                body = JSONObject()
-                    .put("model", configuration.model)
-                    .put("temperature", 0.2)
-                    .put(
-                        "messages",
-                        JSONArray()
-                            .put(JSONObject().put("role", "system").put("content", prompt))
-                            .put(JSONObject().put("role", "user").put("content", text))
-                    )
-                    .toString()
-            )
-
-            DirectAIProtocol.OPENAI_RESPONSES -> PreparedRequest(
-                url = configuration.endpoint,
-                headers = jsonHeaders(configuration.credential),
-                body = JSONObject()
-                    .put("model", configuration.model)
-                    .put("instructions", prompt)
-                    .put("input", text)
-                    .toString()
-            )
-
-            DirectAIProtocol.ANTHROPIC_MESSAGES -> PreparedRequest(
-                url = configuration.endpoint,
-                headers = mapOf(
-                    "Content-Type" to "application/json; charset=utf-8",
-                    "x-api-key" to configuration.credential.orEmpty(),
-                    "anthropic-version" to "2023-06-01"
-                ),
-                body = JSONObject()
-                    .put("model", configuration.model)
-                    .put("max_tokens", 2048)
-                    .put("system", prompt)
-                    .put(
-                        "messages",
-                        JSONArray().put(JSONObject().put("role", "user").put("content", text))
-                    )
-                    .toString()
-            )
-
-            DirectAIProtocol.GEMINI_GENERATE_CONTENT -> {
-                val base = configuration.endpoint.trimEnd('/')
-                val url = "$base/models/${configuration.model}:generateContent?key=${configuration.credential}"
-                PreparedRequest(
-                    url = url,
-                    headers = mapOf("Content-Type" to "application/json; charset=utf-8"),
-                    body = JSONObject()
-                        .put(
-                            "systemInstruction",
-                            JSONObject().put(
-                                "parts",
-                                JSONArray().put(JSONObject().put("text", prompt))
-                            )
-                        )
-                        .put(
-                            "contents",
-                            JSONArray().put(
-                                JSONObject()
-                                    .put("role", "user")
-                                    .put("parts", JSONArray().put(JSONObject().put("text", text)))
-                            )
-                        )
-                        .toString()
+            AIAPIStyle.CHAT_COMPLETIONS -> JSONObject()
+                .put("model", direct.model)
+                .put(
+                    "messages",
+                    JSONArray()
+                        .put(JSONObject().put("role", "system").put("content", prompt))
+                        .put(JSONObject().put("role", "user").put("content", text))
                 )
+                .put("stream", false)
+
+            AIAPIStyle.GEMINI_NATIVE -> JSONObject()
+                .put(
+                    "systemInstruction",
+                    JSONObject().put("parts", JSONArray().put(JSONObject().put("text", prompt)))
+                )
+                .put(
+                    "contents",
+                    JSONArray().put(
+                        JSONObject()
+                            .put("role", "user")
+                            .put("parts", JSONArray().put(JSONObject().put("text", text)))
+                    )
+                )
+
+            AIAPIStyle.ANTHROPIC_MESSAGES -> JSONObject()
+                .put("model", direct.model)
+                .put("max_tokens", AIRequestTuning.ANTHROPIC_OUTPUT_TOKENS)
+                .put("system", prompt)
+                .put(
+                    "messages",
+                    JSONArray().put(JSONObject().put("role", "user").put("content", text))
+                )
+        }
+        // Reasoning and output fields of the chosen model; none for most
+        // models on 自动, which leaves the body as it is.
+        val extra = AIRequestTuning.extraFields(direct.kind, direct.style, direct.model, direct.reasoning, quick)
+        extra.keys().forEach { key -> body.put(key, extra.get(key)) }
+        val headers = buildMap {
+            put("Content-Type", "application/json; charset=utf-8")
+            put("Accept", "application/json")
+            when (direct.style) {
+                AIAPIStyle.RESPONSES, AIAPIStyle.CHAT_COMPLETIONS -> put("Authorization", "Bearer ${direct.apiKey}")
+                AIAPIStyle.GEMINI_NATIVE -> put("x-goog-api-key", direct.apiKey)
+                AIAPIStyle.ANTHROPIC_MESSAGES -> {
+                    put("x-api-key", direct.apiKey)
+                    put("anthropic-version", "2023-06-01")
+                }
             }
         }
+        val url = if (direct.style == AIAPIStyle.GEMINI_NATIVE) {
+            geminiURL(direct.endpoint, direct.model)
+        } else {
+            direct.endpoint
+        }
+        return PreparedRequest(url = url, headers = headers, body = body.toString())
+    }
+
+    /** Gemini's own format names the model in the path, before any query. */
+    private fun geminiURL(endpoint: String, model: String): String {
+        val queryStart = endpoint.indexOf('?')
+        val base = if (queryStart >= 0) endpoint.substring(0, queryStart) else endpoint
+        val query = if (queryStart >= 0) endpoint.substring(queryStart) else ""
+        return base.trimEnd('/') + "/models/" + model + ":generateContent" + query
     }
 
     private fun parseTranslation(
         configuration: TranslationServiceConfiguration,
-        body: String
+        body: String,
+        isExplanation: Boolean
     ): String {
-        val json = JSONObject(body)
-        if (configuration.preferences.providerMode == TranslationProviderMode.BACKEND_PROXY) {
-            return json.optString("translatedText")
-                .ifBlank { json.optString("translation") }
-                .ifBlank { json.optString("explanation") }
+        if (configuration.isProxy) {
+            return if (isExplanation) {
+                AIProxyProtocol.explanationText(body)
+            } else {
+                AIProxyProtocol.translatedText(body)
+            }
         }
-        return when (configuration.preferences.directProvider.protocol) {
-            DirectAIProtocol.OPENAI_CHAT_COMPLETIONS ->
-                json.optJSONArray("choices")
+        val json = JSONObject(body)
+        val style = configuration.direct?.style ?: throw TranslationFailure.AIModelNotReady
+        return when (style) {
+            AIAPIStyle.CHAT_COMPLETIONS -> {
+                val content = json.optJSONArray("choices")
                     ?.optJSONObject(0)
                     ?.optJSONObject("message")
-                    ?.optString("content")
-                    .orEmpty()
+                    ?.opt("content")
+                when (content) {
+                    is String -> content
+                    // Some compatible services answer with a list of parts.
+                    is JSONArray -> joinedText(content)
+                    else -> ""
+                }
+            }
 
-            DirectAIProtocol.ANTHROPIC_MESSAGES ->
-                json.optJSONArray("content")?.optJSONObject(0)?.optString("text").orEmpty()
+            // A thinking block comes before the answer and has no text.
+            AIAPIStyle.ANTHROPIC_MESSAGES -> joinedText(json.optJSONArray("content"))
 
-            DirectAIProtocol.GEMINI_GENERATE_CONTENT ->
-                json.optJSONArray("candidates")
-                    ?.optJSONObject(0)
-                    ?.optJSONObject("content")
-                    ?.optJSONArray("parts")
-                    ?.let { parts ->
-                        buildString {
-                            repeat(parts.length()) { index ->
-                                append(parts.optJSONObject(index)?.optString("text").orEmpty())
-                            }
-                        }
-                    }
-                    .orEmpty()
-
-            DirectAIProtocol.OPENAI_RESPONSES -> {
-                json.optString("output_text").ifBlank {
-                    val output = json.optJSONArray("output") ?: return@ifBlank ""
-                    buildString {
-                        repeat(output.length()) { outputIndex ->
-                            val content = output.optJSONObject(outputIndex)?.optJSONArray("content")
-                                ?: return@repeat
-                            repeat(content.length()) { contentIndex ->
-                                append(content.optJSONObject(contentIndex)?.optString("text").orEmpty())
-                            }
-                        }
+            AIAPIStyle.GEMINI_NATIVE -> {
+                val candidates = json.optJSONArray("candidates")
+                buildString {
+                    repeat(candidates?.length() ?: 0) { index ->
+                        append(joinedText(candidates?.optJSONObject(index)?.optJSONObject("content")?.optJSONArray("parts")))
                     }
                 }
             }
+
+            AIAPIStyle.RESPONSES -> json.optString("output_text").ifBlank {
+                // A reasoning item without content can come before the message.
+                val output = json.optJSONArray("output") ?: return@ifBlank ""
+                buildString {
+                    repeat(output.length()) { index ->
+                        append(joinedText(output.optJSONObject(index)?.optJSONArray("content")))
+                    }
+                }
+            }
+        }
+    }
+
+    /** The `text` of every part that has one, joined. */
+    private fun joinedText(parts: JSONArray?): String = buildString {
+        repeat(parts?.length() ?: 0) { index ->
+            val part = parts?.optJSONObject(index) ?: return@repeat
+            if (part.opt("text") is String) append(part.optString("text"))
         }
     }
 
@@ -371,16 +424,11 @@ class ConfiguredTranslationService(
             ?: "翻译服务返回 HTTP ${response.statusCode}。"
     }
 
-    private fun jsonHeaders(credential: String?): Map<String, String> = buildMap {
-        put("Content-Type", "application/json; charset=utf-8")
-        credential?.let { put("Authorization", "Bearer $it") }
-    }
-
     private fun providerIdentifier(configuration: TranslationServiceConfiguration): String =
         when (configuration.preferences.providerMode) {
             TranslationProviderMode.ON_DEVICE -> "Android 本机翻译"
             TranslationProviderMode.BACKEND_PROXY -> "AI 代理"
-            TranslationProviderMode.DIRECT_API -> configuration.preferences.directProvider.displayName
+            TranslationProviderMode.DIRECT_API -> configuration.direct?.displayName ?: "AI 大模型"
         }
 
     private fun detectLanguage(text: String): LanguageCode = when {
@@ -388,10 +436,4 @@ class ConfiguredTranslationService(
         text.any { it in '\u3400'..'\u9fff' } -> LanguageCode.CHINESE_SIMPLIFIED
         else -> LanguageCode.ENGLISH
     }
-
-    private data class PreparedRequest(
-        val url: String,
-        val headers: Map<String, String>,
-        val body: String
-    )
 }

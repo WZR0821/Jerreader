@@ -47,7 +47,13 @@ sealed interface TranslationCardState {
     data class Success(
         override val sourceText: String,
         val result: TranslationResult,
-        val analysisText: String? = null
+        val analysisText: String? = null,
+        /** "句子结构" for the grammar analysis, the lens question otherwise. */
+        val analysisTitle: String = "句子结构",
+        /** What the answer was based on, shown under the title. */
+        val analysisDetail: String? = null,
+        /** Only a sentence-structure answer belongs in the grammar notes. */
+        val analysisSavable: Boolean = true
     ) : TranslationCardState
 
     data class Failure(
@@ -81,6 +87,7 @@ fun TranslationCard(
     onCopy: (String) -> Unit,
     onFavorite: ((TranslationResult) -> Unit)? = null,
     onExplain: ((TranslationResult) -> Unit)? = null,
+    onLens: ((TranslationResult) -> Unit)? = null,
     onSaveAnalysis: (() -> Unit)? = null,
     onAnnotate: ((String) -> Unit)? = null,
     onExpandCrossPage: (() -> Unit)? = null,
@@ -104,6 +111,7 @@ fun TranslationCard(
             onCopy = onCopy,
             onFavorite = onFavorite,
             onExplain = onExplain,
+            onLens = onLens,
             onAnnotate = onAnnotate,
             onExpandCrossPage = onExpandCrossPage,
             onAddToVocabulary = onAddToVocabulary,
@@ -133,12 +141,21 @@ fun TranslationCard(
                     else Text(state.result.translatedText, style = MaterialTheme.typography.bodyLarge)
                     state.analysisText?.let { analysis ->
                         Text(
-                            "句子结构",
+                            state.analysisTitle,
                             style = MaterialTheme.typography.titleSmall,
                             modifier = Modifier.padding(top = 4.dp)
                         )
+                        state.analysisDetail?.let { detail ->
+                            Text(
+                                detail,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         Text(analysis, style = MaterialTheme.typography.bodyMedium)
-                        if (onSaveAnalysis != null) TextButton(onClick = onSaveAnalysis) { Text("保存到语法知识库") }
+                        if (onSaveAnalysis != null && state.analysisSavable) {
+                            TextButton(onClick = onSaveAnalysis) { Text("保存到语法知识库") }
+                        }
                     }
                 }
 
@@ -174,6 +191,7 @@ private fun OverlayHeader(
     onCopy: (String) -> Unit,
     onFavorite: ((TranslationResult) -> Unit)?,
     onExplain: ((TranslationResult) -> Unit)?,
+    onLens: ((TranslationResult) -> Unit)?,
     onAnnotate: ((String) -> Unit)?,
     onExpandCrossPage: (() -> Unit)?,
     onAddToVocabulary: (() -> Unit)?,
@@ -282,6 +300,12 @@ private fun OverlayHeader(
                         onClick = { menuExpanded = false; onRetry() }
                     )
                     if (state is TranslationCardState.Success) {
+                        onLens?.let { lens ->
+                            DropdownMenuItem(
+                                text = { Text("AI 阅读透镜…") },
+                                onClick = { menuExpanded = false; lens(state.result) }
+                            )
+                        }
                         onExplain?.let { explain ->
                             DropdownMenuItem(
                                 text = { Text("AI 句子结构分析") },

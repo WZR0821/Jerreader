@@ -3,10 +3,12 @@ import SwiftUI
 struct ReaderSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @ObservedObject var model: EPUBReaderViewModel
+    let model: EPUBReaderViewModel
     @ObservedObject private var translationSettings: TranslationSettingsStore
     @AppStorage(ReaderInterfaceDefaults.immersiveReadingKey)
     private var immersiveReading = true
+    @AppStorage(ReaderInterfaceDefaults.layoutModeKey)
+    private var layoutModeRawValue = ReaderLayoutMode.standard.rawValue
     @AppStorage(ReaderInterfaceDefaults.topTransparencyKey)
     private var topTransparency = ReaderInterfaceDefaults.barTransparency
     @AppStorage(ReaderInterfaceDefaults.bottomTransparencyKey)
@@ -106,7 +108,22 @@ struct ReaderSettingsView: View {
 
     private var interfaceSection: some View {
         Section {
-            Toggle("沉浸阅读（隐藏状态栏）", isOn: $immersiveReading)
+            Picker("界面布局", selection: layoutModeBinding) {
+                ForEach(ReaderLayoutMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Text(layoutMode.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            // The immersive layout always hides the status bar, so the switch
+            // only means something in the standard one.
+            if layoutMode == .standard {
+                Toggle("隐藏状态栏", isOn: $immersiveReading)
+            }
             transparencySlider("顶部栏透明度", value: $topTransparency)
             transparencySlider("底部栏透明度", value: $bottomTransparency)
             Toggle("日语注音", isOn: $japaneseFuriganaEnabled)
@@ -115,6 +132,17 @@ struct ReaderSettingsView: View {
         } footer: {
             Text("只调整控制栏背景，按钮保持清晰。日语注音仅显示在翻译卡片中；这些选项对所有书生效。")
         }
+    }
+
+    private var layoutMode: ReaderLayoutMode {
+        ReaderLayoutMode(rawValue: layoutModeRawValue) ?? .standard
+    }
+
+    private var layoutModeBinding: Binding<ReaderLayoutMode> {
+        Binding(
+            get: { layoutMode },
+            set: { layoutModeRawValue = $0.rawValue }
+        )
     }
 
     private func transparencySlider(_ title: String, value: Binding<Double>) -> some View {
@@ -170,7 +198,9 @@ struct ReaderSettingsView: View {
             return "长按正文可选词或选句翻译，拖动系统选区手柄可精确调整范围。"
         }
         guard model.isQuickSentenceTranslationEnabled else {
-            return "已关闭：轻点正文只显示或隐藏阅读界面；长按选词、拖动选区仍可翻译。"
+            return model.isReflowableBook
+                ? "已关闭：轻点词语直接查词并记入学习记录，轻点空白处显示或隐藏阅读界面；长按选词、拖动选区仍可翻译。"
+                : "已关闭：轻点正文只显示或隐藏阅读界面；长按选词、拖动选区仍可翻译。"
         }
         let target = model.quickTranslationUnit == .sentence
             ? "当前句子"

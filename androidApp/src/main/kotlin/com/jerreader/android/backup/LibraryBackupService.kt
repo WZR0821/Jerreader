@@ -531,7 +531,6 @@ class LibraryBackupService(
     private fun settingsJson(): JSONObject {
         val app = appSettings.preferences.value
         val appearance = app.defaultReaderAppearance
-        val translation = translationSettings.preferences.value
         return JSONObject()
             .put("theme", app.theme.name)
             .put("showReadingProgress", app.showReadingProgress)
@@ -539,6 +538,7 @@ class LibraryBackupService(
             .put("bottomBarTransparency", app.bottomBarTransparency.toDouble())
             .put("japaneseFuriganaEnabled", app.japaneseFuriganaEnabled)
             .put("immersiveReading", app.immersiveReading)
+            .put("layoutMode", app.layoutMode.storageValue)
             .put("growthEnabled", app.growthEnabled)
             .put("applyReaderDefaultsToExistingBooks", app.applyReaderDefaultsToExistingBooks)
             .put(
@@ -556,32 +556,9 @@ class LibraryBackupService(
                     .put("customSelectionColorHex", appearance.customSelectionColorHex)
                     .put("pdfPaperModeEnabled", appearance.pdfPaperModeEnabled)
             )
-            .put(
-                "translation",
-                JSONObject()
-                    // Endpoints and model names travel; the API key and the
-                    // proxy credential stay in the keystore on this device.
-                    .put("providerMode", translation.providerMode.name)
-                    .put("directProvider", translation.directProvider.name)
-                    .put("directEndpoint", translation.directEndpoint)
-                    .put("directModel", translation.directModel)
-                    .put("backendEndpoint", translation.backendEndpoint)
-                    .put("backendModel", translation.backendModel)
-                    .put("sourceChoice", translation.sourceChoice.name)
-                    .put("targetLanguage", translation.targetLanguage.name)
-                    .put("quickTranslationEnabled", translation.quickTranslationEnabled)
-                    .put("quickTranslationUnit", translation.quickTranslationUnit.name)
-                    .put(
-                        "disablesTapPageTurnsDuringQuickTranslation",
-                        translation.disablesTapPageTurnsDuringQuickTranslation
-                    )
-                    .put("displayMode", translation.displayMode.name)
-                    .put("translationHapticsEnabled", translation.translationHapticsEnabled)
-                    .put("automaticRetryEnabled", translation.automaticRetryEnabled)
-                    .put("fallbackMode", translation.fallbackMode.name)
-                    .put("translationPromptTemplate", translation.translationPromptTemplate)
-                    .put("grammarAnalysisPromptTemplate", translation.grammarAnalysisPromptTemplate)
-            )
+            // Providers, addresses and models travel; API keys and the proxy
+            // credential stay in the keystore on this device.
+            .put("translation", translationSettings.backupJson())
     }
 
     private fun applySettings(payload: JSONObject) {

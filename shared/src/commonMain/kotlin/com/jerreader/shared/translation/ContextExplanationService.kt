@@ -7,7 +7,9 @@ data class ContextExplanationRequest(
     val contextText: String?,
     val sourceLanguage: LanguageCode?,
     val isWordLookup: Boolean = false,
-    val dictionaryEntry: String? = null
+    val dictionaryEntry: String? = null,
+    /** Set for an AI reading lens question; null keeps the plain grammar analysis. */
+    val lens: ReadingLensOptions? = null
 )
 
 data class ContextExplanationResult(

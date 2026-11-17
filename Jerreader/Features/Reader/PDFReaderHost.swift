@@ -207,6 +207,16 @@ final class PDFReaderViewController: UIViewController, PDFNavigatorDelegate,
         renderInstalledAnnotations()
     }
 
+    /// The SwiftUI container already keeps the navigator out of the safe area
+    /// and, in the standard layout, from under the bars. Readium's default
+    /// would add the window's safe area again (62pt a side on a phone for
+    /// reflowable books), which was most of the empty band above and below
+    /// the text, so it only gets the small gap from `ReaderInterfaceDefaults`.
+    func navigatorContentInset(_ navigator: VisualNavigator) -> UIEdgeInsets? {
+        let inset = ReaderInterfaceDefaults.contentEdgeInset
+        return UIEdgeInsets(top: inset, left: 0, bottom: inset, right: 0)
+    }
+
     func navigator(_ navigator: VisualNavigator, didTapAt point: CGPoint) {
         // PDFKit can emit a normal tap immediately after the user releases a
         // native long-press selection. Without the same gate used by EPUB, that

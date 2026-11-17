@@ -109,6 +109,17 @@ class LearningUiParityTest {
         }
         waitFor(text)
     }
+    /**
+     * A one-screen page shows [last] without scrolling, and a drag does not
+     * move [anchor]: the page is exactly as tall as the room it has.
+     */
+    private fun assertOneScreen(anchor: String, last: String? = null) {
+        val before = android.graphics.Rect().also { waitFor(anchor).getBoundsInScreen(it) }
+        last?.let { check(waitFor(it).isVisibleToUser) { "$it must show without scrolling" } }
+        scrollForward()
+        val after = android.graphics.Rect().also { waitFor(anchor).getBoundsInScreen(it) }
+        assertEquals("$anchor moved: the page must fit one screen without scrolling", before, after)
+    }
     private fun settleScreen() {
         instrumentation.waitForIdleSync()
         // Accessibility events can precede the software renderer's next frame.
@@ -192,9 +203,16 @@ class LearningUiParityTest {
             waitFor("书架"); capture("android-library")
             tap("书架更多操作"); waitFor("排序方式"); waitFor("批量整理书籍")
             tap("最近")
+            // As on iOS, "+" first asks for a format; the system picker then
+            // accepts only that type and greys the other files out.
+            tap("导入电子书"); waitFor("先选择文件格式"); waitFor("选择文档"); capture("android-import-options")
+            tap("只选 PDF 文件"); reveal("选择 PDF 文件"); capture("android-import-options-pdf")
+            tap("选择 PDF 文件"); waitForFolderPicker(); capture("android-import-picker-pdf"); back()
+            waitFor("书架"); check(find("先选择文件格式") == null)
             tap("学习"); waitFor("今日练习"); capture("android-main-practice")
-            tap("翻译"); waitFor("词语"); capture("android-main-learning"); setInput("practice draft")
-            tap("设置"); waitFor("默认阅读排版"); capture("android-settings")
+            tap("翻译"); waitFor("词语"); capture("android-main-learning"); assertOneScreen("服务")
+            setInput("practice draft")
+            tap("设置"); waitFor("默认阅读排版"); capture("android-settings"); assertOneScreen("默认阅读排版", last = "Jerry Wong")
             tap("界面主题"); waitFor("海蓝"); waitFor("学习"); capture("android-settings-theme")
             tap("森林"); tap("海蓝"); back()
             tap("默认阅读排版"); waitFor("字体与字号"); waitFor("学习"); capture("android-settings-reader")
@@ -207,7 +225,7 @@ class LearningUiParityTest {
             waitFor("备份中心"); reveal("从备份文件夹恢复"); tap("从备份文件夹恢复")
             waitForFolderPicker(); back(); waitFor("备份中心"); back()
             tap("操作指南"); waitFor("快速开始"); waitFor("学习"); capture("android-settings-guide"); back()
-            tap("翻译与 AI"); waitFor("翻译服务"); capture("android-settings-translation"); reveal("管理离线资源"); tap("管理离线资源")
+            tap("翻译与 AI"); waitFor("翻译服务"); capture("android-settings-translation"); reveal("离线资源"); tap("离线资源")
             waitFor("英语扩展词典"); waitFor("中日句段翻译"); waitFor("下载"); waitFor("卸载")
             check(find("来源与许可") == null)
             check(find("仅使用 Wi-Fi 下载") == null)
@@ -248,32 +266,65 @@ class LearningUiParityTest {
             reveal("词典释义 · 中文"); capture("android-contextual-selected-sense")
         }
     }
-    @Test fun contextualLargeFontAndPersistenceFailure() {
+    // Two tests rather than one: the device run sets the system font before a
+    // test starts, so each test gets a single font size.
+    @Test fun contextualLargeFont() {
         launchContextual(large = true).use {
             waitFor("语境查词"); reveal("吃"); capture("android-contextual-large-result")
             reveal("加入生词本"); capture("android-contextual-large-actions")
-            tap("加入生词本"); waitFor("取消收藏")
+            // At this font the button sits at the bottom edge, and the
+            // confirmation line added above the card pushes it below the
+            // screen, so scroll to it.
+            tap("加入生词本"); reveal("取消收藏")
         }
+    }
+    @Test fun contextualPersistenceFailure() {
         launchContextual(failSave = true).use {
             waitFor("历史保存失败，释义仍可查看；可点击收藏重试。")
             waitFor("吃"); capture("android-contextual-save-failure")
         }
     }
-    @Test fun modelCatalogRefreshDoesNotChangeSelection() {
+    @Test fun aiModelsProvidersAndModels() {
+        // The AI 大模型 pages on fixture settings: requests are fakes, the key
+        // lives in memory, and nothing leaves the device.
         setSystemFontScale(false)
         ActivityScenario.launch<LearningUiFixtureActivity>(Intent(instrumentation.targetContext, LearningUiFixtureActivity::class.java)
-            .putExtra("catalog", true)).use {
-            tap("刷新模型列表"); waitFor("当前模型：existing-model")
-            tap("选择模型"); waitFor("示例文本模型"); capture("android-model-picker")
-            tap("示例文本模型"); waitFor("当前模型：mock-text-latest"); capture("android-model-selected")
+            .putExtra("aiModels", true)).use {
+            waitFor("Jerreader 正在用"); waitFor("这个供应商还没有填 API Key，填好后才能翻译。")
+            capture("android-ai-models")
+            tap("添加供应商"); waitFor("推荐"); capture("android-ai-add-provider")
+            tap("Claude"); waitFor("claude-sonnet-5-5")
+            tap("显示密钥"); setInput("sk-ui-fixture")
+            reveal("测试连接"); tap("测试连接"); waitFor("连接正常，用时 0.4 秒。点“添加”保存。")
+            capture("android-ai-provider-setup")
+            tap("添加"); waitFor("已添加 Claude，它现在是正在用的模型。")
+            tap("用它翻译"); waitFor("翻译服务已换成 AI 大模型。")
+            check(find("用它翻译") == null)
+            capture("android-ai-models-added")
+            tap("换模型"); waitFor("claude-sonnet-5-5"); capture("android-ai-model-switcher")
+            tap("claude-sonnet-5-5"); waitFor("已换成 Claude 的 claude-sonnet-5-5。")
+            tap("Claude", last = true); waitFor("已填写"); capture("android-ai-provider-detail")
+            tap("添加模型"); tap("获取可用模型"); tap("mock-text-latest")
+            waitFor("已添加 mock-text-latest。")
+            tap("mock-text-latest"); reveal("测试连接"); tap("测试连接"); waitFor("连接正常，用时 0.4 秒")
+            capture("android-ai-model-detail")
+            reveal("删除这个模型"); tap("删除这个模型"); tap("删除")
+            waitFor("已填写")
+            check(find("mock-text-latest") == null)
         }
     }
 
     @Test fun japaneseAndChineseLookupWorkWithoutNetwork() {
         launch(empty = true).use {
             tap("自动识别"); tap("日语"); tap("词语"); setInput("食べる"); tap("翻译", last = true)
-            waitFor("吃"); capture("android-japanese-offline-result")
-            tap("日语"); tap("简体中文", last = true); tap("简体中文", last = true); tap("日语", last = true); setInput("阅读"); capture("android-chinese-before-query"); tap("翻译", last = true)
+            waitFor("吃")
+            // The dictionary entry takes the spare height; 清空 and 翻译 must
+            // stay in the input area all the same.
+            waitFor("清空"); capture("android-japanese-offline-result")
+            // Both menus name Chinese "简体中文", as on iOS, and the result card
+            // repeats the target as a plain label. Set the target first, while
+            // the source still reads 日语, so the first match is always the menu.
+            tap("简体中文"); tap("日语", last = true); tap("日语"); tap("简体中文", last = true); setInput("阅读"); capture("android-chinese-before-query"); tap("翻译", last = true)
             waitFor("読む（よむ）"); capture("android-chinese-offline-result")
         }
     }
@@ -281,7 +332,7 @@ class LearningUiParityTest {
     @Test fun bundledDictionaryFindsNonCoreWordsAndHandlesMisses() {
         launch(empty = true).use {
             tap("词语"); tap("自动识别"); tap("日语")
-            setInput("曖昧"); tap("翻译", last = true); waitFor("含糊，模糊")
+            setInput("曖昧"); tap("翻译", last = true); waitFor("含糊，模糊"); waitFor("清空")
             capture("android-dictionary-japanese")
         }
     }

@@ -20,13 +20,25 @@ import android.widget.FrameLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.ComponentDialog
+import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -57,6 +69,7 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.fragment.app.FragmentFactory
 import androidx.fragment.app.commitNow
+import androidx.core.content.edit
 import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -77,20 +90,37 @@ import com.jerreader.shared.domain.BookFormat
 import com.jerreader.shared.library.LibraryBook
 import com.jerreader.shared.library.ReaderAnnotationColor
 import com.jerreader.shared.library.ReaderAppearance
+import com.jerreader.shared.library.ReaderInterfaceDefaults
+import com.jerreader.shared.library.ReaderLayoutMode
 import com.jerreader.shared.library.ReaderSelectionVisualStyle
 import com.jerreader.shared.library.ReaderTextOrientation
 import com.jerreader.shared.domain.LanguageCode
 import com.jerreader.shared.lexical.WordAnalysis
+import com.jerreader.shared.lexical.WordExplanation
+import com.jerreader.android.learning.LearningRecordRepository
 import com.jerreader.shared.translation.ContextExplanationRequest
 import com.jerreader.shared.translation.ContextExplanationService
 import com.jerreader.shared.translation.ReaderCrossPageTranslationResolver
 import com.jerreader.shared.translation.TranslationDisplayMode
 import com.jerreader.shared.translation.TranslationRequest
 import com.jerreader.shared.translation.TranslationResult
+import com.jerreader.shared.learning.AdaptiveReadingAssistPolicy
+import com.jerreader.shared.learning.ChapterClosurePolicy
+import com.jerreader.shared.learning.ContinuationRecapPolicy
+import com.jerreader.shared.learning.ReadingCompanionMode
+import com.jerreader.shared.learning.ReadingConfusionMap
+import com.jerreader.shared.learning.ReadingConfusionMapPolicy
+import com.jerreader.shared.learning.ReadingErrorSignal
+import com.jerreader.shared.translation.AIReadingLensMode
+import com.jerreader.shared.translation.ReadingLensOptions
+import com.jerreader.shared.ui.AIReadingLensChooser
+import com.jerreader.shared.ui.JerreaderGlyph
+import com.jerreader.shared.ui.JerreaderIcon
 import com.jerreader.shared.ui.JerreaderTheme
+import com.jerreader.shared.ui.ReaderChapterClosurePanel
+import com.jerreader.shared.ui.ReaderCompanionPanel
 import com.jerreader.shared.ui.ReaderAnnotationEditor
 import com.jerreader.shared.ui.ReaderAnnotationItem
-import com.jerreader.shared.ui.ReaderAppearancePanel
 import com.jerreader.shared.ui.ReaderBookmarkItem
 import com.jerreader.shared.ui.ReaderChapter
 import com.jerreader.shared.ui.ReaderNavigationPanel
@@ -102,20 +132,18 @@ import com.jerreader.shared.ui.TranslationCardState
 import com.jerreader.shared.ui.WordLookupCard
 import com.jerreader.shared.ui.WordLookupCardState
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.delay
 import kotlin.math.abs
 import org.json.JSONArray
 import org.json.JSONObject
+import org.readium.adapter.pdfium.navigator.PdfiumDefaults
 import org.readium.adapter.pdfium.navigator.PdfiumEngineProvider
 import org.readium.r2.navigator.DecorableNavigator
 import org.readium.r2.navigator.Decoration
@@ -139,6 +167,11 @@ class ReaderActivity : AppCompatActivity() {
     private val graph
         get() = (application as JerreaderApplication).graph
 
+    // Position and reading-time saving outlive rotation and never block the UI thread.
+    private val session by viewModels<ReaderSessionViewModel> {
+        ReaderSessionViewModel.factory(graph.repository, graph.applicationScope)
+    }
+
     private lateinit var expectedSnapshot: PublicationSnapshot
     private var publication: Publication? = null
     private var book by mutableStateOf<LibraryBook?>(null)
@@ -152,17 +185,18 @@ class ReaderActivity : AppCompatActivity() {
     private val tableOfContentsLinks = linkedMapOf<String, Link>()
     private var readingOrder = emptyList<Link>()
     private var positions = emptyList<Locator>()
+    private var pdfPublicationOpen = false
     private var wordInteractionController: ReaderWordInteractionController? = null
     private var tapTranslationController: ReaderTapTranslationController? = null
     private var pdfTranslationController: PdfTapTranslationController? = null
     private var annotationDialog: Dialog? = null
-    private var readingStartedAtMillis: Long? = null
-    private var accumulatedReadingSeconds = 0.0
     private val searchLocators = linkedMapOf<String, Locator>()
     private var pendingAnnotation: PendingAnnotation? = null
 
     private var contextualLookupInput by mutableStateOf<com.jerreader.android.ui.ContextualLookupInput?>(null)
     internal var currentWordLookupState by mutableStateOf<WordLookupCardState?>(null)
+    /** Key of the last word lookup this reader saved, see `recordReaderLookup`. */
+    private var recordedReaderLookupKey: String? = null
         private set
 
     internal var currentTranslationState by mutableStateOf<TranslationCardState?>(null)
@@ -189,6 +223,11 @@ class ReaderActivity : AppCompatActivity() {
     private var searchResults by mutableStateOf(emptyList<ReaderSearchResultItem>())
     private var isSearching by mutableStateOf(false)
     private var searchMessage by mutableStateOf<String?>(null)
+    private var companionMode by mutableStateOf(ReadingCompanionMode.FICTION)
+    /** A recap or a finished chapter is waiting in the companion panel. */
+    private var hasCompanionUpdate by mutableStateOf(false)
+    /** The chapter the reader last finished by reading on into the next one. */
+    private var finishedChapterTitle: String? = null
     private var crossPageMessage by mutableStateOf<String?>(null)
     private var isExpandingCrossPage by mutableStateOf(false)
     private var anchorTopPx by mutableIntStateOf(0)
@@ -211,9 +250,7 @@ class ReaderActivity : AppCompatActivity() {
     private var floatingLayer: ComposeView? = null
     private var highlightLayer: ComposeView? = null
     private var locatorObservationJob: Job? = null
-    private var progressPersistenceJob: Job? = null
     private var writingModeJob: Job? = null
-    private val progressPersistenceMutex = Mutex()
     private var readerContentLeftPx = 0
     private var readerContentTopPx = 0
     private var readerContentBottomPx = 0
@@ -222,6 +259,38 @@ class ReaderActivity : AppCompatActivity() {
     private var pdfGeometryScrollListener: ViewTreeObserver.OnScrollChangedListener? = null
     private var pdfGeometryLayoutListener: View.OnLayoutChangeListener? = null
     private var pdfGeometryTouchListener: View.OnTouchListener? = null
+
+    // The two layouts, after iOS `EPUBReaderViewModel`: the standard one keeps
+    // its bars and lays the page out between them; the immersive one starts
+    // with the bars away and brings them back for a few seconds on request.
+    private val layoutModeState = mutableStateOf(ReaderLayoutMode.STANDARD)
+    private val layoutMode: ReaderLayoutMode get() = layoutModeState.value
+    private val controlsVisibleState = mutableStateOf(true)
+    private val controlsVisible: Boolean get() = controlsVisibleState.value
+    private var chromeAutoHideJob: Job? = null
+    private var isChromeAutoHideSuspended = false
+    /** The right-edge "点句翻译已开启" reminder is still due (iOS `isQuickTranslationIndicatorVisible`). */
+    private var isQuickTranslationIndicatorVisible by mutableStateOf(false)
+    private var systemBarTopPx by mutableIntStateOf(0)
+    private var systemBarBottomPx by mutableIntStateOf(0)
+    /** Measured, including the system bar each bar paints behind. */
+    private var topChromeHeightPx by mutableIntStateOf(0)
+    private var bottomChromeHeightPx by mutableIntStateOf(0)
+    private var topChromeView: View? = null
+    private var bottomChromeView: View? = null
+    private var revealTopView: View? = null
+    private var revealBottomView: View? = null
+    private var readerContainerView: View? = null
+
+    /** iOS `isChromeVisible`: the standard layout always shows its bars. */
+    internal val isChromeVisible: Boolean
+        get() = layoutMode == ReaderLayoutMode.STANDARD || controlsVisible
+
+    internal val layoutModeForTesting: ReaderLayoutMode get() = layoutMode
+
+    /** Top and bottom of the area cards may use, in the floating layer's window coordinates. */
+    internal var translationSafeAreaForTesting: RectF? = null
+        private set
 
     private data class PopupShift(
         val dx: Float,
@@ -241,7 +310,7 @@ class ReaderActivity : AppCompatActivity() {
         // Android may restore Navigator fragments before the publication is
         // reopened. A dummy factory makes restoration safe until we replace it.
         supportFragmentManager.fragmentFactory = if (looksLikePdf()) {
-            PdfNavigatorFragment.createDummyFactory(PdfiumEngineProvider())
+            PdfNavigatorFragment.createDummyFactory(pdfiumEngineProvider())
         } else {
             EpubNavigatorFragment.createDummyFactory()
         }
@@ -257,25 +326,17 @@ class ReaderActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (book != null && publication != null && readingStartedAtMillis == null) {
-            readingStartedAtMillis = System.currentTimeMillis()
-        }
+        if (book != null && publication != null) session.recorder.startClock()
     }
 
     override fun onPause() {
-        accumulateReadingTime()
-        flushLatestLocator()
-        flushReadingTime()
+        session.recorder.pause()
         super.onPause()
     }
 
     @SuppressLint("LogNotTimber")
     override fun onDestroy() {
-        accumulateReadingTime()
-        flushLatestLocator()
-        flushReadingTime()
-        progressPersistenceJob?.cancel()
-        progressPersistenceJob = null
+        session.recorder.pause()
         writingModeJob?.cancel()
         writingModeJob = null
         locatorObservationJob?.cancel()
@@ -335,6 +396,12 @@ class ReaderActivity : AppCompatActivity() {
         val bookId = intent.getStringExtra(EXTRA_BOOK_ID)
         val resolvedBook = bookId?.let { graph.repository.book(it) }
         book = resolvedBook
+        resolvedBook?.let { opened ->
+            session.recorder.begin(opened.id)
+            companionMode = loadCompanionMode(opened.id)
+            // A recap only helps someone coming back to a book.
+            hasCompanionUpdate = opened.lastReadProgress > CONTINUATION_RECAP_MIN_PROGRESS
+        }
 
         val snapshot = when {
             resolvedBook != null -> {
@@ -381,8 +448,16 @@ class ReaderActivity : AppCompatActivity() {
 
     private fun showRoot() {
         val density = resources.displayMetrics.density
-        val root = FrameLayout(this).apply { setBackgroundColor(Color.WHITE) }
-        // iOS lets the page run edge to edge and floats the controls above it.
+        // The first state comes from the stored choice, as iOS sets it up when
+        // the reader opens: the immersive layout opens with the bars away.
+        val startPreferences = graph.appSettings.preferences.value
+        layoutModeState.value = startPreferences.layoutMode
+        controlsVisibleState.value = startPreferences.layoutMode == ReaderLayoutMode.STANDARD
+        isQuickTranslationIndicatorVisible =
+            graph.translationSettings.preferences.value.quickTranslationEnabled
+        // Painted in the page colour, so the strips outside the page and the
+        // translucent bars read as part of the page.
+        val root = FrameLayout(this).apply { setBackgroundColor(pageColorArgb()) }
         val readerContainer = FrameLayout(this).apply { id = R.id.reader_container }
         root.addView(
             readerContainer,
@@ -403,16 +478,22 @@ class ReaderActivity : AppCompatActivity() {
         val topChrome = readerComposeView {
             val appPreferences by graph.appSettings.preferences.collectAsState()
             ReaderTopChrome(
-                transparency = appPreferences.topBarTransparency,
                 chapterTitle = currentChapterName,
                 bookTitle = book?.title ?: "Jerreader",
                 isBookmarked = isCurrentPositionBookmarked,
                 onClose = onBackPressedDispatcher::onBackPressed,
                 onTableOfContents = ::showNavigationPanel,
                 onToggleBookmark = ::toggleBookmark,
-                onAppearance = ::showAppearance
+                onAppearance = ::showAppearance,
+                pageColor = pageComposeColor(),
+                transparency = appPreferences.topBarTransparency,
+                showsDivider = layoutMode == ReaderLayoutMode.IMMERSIVE,
+                topInset = with(LocalDensity.current) { systemBarTopPx.toDp() },
+                onCompanion = if (book != null) ::showReadingCompanion else null,
+                hasCompanionUpdate = hasCompanionUpdate,
+                onInteraction = ::noteChromeInteraction
             )
-        }
+        }.apply { id = R.id.reader_top_chrome }
         root.addView(
             topChrome,
             FrameLayout.LayoutParams(
@@ -426,11 +507,11 @@ class ReaderActivity : AppCompatActivity() {
             val appPreferences by graph.appSettings.preferences.collectAsState()
             val translationPreferences by graph.translationSettings.preferences.collectAsState()
             ReaderBottomChrome(
-                transparency = appPreferences.bottomBarTransparency,
                 chapterLabel = currentChapterName,
                 progress = currentProgress,
                 showProgress = appPreferences.showReadingProgress,
-                onProgressChange = ::goToProgress,
+                chapterLabelAt = ::chapterTitleAtProgress,
+                onSeek = ::goToProgress,
                 canGoToAdjacentChapter = readingOrder.size > 1,
                 onPreviousChapter = { goToAdjacentChapter(-1) },
                 onNextChapter = { goToAdjacentChapter(1) },
@@ -441,9 +522,15 @@ class ReaderActivity : AppCompatActivity() {
                     graph.translationSettings.updateQuickTranslationEnabled(
                         !translationPreferences.quickTranslationEnabled
                     )
-                }
+                },
+                pageColor = pageComposeColor(),
+                transparency = appPreferences.bottomBarTransparency,
+                showsDivider = layoutMode == ReaderLayoutMode.IMMERSIVE,
+                bottomInset = with(LocalDensity.current) { systemBarBottomPx.toDp() },
+                onInteraction = ::noteChromeInteraction,
+                onScrubbingChanged = ::setChromeAutoHideSuspended
             )
-        }
+        }.apply { id = R.id.reader_bottom_chrome }
         root.addView(
             bottomChrome,
             FrameLayout.LayoutParams(
@@ -452,6 +539,15 @@ class ReaderActivity : AppCompatActivity() {
                 Gravity.BOTTOM
             )
         )
+
+        // In the immersive layout a tap on the text looks a word up or
+        // translates, so the blank strips above and below the text bring the
+        // bars back (iOS `immersiveRevealZones`). Each covers the system bar
+        // and the page's own edge inset, never a line of text.
+        val revealTop = revealZone(R.id.reader_reveal_top)
+        root.addView(revealTop, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, 0, Gravity.TOP))
+        val revealBottom = revealZone(R.id.reader_reveal_bottom)
+        root.addView(revealBottom, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, 0, Gravity.BOTTOM))
 
         // Keep persisted PDF highlights in a non-interactive layer that is never
         // hidden with the translation card. This mirrors iOS's independent
@@ -467,6 +563,14 @@ class ReaderActivity : AppCompatActivity() {
                 FrameLayout.LayoutParams.MATCH_PARENT
             )
         )
+        val indicatorView = readerComposeView { QuickTranslationIndicator() }
+        root.addView(
+            indicatorView,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
         val overlayView = readerComposeView { ReaderFloatingLayer() }
         root.addView(
             overlayView,
@@ -477,47 +581,333 @@ class ReaderActivity : AppCompatActivity() {
         )
         highlightLayer = highlightView
         floatingLayer = overlayView
+        topChromeView = topChrome
+        bottomChromeView = bottomChrome
+        revealTopView = revealTop
+        revealBottomView = revealBottom
+        readerContainerView = readerContainer
+
+        // Measured, so the page sits exactly between the bars in the standard
+        // layout whatever the text size or the progress-row setting.
+        topChrome.addOnLayoutChangeListener { view, _, _, _, _, _, _, _, _ ->
+            if (view.height != topChromeHeightPx) {
+                topChromeHeightPx = view.height
+                view.post(::updateReaderContentPadding)
+            }
+        }
+        bottomChrome.addOnLayoutChangeListener { view, _, _, _, _, _, _, _, _ ->
+            if (view.height != bottomChromeHeightPx) {
+                bottomChromeHeightPx = view.height
+                view.post(::updateReaderContentPadding)
+            }
+        }
 
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
-            topChrome.updatePadding(top = bars.top)
-            bottomChrome.updatePadding(bottom = bars.bottom)
-            // Reserve a stable viewport for the edge-aligned control bars.
-            // Toggling their visibility must not reflow the current page.
-            readerContainer.updatePadding(
-                top = bars.top + (CONTENT_TOP_INSET_DP * density).toInt(),
-                bottom = bars.bottom + (CONTENT_BOTTOM_INSET_DP * density).toInt()
-            )
-            // The floating layer already carries the status-bar padding, so the
-            // page offset used for highlights and anchors must exclude it or
-            // everything lands one inset too high.
-            readerContentTopPx = (CONTENT_TOP_INSET_DP * density).toInt()
+            systemBarTopPx = bars.top
+            systemBarBottomPx = bars.bottom
+            val revealEdge = ((ReaderInterfaceDefaults.CONTENT_EDGE_INSET_DP - 2) * density).toInt()
+            revealTop.updateLayoutParams { height = bars.top + revealEdge }
+            revealBottom.updateLayoutParams { height = bars.bottom + revealEdge }
+            // The floating layers work inside the system bars, the way the iOS
+            // overlays work inside the safe area.
             highlightView.updatePadding(top = bars.top, bottom = bars.bottom)
+            indicatorView.updatePadding(top = bars.top, bottom = bars.bottom)
             overlayView.updatePadding(top = bars.top, bottom = bars.bottom)
+            updateReaderContentPadding()
             insets
         }
         rootView = root
         setContentView(root)
+        updateChromePresentation(animated = false)
         lifecycleScope.launch {
-            var lastImmersive: Boolean? = null
+            var lastStatusBarHidden: Boolean? = null
             graph.appSettings.preferences.collectLatest { preferences ->
-                if (lastImmersive != preferences.immersiveReading) {
-                    lastImmersive = preferences.immersiveReading
+                setLayoutMode(preferences.layoutMode)
+                // The immersive layout is full screen by definition; the
+                // standard one keeps the separate 隐藏状态栏 choice, as on iOS.
+                val statusBarHidden = preferences.immersiveReading ||
+                    preferences.layoutMode == ReaderLayoutMode.IMMERSIVE
+                if (lastStatusBarHidden != statusBarHidden) {
+                    lastStatusBarHidden = statusBarHidden
                     val controller = androidx.core.view.WindowCompat.getInsetsController(window, root)
                     controller.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                    if (preferences.immersiveReading) controller.hide(WindowInsetsCompat.Type.statusBars())
+                    if (statusBarHidden) controller.hide(WindowInsetsCompat.Type.statusBars())
                     else controller.show(WindowInsetsCompat.Type.statusBars())
                     ViewCompat.requestApplyInsets(root)
                 }
             }
         }
+        lifecycleScope.launch {
+            var lastEnabled: Boolean? = null
+            var lastUnit: com.jerreader.shared.translation.QuickTranslationUnit? = null
+            graph.translationSettings.preferences.collectLatest { preferences ->
+                val enabled = preferences.quickTranslationEnabled
+                val unit = preferences.quickTranslationUnit
+                val previousEnabled = lastEnabled
+                val previousUnit = lastUnit
+                lastEnabled = enabled
+                lastUnit = unit
+                if (previousEnabled == null) return@collectLatest
+                if (previousEnabled != enabled) {
+                    // iOS `setQuickSentenceTranslationEnabled`: a fresh mode
+                    // gets a fresh reminder, and the bars come back through the
+                    // countdown so the immersive layout still hides them.
+                    dismissTranslation()
+                    isQuickTranslationIndicatorVisible = enabled
+                    showReaderControls()
+                } else if (previousUnit != unit) {
+                    showReaderControls()
+                }
+            }
+        }
     }
+
+    private fun revealZone(viewId: Int): View = View(this).apply {
+        id = viewId
+        contentDescription = "显示阅读控制"
+        visibility = View.GONE
+        setOnClickListener { showReaderControls() }
+    }
+
+    /**
+     * The standard layout lays the page out between the bars; the immersive
+     * one runs it under them, inside the system bars only. Showing or hiding
+     * the bars never changes this, so it never makes Readium paginate again.
+     */
+    private fun updateReaderContentPadding() {
+        val container = readerContainerView ?: return
+        val density = resources.displayMetrics.density
+        val top: Int
+        val bottom: Int
+        if (layoutMode == ReaderLayoutMode.STANDARD) {
+            // Until the bars are measured, iOS's own first guesses (44 and 78).
+            val topBar = topChromeHeightPx.takeIf { it > 0 }
+                ?: (systemBarTopPx + (44 * density).toInt())
+            val bottomBar = bottomChromeHeightPx.takeIf { it > 0 }
+                ?: (systemBarBottomPx + (78 * density).toInt())
+            top = maxOf(topBar, systemBarTopPx)
+            bottom = maxOf(bottomBar, systemBarBottomPx)
+        } else {
+            top = systemBarTopPx
+            bottom = systemBarBottomPx
+        }
+        if (container.paddingTop != top || container.paddingBottom != bottom) {
+            container.updatePadding(top = top, bottom = bottom)
+        }
+        // The floating layer already carries the system-bar padding, so the
+        // page offset used for highlights and anchors excludes it. The exact
+        // value is measured again from the page before each use.
+        readerContentTopPx = (top - systemBarTopPx).coerceAtLeast(0)
+    }
+
+    private fun setLayoutMode(mode: ReaderLayoutMode) {
+        if (layoutMode == mode) return
+        layoutModeState.value = mode
+        cancelChromeAutoHide()
+        // Switching happens from the settings panel: the standard layout brings
+        // the bars back for good, the immersive one starts with them away.
+        controlsVisibleState.value = mode == ReaderLayoutMode.STANDARD
+        updateReaderContentPadding()
+        updateChromePresentation(animated = true)
+    }
+
+    private fun setControlsVisible(visible: Boolean) {
+        if (controlsVisible == visible) return
+        controlsVisibleState.value = visible
+        updateChromePresentation(animated = true)
+    }
+
+    private fun showReaderControls() {
+        setControlsVisible(true)
+        scheduleChromeAutoHide()
+    }
+
+    /**
+     * A tap on the page that neither turned it nor hit text to translate or
+     * look up. The standard layout keeps its bars, so only the immersive one
+     * reacts.
+     */
+    private fun handleContentTap() {
+        if (layoutMode != ReaderLayoutMode.IMMERSIVE) {
+            setControlsVisible(true)
+            return
+        }
+        setControlsVisible(!controlsVisible)
+        if (controlsVisible) scheduleChromeAutoHide() else cancelChromeAutoHide()
+    }
+
+    /** Any touch on the bars restarts the immersive auto-hide countdown. */
+    private fun noteChromeInteraction() {
+        if (layoutMode != ReaderLayoutMode.IMMERSIVE || !controlsVisible) return
+        scheduleChromeAutoHide()
+    }
+
+    /** Dragging the progress slider must not lose the bars mid-drag. */
+    private fun setChromeAutoHideSuspended(suspended: Boolean) {
+        isChromeAutoHideSuspended = suspended
+        if (suspended) cancelChromeAutoHide() else noteChromeInteraction()
+    }
+
+    private fun scheduleChromeAutoHide() {
+        cancelChromeAutoHide()
+        if (layoutMode != ReaderLayoutMode.IMMERSIVE || !controlsVisible ||
+            isChromeAutoHideSuspended || isFinishing || isDestroyed
+        ) return
+        chromeAutoHideJob = lifecycleScope.launch {
+            delay(ReaderInterfaceDefaults.IMMERSIVE_CHROME_AUTO_HIDE_MILLIS)
+            chromeAutoHideJob = null
+            if (layoutMode == ReaderLayoutMode.IMMERSIVE && !isChromeAutoHideSuspended) {
+                setControlsVisible(false)
+            }
+        }
+    }
+
+    private fun cancelChromeAutoHide() {
+        chromeAutoHideJob?.cancel()
+        chromeAutoHideJob = null
+    }
+
+    /**
+     * iOS fades the bars (opacity and a 0.985 scale) instead of removing them,
+     * so their measured heights, and with them the page, stay put. A hidden bar
+     * is invisible rather than gone, which also lets taps through to the page.
+     */
+    private fun updateChromePresentation(animated: Boolean) {
+        val visible = isChromeVisible
+        // areAnimatorsEnabled() needs API 26; below that the system scale
+        // still shortens ViewPropertyAnimator, so animating is harmless.
+        val animate = animated && (
+            android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O ||
+                android.animation.ValueAnimator.areAnimatorsEnabled()
+            )
+        listOfNotNull(topChromeView, bottomChromeView).forEach { bar ->
+            bar.animate().cancel()
+            bar.importantForAccessibility = if (visible) {
+                View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+            } else {
+                View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            }
+            val alpha = if (visible) 1f else 0f
+            val scale = if (visible) 1f else CHROME_HIDDEN_SCALE
+            if (visible) bar.visibility = View.VISIBLE
+            if (animate) {
+                bar.animate()
+                    .alpha(alpha)
+                    .scaleX(scale)
+                    .scaleY(scale)
+                    .setDuration(CHROME_FADE_MILLIS)
+                    .setInterpolator(android.view.animation.DecelerateInterpolator())
+                    .withEndAction { if (!isChromeVisible) bar.visibility = View.INVISIBLE }
+                    .start()
+            } else {
+                bar.alpha = alpha
+                bar.scaleX = scale
+                bar.scaleY = scale
+                if (!visible) bar.visibility = View.INVISIBLE
+            }
+        }
+        val showsRevealZones = layoutMode == ReaderLayoutMode.IMMERSIVE && !visible
+        listOfNotNull(revealTopView, revealBottomView).forEach { zone ->
+            zone.visibility = if (showsRevealZones) View.VISIBLE else View.GONE
+        }
+    }
+
+    /** The colour Readium paints behind the page, for the root and the bars. */
+    private fun pageColorArgb(): Int = ReaderInterfaceDefaults.pageColorArgb(currentAppearance).toInt()
+
+    private fun pageComposeColor(): androidx.compose.ui.graphics.Color =
+        androidx.compose.ui.graphics.Color(pageColorArgb())
+
+    /**
+     * A compact right-edge reminder that quick translation is on (iOS
+     * `quickTranslationIndicator`). It only shows while the bars are away and
+     * fades out after a few seconds; hiding it never turns the mode off.
+     */
+    @androidx.compose.runtime.Composable
+    private fun QuickTranslationIndicator() {
+        val translationPreferences by graph.translationSettings.preferences.collectAsState()
+        val shows = translationPreferences.quickTranslationEnabled &&
+            isQuickTranslationIndicatorVisible &&
+            !isChromeVisible &&
+            currentTranslationState == null &&
+            currentWordLookupState == null &&
+            !isExpandingCrossPage
+        if (!shows) return
+        LaunchedEffect(Unit) {
+            delay(QUICK_TRANSLATION_INDICATOR_AUTO_EXIT_MILLIS)
+            isQuickTranslationIndicatorVisible = false
+        }
+        val unit = if (translationPreferences.quickTranslationUnit ==
+            com.jerreader.shared.translation.QuickTranslationUnit.PARAGRAPH
+        ) "点段" else "点句"
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            // The page's outer gutter, not over the first line of every page.
+            val centreX = (maxWidth - 18.dp).coerceAtLeast(18.dp)
+            val centreY = minOf(maxHeight - 72.dp, maxOf(72.dp, maxHeight * 0.30f))
+            Box(
+                modifier = Modifier
+                    .offset(x = centreX - 22.dp, y = centreY - 22.dp)
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.92f), CircleShape)
+                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.28f), CircleShape)
+                    .semantics { contentDescription = "${unit}翻译已开启" }
+                    .clickable(role = Role.Button, onClickLabel = "显示阅读控制") { showReaderControls() },
+                contentAlignment = Alignment.Center
+            ) {
+                JerreaderGlyph(
+                    icon = JerreaderIcon.TRANSLATION_BUBBLE_FILLED,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(17.dp)
+                )
+            }
+        }
+    }
+
+    /**
+     * The chapter under the slider thumb, resolved without navigating so the
+     * book does not jump around until the finger lifts (iOS
+     * `outlineItem(atProgression:)`).
+     */
+    private fun chapterTitleAtProgress(progress: Double): String {
+        if (positions.isEmpty()) return currentChapterName
+        val index = ((positions.size - 1) * progress.coerceIn(0.0, 1.0)).toInt()
+            .coerceIn(0, positions.lastIndex)
+        val target = positions[index]
+        if (pdfPublicationOpen) {
+            val page = target.locations.position ?: (index + 1)
+            val entry = tableOfContentsLinks.values
+                .mapNotNull { link -> pdfOutlinePage(link)?.let { it to link } }
+                .filter { (start, _) -> start <= page }
+                .maxByOrNull { (start, _) -> start }
+            return entry?.second?.title?.takeIf(String::isNotBlank) ?: currentChapterTitle(target)
+        }
+        val resource = readingOrder.indexOfFirst { it.url().toString() == target.href.toString() }
+        // A chapter split into several files keeps the title of the file the
+        // outline points at.
+        for (candidate in resource downTo 0) {
+            val href = readingOrder[candidate].url().toString()
+            val title = tableOfContentsLinks.values.firstOrNull { link ->
+                link.url().toString().substringBefore('#') == href
+            }?.title
+            if (!title.isNullOrBlank()) return title
+        }
+        return currentChapterTitle(target)
+    }
+
+    private fun pdfOutlinePage(link: Link): Int? =
+        link.url().toString().substringAfter('#', "")
+            .split('&')
+            .firstOrNull { it.startsWith("page=") }
+            ?.removePrefix("page=")
+            ?.toIntOrNull()
 
     private fun readerComposeView(
         content: @androidx.compose.runtime.Composable () -> Unit
     ): ComposeView = ComposeView(this).apply {
         setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-        setContent { ReaderTheme(content) }
+        setContent { ReaderPageTheme(content) }
     }
 
     private suspend fun openPublication(file: File, libraryBook: LibraryBook?) {
@@ -540,9 +930,7 @@ class ReaderActivity : AppCompatActivity() {
         }
 
         publication = openedPublication
-        if (book != null && readingStartedAtMillis == null) {
-            readingStartedAtMillis = System.currentTimeMillis()
-        }
+        if (book != null) session.recorder.startClock()
         readingOrder = openedPublication.readingOrder
         // Readium indexes can touch chapter resources; keep this work off the UI thread.
         positions = withContext(Dispatchers.IO) { openedPublication.positions() }
@@ -553,6 +941,7 @@ class ReaderActivity : AppCompatActivity() {
         )
         basePreferences = stored.epub
         currentAppearance = stored.appearance
+        rootView?.setBackgroundColor(pageColorArgb())
 
         when {
             openedPublication.conformsTo(Publication.Profile.EPUB) -> {
@@ -566,7 +955,8 @@ class ReaderActivity : AppCompatActivity() {
                     onSelectionInvalidated = ::clearTransientCardPresentation,
                     shortTapEnabled = {
                         !graph.translationSettings.preferences.value.quickTranslationEnabled
-                    }
+                    },
+                    onBlankTap = ::handleContentTap
                 )
                 wordInteractionController = wordController
                 val tapController = ReaderTapTranslationController(
@@ -588,25 +978,27 @@ class ReaderActivity : AppCompatActivity() {
                     onHapticFeedback = ::performTranslationHaptic,
                     onHighlightChanged = ::updateSelectionAnchor,
                     onSelectionInvalidated = ::clearTransientCardPresentation,
-                    appearance = { currentAppearance }
+                    appearance = { currentAppearance },
+                    onBlankTap = ::handleContentTap
                 )
                 tapTranslationController = tapController
                 val factory = EpubNavigatorFactory(openedPublication).createFragmentFactory(
                     initialLocator = initialLocator,
                     initialPreferences = basePreferences,
-                    configuration = EpubNavigatorFragment.Configuration(
-                        selectionActionModeCallback = tapController.selectionActionModeCallback
-                    )
+                    configuration = epubConfiguration(tapController)
                 )
                 attachEpubNavigator(factory)
             }
 
             openedPublication.conformsTo(Publication.Profile.PDF) -> {
                 buildTableOfContents(openedPublication.tableOfContents)
+                // Must be set before any stored locator is parsed: PDF
+                // locators from Jerreader 1.4.1 and earlier are one page ahead.
+                pdfPublicationOpen = true
                 val initialLocator = (intent.getStringExtra(EXTRA_INITIAL_LOCATOR) ?: libraryBook?.locatorJson)?.let(::parseLocator)
                 val factory = PdfNavigatorFactory(
                     openedPublication,
-                    PdfiumEngineProvider()
+                    pdfiumEngineProvider()
                 ).createFragmentFactory(initialLocator = initialLocator)
                 attachPdfNavigator(factory, file)
             }
@@ -618,6 +1010,18 @@ class ReaderActivity : AppCompatActivity() {
             }
         }
     }
+
+    /**
+     * Readium pads each reflowable page by `readium_navigator_epub_vertical_padding`
+     * (14dp here, iOS's content inset) and, by default, by the display cutout
+     * as well. The container's own padding already keeps clear of the cutout,
+     * so Readium adding it again only widened the blank margins.
+     */
+    private fun epubConfiguration(tapController: ReaderTapTranslationController) =
+        EpubNavigatorFragment.Configuration(
+            selectionActionModeCallback = tapController.selectionActionModeCallback,
+            shouldApplyInsetsPadding = false
+        )
 
     private fun attachEpubNavigator(factory: FragmentFactory) {
         attachNavigator(factory, EpubNavigatorFragment::class.java)
@@ -659,7 +1063,8 @@ class ReaderActivity : AppCompatActivity() {
             onPreviousPageRequested = ::goToPreviousPage,
             onNextPageRequested = ::goToNextPage,
             onHighlightChanged = ::updateSelectionHighlight,
-            onSelectionInvalidated = ::clearTransientCardPresentation
+            onSelectionInvalidated = ::clearTransientCardPresentation,
+            onBlankTap = ::handleContentTap
         )
         pdfTranslationController = controller
         controller.attach(fragment)
@@ -719,20 +1124,34 @@ class ReaderActivity : AppCompatActivity() {
     private fun observeLocator(collect: suspend (suspend (Locator) -> Unit) -> Unit) {
         locatorObservationJob?.cancel()
         locatorObservationJob = lifecycleScope.launch {
-            collect { locator ->
+            collect { emitted ->
+                // Every persisted PDF locator derives from this one; the marker
+                // tells later reads it already uses Readium 3.4 page positions.
+                val locator = if (pdfPublicationOpen) PdfLocatorFormat.mark(emitted) else emitted
                 resetTransientReaderState()
+                val locatorJson = locator.toJSON().toString()
                 latestLocator = locator
-                latestLocatorJson = locator.toJSON().toString()
+                latestLocatorJson = locatorJson
                 currentProgress = locator.locations.totalProgression ?: currentProgress
+                val previousChapterIndex = currentChapterIndex
+                val previousChapterName = currentChapterName
                 currentChapterIndex = readingOrder.indexOfFirst {
                     it.url().toString() == locator.href.toString()
                 }
                 currentChapterName = currentChapterTitle(locator)
+                // Reading on into the next chapter offers its 90-second loop
+                // through the AI button's dot; nothing pops up over the page.
+                if (book != null && previousChapterIndex >= 0 &&
+                    currentChapterIndex == previousChapterIndex + 1 &&
+                    previousChapterName.isNotBlank() && previousChapterName != currentChapterName
+                ) {
+                    finishedChapterTitle = previousChapterName
+                    hasCompanionUpdate = true
+                }
                 applyWritingModeOverride()
                 refreshBookmarkState()
                 refreshPdfAnnotationRects(locator)
-                delay(PROGRESS_SAVE_DEBOUNCE_MILLIS)
-                persistLatestLocator()
+                session.recorder.recordPosition(locatorJson, currentProgress)
             }
         }
     }
@@ -809,18 +1228,30 @@ class ReaderActivity : AppCompatActivity() {
         append(((locator.locations.progression ?: 0.0) * 10_000).toInt())
     }
 
+    /**
+     * The bookmark on this page. An old PDF bookmark's key was built from the
+     * shifted progression, so it is also matched by its corrected locator.
+     */
+    private fun bookmarkAt(locator: Locator): ReadingBookmarkEntity? {
+        val key = bookmarkKey(locator)
+        return bookmarks.firstOrNull { it.bookmarkKey == key }
+            ?: if (!pdfPublicationOpen) null else bookmarks.firstOrNull { record ->
+                parseLocator(record.locatorJson)?.let(::bookmarkKey) == key
+            }
+    }
+
     private fun refreshBookmarkState() {
         val locator = latestLocator
-        isCurrentPositionBookmarked = locator != null &&
-            bookmarks.any { it.bookmarkKey == bookmarkKey(locator) }
+        isCurrentPositionBookmarked = locator != null && bookmarkAt(locator) != null
     }
 
     private fun toggleBookmark() {
         val locator = latestLocator ?: return
         val libraryBook = book ?: return
+        val key = bookmarkAt(locator)?.bookmarkKey ?: bookmarkKey(locator)
         lifecycleScope.launch {
             graph.readerRecords.toggleBookmark(
-                key = bookmarkKey(locator),
+                key = key,
                 bookId = libraryBook.id,
                 bookTitle = libraryBook.title,
                 locatorJson = locator.toJSON().toString(),
@@ -841,6 +1272,7 @@ class ReaderActivity : AppCompatActivity() {
     internal fun applyAppearance(appearance: ReaderAppearance) {
         val previousOrientation = currentAppearance.orientation
         currentAppearance = appearance
+        rootView?.setBackgroundColor(pageColorArgb())
         val updated = appearance.toEpubPreferences(basePreferences)
         basePreferences = updated
         navigator?.submitPreferences(updated)
@@ -876,9 +1308,7 @@ class ReaderActivity : AppCompatActivity() {
         val factory = EpubNavigatorFactory(openedPublication).createFragmentFactory(
             initialLocator = resumeLocator,
             initialPreferences = preferences,
-            configuration = EpubNavigatorFragment.Configuration(
-                selectionActionModeCallback = tapController.selectionActionModeCallback
-            )
+            configuration = epubConfiguration(tapController)
         )
         attachEpubNavigator(factory)
     }
@@ -1047,15 +1477,43 @@ class ReaderActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * 阅读与翻译 as iOS presents it: a large sheet over the page, with 翻译与 AI
+     * and the pages under it pushed inside the sheet instead of leaving the
+     * book. The window spans the screen so the sheet can dim the page and
+     * slide in; it keeps the reader's status-bar choice and icon colours.
+     */
     private fun showAppearance() {
-        showComposeDialog {
-            ReaderAppearancePanel(
-                appearance = currentAppearance,
-                onChange = ::applyAppearance,
-                isPdf = pdfNavigator != null,
-                interfaceControls = { com.jerreader.android.ui.ReaderInterfaceControls(graph.appSettings) }
-            )
+        val dialog = ComponentDialog(this, android.R.style.Theme_Translucent_NoTitleBar)
+        dialog.setContentView(dialogComposeView {
+            ReaderTheme {
+                ReaderSettingsSheet(
+                    graph = graph,
+                    bookTitle = book?.title.orEmpty(),
+                    isPdf = pdfNavigator != null,
+                    publicationIsVertical = publicationWritingModeIsVertical,
+                    appearance = currentAppearance,
+                    onAppearanceChange = ::applyAppearance,
+                    onDismissed = dialog::dismiss
+                )
+            }
+        })
+        dialog.window?.let { sheetWindow ->
+            sheetWindow.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            sheetWindow.setBackgroundDrawable(Color.TRANSPARENT.toDrawable())
+            androidx.core.view.WindowCompat.setDecorFitsSystemWindows(sheetWindow, false)
+            val readerBars = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+            val sheetBars = androidx.core.view.WindowCompat.getInsetsController(sheetWindow, sheetWindow.decorView)
+            sheetBars.isAppearanceLightStatusBars = readerBars.isAppearanceLightStatusBars
+            sheetBars.isAppearanceLightNavigationBars = readerBars.isAppearanceLightNavigationBars
+            val preferences = graph.appSettings.preferences.value
+            if (preferences.immersiveReading || preferences.layoutMode == ReaderLayoutMode.IMMERSIVE) {
+                sheetBars.systemBarsBehavior =
+                    androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                sheetBars.hide(WindowInsetsCompat.Type.statusBars())
+            }
         }
+        dialog.show()
     }
 
     private fun requestAnnotationForSelection() {
@@ -1261,14 +1719,35 @@ class ReaderActivity : AppCompatActivity() {
                 .coerceIn(0.dp, available)
             val rawAnchorBottom = with(density) { anchorBottomPx.toDp() }
                 .coerceIn(0.dp, available)
-            // Reserve the same visual regions as the reader content. The old
-            // solver compared against the full window and could therefore put
-            // a result card on top of the bottom page controls (or directly on
-            // top of the selected sentence when both regions were small).
-            val safeTop = 12.dp.coerceAtLeast(CONTENT_TOP_INSET_DP.dp)
-                .coerceAtMost(available)
-            val safeBottom = (available - CONTENT_BOTTOM_INSET_DP.dp)
+            // Keep clear of the bars while they show and of the screen edge
+            // otherwise, as iOS `ReaderTranslationLayer` does. The old solver
+            // compared against the full window and could put a result card on
+            // top of the page controls. The layer itself already sits inside
+            // the system bars, which the bars paint behind.
+            val chromeShown = isChromeVisible
+            val topChromeInLayer = with(density) {
+                (if (chromeShown) (topChromeHeightPx - systemBarTopPx).coerceAtLeast(0) else 0).toDp()
+            }
+            val bottomChromeInLayer = with(density) {
+                (if (chromeShown) (bottomChromeHeightPx - systemBarBottomPx).coerceAtLeast(0) else 0).toDp()
+            }
+            val edgeGap = ReaderInterfaceDefaults.FLOATING_CARD_EDGE_GAP_DP.dp
+            val safeTop = (topChromeInLayer + edgeGap).coerceAtMost(available)
+            val safeBottom = (available - bottomChromeInLayer - edgeGap)
                 .coerceAtLeast(safeTop)
+            if (com.jerreader.android.BuildConfig.DEBUG) {
+                val safeTopPx = with(density) { safeTop.toPx() }
+                val safeBottomPx = with(density) { safeBottom.toPx() }
+                SideEffect {
+                    val viewport = translationViewportForTesting
+                    if (viewport != null) {
+                        translationSafeAreaForTesting = RectF(
+                            viewport.left, viewport.top + safeTopPx,
+                            viewport.right, viewport.top + safeBottomPx
+                        )
+                    }
+                }
+            }
             val selectionTop = rawAnchorTop.coerceIn(safeTop, safeBottom)
             val selectionBottom = rawAnchorBottom.coerceIn(selectionTop, safeBottom)
             val roomBelow = (safeBottom - selectionBottom - selectionGap).coerceAtLeast(0.dp)
@@ -1506,6 +1985,7 @@ class ReaderActivity : AppCompatActivity() {
                         onCopy = ::copyToClipboard,
                         onFavorite = { result -> favoriteTranslation(translation, result) },
                         onExplain = { explainTranslation(translation) },
+                        onLens = { showReadingLensChooser(translation) },
                         onSaveAnalysis = {
                             val success = translation as? TranslationCardState.Success
                             val analysis = success?.analysisText
@@ -1554,12 +2034,19 @@ class ReaderActivity : AppCompatActivity() {
                         onCopy = ::copyToClipboard,
                         onFavorite = { explanation ->
                             lifecycleScope.launch {
-                                graph.learningRecords.recordLookup(
-                                    explanation = explanation,
-                                    sourceBookId = book?.id,
-                                    sourceBookTitle = book?.title,
-                                    favorite = true
-                                )
+                                val key = LearningRecordRepository.wordKey(explanation)
+                                // Already recorded when the card loaded; only
+                                // star it, so one lookup is not counted twice.
+                                if (recordedReaderLookupKey == key) {
+                                    graph.learningRecords.setWordFavorite(key, true)
+                                } else {
+                                    graph.learningRecords.recordLookup(
+                                        explanation = explanation,
+                                        sourceBookId = book?.id,
+                                        sourceBookTitle = book?.title,
+                                        favorite = true
+                                    )
+                                }
                             }
                         }
                     )
@@ -1590,40 +2077,89 @@ class ReaderActivity : AppCompatActivity() {
             val rect = navigator?.currentSelection()?.rect
             val density = resources.displayMetrics.density
             if (rect != null) {
-                anchorTopPx = (readerContentTopPx + rect.top).toInt()
-                anchorBottomPx = (readerContentTopPx + rect.bottom).toInt()
-                anchorLeftPx = rect.left.toInt()
-                anchorRightPx = rect.right.toInt()
+                // Readium reports this rect in navigator coordinates: it adds
+                // its own page padding, unlike the page script's rects.
+                val offset = offsetInOverlay(navigator?.publicationView)
+                anchorTopPx = (offset[1] + rect.top).toInt()
+                anchorBottomPx = (offset[1] + rect.bottom).toInt()
+                anchorLeftPx = (offset[0] + rect.left).toInt()
+                anchorRightPx = (offset[0] + rect.right).toInt()
                 return@launch
             }
             val epubPoint = tapTranslationController?.focusPoint()
             val pdfPoint = pdfTranslationController?.focusPoint()
             if (epubPoint != null) {
-                val navigatorView = navigator?.publicationView ?: pdfNavigator?.publicationView
-                val viewLocation = IntArray(2)
-                val overlayLocation = IntArray(2)
-                navigatorView?.getLocationInWindow(viewLocation)
-                floatingLayer?.getLocationInWindow(overlayLocation)
-                val x = epubPoint.x * density + viewLocation[0] - overlayLocation[0]
-                val y = epubPoint.y * density + viewLocation[1] - overlayLocation[1]
+                // Readium hands taps over in the page WebView's own pixels.
+                val offset = offsetInOverlay(visibleEpubWebView() ?: navigator?.publicationView)
+                val x = epubPoint.x * density + offset[0]
+                val y = epubPoint.y * density + offset[1]
                 anchorLeftPx = x.toInt()
                 anchorRightPx = x.toInt()
                 anchorTopPx = (y - 12 * density).toInt()
                 anchorBottomPx = (y + 12 * density).toInt()
             } else if (pdfPoint != null) {
-                val navigatorView = pdfNavigator?.publicationView
-                val viewLocation = IntArray(2)
-                val overlayLocation = IntArray(2)
-                navigatorView?.getLocationInWindow(viewLocation)
-                floatingLayer?.getLocationInWindow(overlayLocation)
-                val x = pdfPoint.x + viewLocation[0] - overlayLocation[0]
-                val y = pdfPoint.y + viewLocation[1] - overlayLocation[1]
+                val offset = offsetInOverlay(pdfNavigator?.publicationView)
+                val x = pdfPoint.x + offset[0]
+                val y = pdfPoint.y + offset[1]
                 anchorLeftPx = x.toInt()
                 anchorRightPx = x.toInt()
                 anchorTopPx = (y - 12 * density).toInt()
                 anchorBottomPx = (y + 12 * density).toInt()
             }
         }
+    }
+
+    /**
+     * Where [view] sits in the floating layers' content, which starts inside
+     * their system-bar padding.
+     */
+    private fun offsetInOverlay(view: View?): IntArray {
+        val result = IntArray(2)
+        val target = view ?: return result
+        val layer = highlightLayer ?: floatingLayer ?: return result
+        val viewLocation = IntArray(2)
+        val layerLocation = IntArray(2)
+        target.getLocationInWindow(viewLocation)
+        layer.getLocationInWindow(layerLocation)
+        result[0] = viewLocation[0] - layerLocation[0] - layer.paddingLeft
+        result[1] = viewLocation[1] - layerLocation[1] - layer.paddingTop
+        return result
+    }
+
+    /**
+     * The WebView of the page on screen. Readium insets each page inside the
+     * navigator by its vertical padding, and the page script measures from
+     * the WebView, so script rects and tap points are placed from here.
+     */
+    private fun visibleEpubWebView(): View? {
+        val root = navigator?.publicationView ?: return null
+        val rootLocation = IntArray(2)
+        root.getLocationInWindow(rootLocation)
+        val centreX = rootLocation[0] + root.width / 2
+        var found: View? = null
+        fun visit(view: View) {
+            if (found != null) return
+            if (view is android.webkit.WebView) {
+                if (view.isShown && view.width > 0) {
+                    val location = IntArray(2)
+                    view.getLocationInWindow(location)
+                    if (centreX >= location[0] && centreX < location[0] + view.width) found = view
+                }
+                return
+            }
+            if (view is ViewGroup) for (index in 0 until view.childCount) visit(view.getChildAt(index))
+        }
+        visit(root)
+        return found
+    }
+
+    /**
+     * iOS puts the bars away when a card opens; in the standard layout they
+     * stay regardless, so only the immersive one changes.
+     */
+    private fun hideControlsForCard() {
+        if (layoutMode == ReaderLayoutMode.IMMERSIVE) cancelChromeAutoHide()
+        setControlsVisible(false)
     }
 
     private fun setFloatingLayerVisible(visible: Boolean) {
@@ -1689,6 +2225,8 @@ class ReaderActivity : AppCompatActivity() {
 
     private fun showWordLookup(state: WordLookupCardState) {
         if (state is WordLookupCardState.Loading) recordReadingQuery()
+        hideControlsForCard()
+        if (state is WordLookupCardState.Success) recordReaderLookup(state.explanation)
         popupAvoidanceX = 0f
         popupAvoidanceY = 0f
         currentWordLookupState = state
@@ -1696,8 +2234,32 @@ class ReaderActivity : AppCompatActivity() {
         updateFloatingAnchor()
     }
 
+    /**
+     * A short tap (or the selection menu's 查词) writes the learning record
+     * as soon as the dictionary answers, with the tapped sentence, the same
+     * as the iOS contextual lookup. The companion's confusion map reads these.
+     */
+    private fun recordReaderLookup(explanation: WordExplanation) {
+        val key = LearningRecordRepository.wordKey(explanation)
+        lifecycleScope.launch {
+            try {
+                graph.learningRecords.recordLookup(
+                    explanation = explanation,
+                    sourceBookId = book?.id,
+                    sourceBookTitle = book?.title
+                )
+                recordedReaderLookupKey = key
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                android.util.Log.w("Jerreader", "Reader word lookup could not be recorded")
+            }
+        }
+    }
+
     private fun showTranslation(state: TranslationCardState) {
         if (state is TranslationCardState.Loading) recordReadingQuery()
+        hideControlsForCard()
         cardDragX = 0f
         cardDragY = 0f
         popupAvoidanceX = 0f
@@ -1741,21 +2303,20 @@ class ReaderActivity : AppCompatActivity() {
             popupAvoidanceY = 0f
             anchorTopPx = (readerContentTopPx + rects.minOf { it.top }).toInt()
             anchorBottomPx = (readerContentTopPx + rects.maxOf { it.bottom }).toInt()
-            anchorLeftPx = rects.minOf { it.left }.toInt()
-            anchorRightPx = rects.maxOf { it.right }.toInt()
+            anchorLeftPx = (readerContentLeftPx + rects.minOf { it.left }).toInt()
+            anchorRightPx = (readerContentLeftPx + rects.maxOf { it.right }).toInt()
         }
     }
 
     private fun updateReaderContentOffset() {
-        val publicationView = navigator?.publicationView ?: pdfNavigator?.publicationView
-        val location = IntArray(2)
-        val overlayLocation = IntArray(2)
-        publicationView?.getLocationInWindow(location)
-        val highlight = highlightLayer ?: floatingLayer
-        highlight?.getLocationInWindow(overlayLocation)
-        val overlayPadTop = highlight?.paddingTop ?: 0
-        readerContentLeftPx = location[0] - overlayLocation[0]
-        readerContentTopPx = (location[1] - overlayLocation[1] - overlayPadTop).coerceAtLeast(0)
+        // EPUB rects come from the page script, measured in the page's
+        // WebView; PDF rects are measured in the PDF view itself.
+        val contentView = visibleEpubWebView()
+            ?: navigator?.publicationView
+            ?: pdfNavigator?.publicationView
+        val offset = offsetInOverlay(contentView)
+        readerContentLeftPx = offset[0]
+        readerContentTopPx = offset[1].coerceAtLeast(0)
     }
 
     @androidx.compose.runtime.Composable
@@ -1862,30 +2423,171 @@ class ReaderActivity : AppCompatActivity() {
         }
     }
 
-    private fun explainTranslation(state: TranslationCardState) {
+    /**
+     * Without [lensMode] this is the original sentence-structure analysis. With
+     * one it is an AI reading-lens question, asked with a little surrounding
+     * text and a hint level drawn from this book's real reading difficulties.
+     */
+    private fun explainTranslation(state: TranslationCardState, lensMode: AIReadingLensMode? = null) {
         val service = graph.translationService as? ContextExplanationService ?: return
         lifecycleScope.launch {
-            crossPageMessage = "正在请求 AI 解析…"
+            crossPageMessage = if (lensMode == null) "正在请求 AI 解析…" else "正在生成“${lensMode.title}”…"
+            val context = if (lensMode == null) null else readingLensContext(state.sourceText)
+            val lens = lensMode?.let { mode ->
+                ReadingLensOptions.from(
+                    mode,
+                    companionMode,
+                    AdaptiveReadingAssistPolicy.resolve(readingSignals(), companionMode, book?.id)
+                )
+            }
             val explained = runCatching {
                 withContext(Dispatchers.IO) { service.explain(
                     ContextExplanationRequest(
                         focusedText = state.sourceText,
-                        contextText = null,
-                        sourceLanguage = translationSourceLanguage(state)
+                        contextText = context,
+                        sourceLanguage = translationSourceLanguage(state),
+                        lens = lens
                     )
                 ) }
             }.getOrNull()
             if (explained == null) {
-                crossPageMessage = "AI 解析不可用，请先在设置里配置 AI 服务。"
+                crossPageMessage = if (lensMode == null) {
+                    "AI 解析不可用，请先在设置里配置 AI 服务。"
+                } else {
+                    "AI 阅读透镜不可用，请先在设置里配置 AI 服务。"
+                }
                 return@launch
             }
             crossPageMessage = null
             val current = currentTranslationState
             if (current is TranslationCardState.Success && current.sourceText == state.sourceText) {
-                currentTranslationState = current.copy(analysisText = explained.explanation)
+                currentTranslationState = if (lensMode == null || lens == null) {
+                    current.copy(
+                        analysisText = explained.explanation,
+                        analysisTitle = "句子结构",
+                        analysisDetail = null,
+                        analysisSavable = true
+                    )
+                } else {
+                    current.copy(
+                        analysisText = explained.explanation,
+                        analysisTitle = lensMode.title,
+                        analysisDetail = buildString {
+                            append(if (context.isNullOrBlank()) "依据：当前选区" else "依据：当前选区 + 有限前后文")
+                            currentChapterName.takeIf(String::isNotBlank)?.let { append(" · $it") }
+                            append(" · ${lens.companionMode.title}伴读 · ${lens.assistLevel.title} · 防剧透")
+                        },
+                        analysisSavable = lensMode == AIReadingLensMode.GRAMMAR
+                    )
+                }
             }
         }
     }
+
+    /** A little text around the selection; a slow page never holds the request up. */
+    private suspend fun readingLensContext(sourceText: String): String? = try {
+        kotlinx.coroutines.withTimeoutOrNull(1_000) {
+            pdfTranslationController?.crossPageContext(sourceText)
+                ?: tapTranslationController?.crossPageContext(sourceText)
+        }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        null
+    }
+
+    private suspend fun readingSignals(): List<ReadingErrorSignal> = try {
+        graph.learningRecords.readingErrorSignals()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        emptyList()
+    }
+
+    private fun showReadingLensChooser(state: TranslationCardState) {
+        showComposeDialog { dialog ->
+            AIReadingLensChooser(
+                companionMode = companionMode,
+                onChoose = { mode ->
+                    dialog.dismiss()
+                    explainTranslation(state, mode)
+                },
+                onModeChange = ::persistCompanionMode,
+                onDismiss = dialog::dismiss
+            )
+        }
+    }
+
+    private fun showReadingCompanion() {
+        val currentBook = book ?: return
+        hasCompanionUpdate = false
+        lifecycleScope.launch {
+            val confusion = ReadingConfusionMapPolicy.build(readingSignals(), bookId = currentBook.id)
+            val closureChapter = finishedChapterTitle ?: currentChapterName.ifBlank { "当前章节" }
+            showComposeDialog { dialog ->
+                ReaderCompanionPanel(
+                    mode = companionMode,
+                    recap = ContinuationRecapPolicy.build(
+                        mode = companionMode,
+                        bookTitle = currentBook.title,
+                        chapterTitle = currentChapterName,
+                        confusionItems = confusion.items
+                    ),
+                    confusion = confusion,
+                    closureChapterTitle = closureChapter,
+                    onModeChange = ::persistCompanionMode,
+                    onSearchTerm = { term ->
+                        dialog.dismiss()
+                        searchBookFor(term)
+                    },
+                    onStartClosure = {
+                        dialog.dismiss()
+                        showChapterClosure(closureChapter, confusion)
+                    },
+                    onDismiss = dialog::dismiss
+                )
+            }
+        }
+    }
+
+    private fun showChapterClosure(chapterTitle: String, confusion: ReadingConfusionMap) {
+        finishedChapterTitle = null
+        val plan = ChapterClosurePolicy.build(companionMode, chapterTitle, confusion.items)
+        showComposeDialog { dialog ->
+            ReaderChapterClosurePanel(
+                plan = plan,
+                onSearchTerm = { term ->
+                    dialog.dismiss()
+                    searchBookFor(term)
+                },
+                onDismiss = dialog::dismiss
+            )
+        }
+    }
+
+    /** Words keep no locator, so "back to the text" is a book search for them. */
+    private fun searchBookFor(term: String) {
+        searchQuery = term
+        runSearch()
+        showNavigationPanel()
+    }
+
+    private fun loadCompanionMode(bookId: String): ReadingCompanionMode =
+        ReadingCompanionMode.fromStorageId(
+            getSharedPreferences(COMPANION_PREFERENCES, MODE_PRIVATE)
+                .getString(companionModeKey(bookId), null)
+        )
+
+    /** The mode belongs to the book: a novel and an essay collection read differently. */
+    private fun persistCompanionMode(mode: ReadingCompanionMode) {
+        companionMode = mode
+        val bookId = book?.id ?: return
+        getSharedPreferences(COMPANION_PREFERENCES, MODE_PRIVATE).edit {
+            putString(companionModeKey(bookId), mode.storageId)
+        }
+    }
+
+    private fun companionModeKey(bookId: String) = "mode_$bookId"
 
     /**
      * Completes a sentence cut by a screen or page boundary before asking the
@@ -1992,6 +2694,35 @@ class ReaderActivity : AppCompatActivity() {
         setFloatingLayerVisible(true)
     }
 
+    /** Window frames of the bars while they show, for the overlay tests. */
+    internal fun chromeFramesForTesting(): Pair<RectF?, RectF?> {
+        fun frame(view: View?): RectF? {
+            if (view == null || !isChromeVisible || view.visibility != View.VISIBLE) return null
+            val location = IntArray(2)
+            view.getLocationInWindow(location)
+            return RectF(
+                location[0].toFloat(), location[1].toFloat(),
+                (location[0] + view.width).toFloat(), (location[1] + view.height).toFloat()
+            )
+        }
+        return frame(topChromeView) to frame(bottomChromeView)
+    }
+
+    /** The page container's top and bottom padding, in pixels. */
+    internal fun readerContentPaddingForTesting(): Pair<Int, Int> =
+        (readerContainerView?.paddingTop ?: 0) to (readerContainerView?.paddingBottom ?: 0)
+
+    internal fun systemBarInsetsForTesting(): Pair<Int, Int> = systemBarTopPx to systemBarBottomPx
+
+    internal fun revealZonesVisibleForTesting(): Boolean =
+        revealTopView?.visibility == View.VISIBLE && revealBottomView?.visibility == View.VISIBLE
+
+    internal fun tapRevealZoneForTesting(top: Boolean): Boolean =
+        (if (top) revealTopView else revealBottomView)?.performClick() == true
+
+    /** The path a tap on no text takes. */
+    internal fun tapBlankPageForTesting() = handleContentTap()
+
     internal suspend fun lookupAtForTesting(point: PointF): WordLookupCardState? =
         wordInteractionController?.lookupAt(point)
 
@@ -2030,6 +2761,21 @@ class ReaderActivity : AppCompatActivity() {
         JerreaderTheme(accent = preferences.theme, content = content)
     }
 
+    /**
+     * Bars, cards and highlights take light or dark from the page, as iOS sets
+     * the reader's colour scheme from `prefersDarkReaderChrome`, so a dark page
+     * gets light controls whatever the system theme.
+     */
+    @androidx.compose.runtime.Composable
+    private fun ReaderPageTheme(content: @androidx.compose.runtime.Composable () -> Unit) {
+        val preferences by graph.appSettings.preferences.collectAsState()
+        JerreaderTheme(
+            accent = preferences.theme,
+            dark = ReaderInterfaceDefaults.prefersDarkChrome(currentAppearance),
+            content = content
+        )
+    }
+
     private fun dialogComposeView(
         content: @androidx.compose.runtime.Composable () -> Unit
     ): ComposeView = ComposeView(this).apply {
@@ -2038,71 +2784,6 @@ class ReaderActivity : AppCompatActivity() {
         setViewTreeSavedStateRegistryOwner(this@ReaderActivity)
         setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
         setContent(content)
-    }
-
-    private fun persistLatestLocator() {
-        val bookId = book?.id ?: return
-        val locatorJson = latestLocatorJson ?: return
-        val progress = currentProgress
-        progressPersistenceJob?.cancel()
-        progressPersistenceJob = graph.applicationScope.launch {
-            progressPersistenceMutex.withLock {
-                graph.repository.updateReadingProgress(
-                    id = bookId,
-                    locatorJson = locatorJson,
-                    openedAtEpochMillis = System.currentTimeMillis(),
-                    progress = progress
-                )
-            }
-        }
-    }
-
-    /** Flushes the newest locator before Android can destroy the Activity/process. */
-    @SuppressLint("LogNotTimber")
-    private fun flushLatestLocator() {
-        val bookId = book?.id ?: return
-        val locatorJson = latestLocatorJson ?: return
-        val progress = currentProgress
-        progressPersistenceJob?.cancel()
-        runCatching {
-            runBlocking(Dispatchers.IO) {
-                progressPersistenceMutex.withLock {
-                    graph.repository.updateReadingProgress(
-                        id = bookId,
-                        locatorJson = locatorJson,
-                        openedAtEpochMillis = System.currentTimeMillis(),
-                        progress = progress
-                    )
-                }
-            }
-        }.onFailure { error ->
-            Log.w(INTEGRITY_TAG, "Unable to flush reading progress", error)
-        }
-        progressPersistenceJob = null
-    }
-
-    private fun accumulateReadingTime() {
-        val started = readingStartedAtMillis ?: return
-        val elapsed = (System.currentTimeMillis() - started).coerceAtLeast(0L) / 1000.0
-        accumulatedReadingSeconds += elapsed
-        readingStartedAtMillis = null
-    }
-
-    @SuppressLint("LogNotTimber")
-    private fun flushReadingTime() {
-        val bookId = book?.id ?: return
-        val seconds = accumulatedReadingSeconds
-        if (seconds < MINIMUM_RECORDED_READING_SECONDS) return
-        runCatching {
-            runBlocking(Dispatchers.IO) {
-                graph.repository.addReadingTime(bookId, seconds)
-            }
-            // Clear the accumulator only after the database confirms the write;
-            // a later lifecycle callback can retry a failed write safely.
-            accumulatedReadingSeconds = 0.0
-        }.onFailure { error ->
-            Log.w(INTEGRITY_TAG, "Unable to flush reading time", error)
-        }
     }
 
     private fun showError(message: String) {
@@ -2133,7 +2814,17 @@ class ReaderActivity : AppCompatActivity() {
 
     private fun parseLocator(json: String): Locator? = runCatching {
         Locator.fromJSON(JSONObject(json))
-    }.getOrNull()
+    }.getOrNull()?.let { locator ->
+        if (pdfPublicationOpen) PdfLocatorFormat.normalize(locator, positions) else locator
+    }
+
+    /**
+     * Readium 3.4 pages PDFs horizontally by default; Jerreader keeps the
+     * continuous vertical scroll its PDF tap translation and annotations map onto.
+     */
+    private fun pdfiumEngineProvider() = PdfiumEngineProvider(
+        defaults = PdfiumDefaults(scroll = true)
+    )
 
     private fun currentBookLanguage(): LanguageCode? {
         val tag = book?.language?.lowercase().orEmpty()
@@ -2163,16 +2854,19 @@ class ReaderActivity : AppCompatActivity() {
         // layer for OCR selections and persisted page rectangles.
         private const val DRAW_OWN_SELECTION_HIGHLIGHT = false
         private val GAP = 18.dp
-        private const val CONTENT_TOP_INSET_DP = 52
-        private const val CONTENT_BOTTOM_INSET_DP = 128
+        /** About iOS `JerreaderMotion.stateChange` (a 0.34 s spring). */
+        private const val CHROME_FADE_MILLIS = 300L
+        private const val CHROME_HIDDEN_SCALE = 0.985f
+        /** iOS `ReaderQuickTranslationIndicatorTiming.standard`. */
+        private const val QUICK_TRANSLATION_INDICATOR_AUTO_EXIT_MILLIS = 5_000L
         private const val ANNOTATION_DECORATION_GROUP = "jerreader-reading-annotations"
         private const val NAVIGATOR_TAG = "JerreaderNavigator"
         private const val INTEGRITY_TAG = "JerreaderIntegrity"
-        private const val PROGRESS_SAVE_DEBOUNCE_MILLIS = 500L
-        private const val MINIMUM_RECORDED_READING_SECONDS = 3.0
         private const val READER_OPEN_TIMEOUT_MILLIS = 25_000L
         private const val PDF_GEOMETRY_REFRESH_DELAY_MILLIS = 80L
         private const val SEARCH_RESULT_LIMIT = 80
         private const val SEARCH_PAGE_LIMIT = 6
+        private const val COMPANION_PREFERENCES = "jerreader_reader_companion"
+        private const val CONTINUATION_RECAP_MIN_PROGRESS = 0.01
     }
 }
