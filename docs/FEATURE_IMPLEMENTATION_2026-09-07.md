@@ -35,7 +35,7 @@ SHA-256：`1a6947e04785db63613a92e14903cdae7954f7e84860b10e68e5c7cbb3f9c3cf`。
 - Swift SQLite 主机检查：`scripts/test_offline_dictionary.swift`，本地 Mock 下载/损坏包保留旧索引/删除/带引号 CSV 块边界，通过。另用已下载的真实 ECDICT 文件完成全包哈希、770,611 条输入索引与查询检查，通过；测试套件本身不访问网络。
 - 最终 iOS generic Debug arm64 无签名构建：通过，日志 `.build/features-fixed-ios.log`。首次检查发现 Swift 6 对 SwiftData 非 Sendable SDK 类型的声明报错，修复为与原工程一致的 `@preconcurrency import` 后进行修正验证。
 - 最终 Android APK / tests / lint：通过，日志 `.build/features-verified-android.log`。共享模块 77 项、App 24 项，共 101 项单元测试，0 失败、0 跳过；lint 0 项问题。包括内容与修改时间的既有 PublicationIntegrity 主机测试；不等于真实 ReaderActivity 设备验收。前次打包时 D8 发现 127 个带 ` 2.class` 名称的生成副本；已仅隔离报错编译目录内、具有正常同名 class 对应项的副本到 `.build/quarantined-class-copies`，未删除源代码。编译中还修正了未提供的日志库引用，继续使用 Android 平台日志。
-- SwiftData 主机 schema 升级检查：按发行提交 `5104606` 的原始顶层模型属性创建 V1 磁盘库，再使用当前冻结 V1 与 V2 迁移计划升级，词条收藏字段保留、新复习字段为空，通过。这是 macOS 数据层主机检查，不代替 iOS App 迁移测试。
+- SwiftData 主机 schema 升级检查：按发行提交 `b2ae39b` 的原始顶层模型属性创建 V1 磁盘库，再使用当前冻结 V1 与 V2 迁移计划升级，词条收藏字段保留、新复习字段为空，通过。这是 macOS 数据层主机检查，不代替 iOS App 迁移测试。
 - Android SQLite 迁移主机检查：`python3 scripts/test_room_learning_migration.py` 实际执行 v5→v9 迁移 SQL，验证与 Room v9 导出字段一致、所有旧表样本行保留、新学习字段为空，通过。这不代替 Room 设备迁移测试。
 - 前一轮未运行 iOS Simulator / 实际设备 / UI；后续用户明确要求 UI 校验，已尝试指定的单个模拟器，但因系统负载异常中止。出版物内容＋修改时间正式回归仍待安全设备环境，不能用主机逻辑检查代替。
 
