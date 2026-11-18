@@ -89,6 +89,7 @@ class ReaderTapTranslationTest {
                 assertEquals("She went home.", fromDeviceTap.sourceText)
                 captureReader("android-reader-translation")
                 verifyOverlayMatrix(activity)
+                verifyCrampedOverlayAndDrag(activity)
                 verifyReaderInterfaceControls(activity)
             }
 
@@ -179,6 +180,95 @@ class ReaderTapTranslationTest {
             graph.translationSettings.updateDisplayMode(display)
             graph.appSettings.updateJapaneseFurigana(original.japaneseFuriganaEnabled)
         }
+    }
+
+    /**
+     * GitHub issue #2. A selection that fills the page leaves no room for the
+     * card above or below it: the card used to shrink to a sliver against the
+     * screen edge, or be pushed off screen, with its drag handle out of reach.
+     * It must keep a readable height between the bars, and a drag must stop at
+     * the same bounds.
+     */
+    private suspend fun verifyCrampedOverlayAndDrag(activity: ReaderActivity) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val density = instrumentation.targetContext.resources.displayMetrics.density
+        val viewport = withContext(Dispatchers.Main) { android.graphics.RectF(checkNotNull(activity.translationViewportForTesting)) }
+        val safeArea = withContext(Dispatchers.Main) { android.graphics.RectF(checkNotNull(activity.translationSafeAreaForTesting)) }
+        val safe = android.graphics.RectF(viewport.left + 12 * density, safeArea.top,
+            viewport.right - 12 * density, safeArea.bottom)
+        val (topBar, bottomBar) = withContext(Dispatchers.Main) { activity.chromeFramesForTesting() }
+        checkNotNull(topBar) { "The standard layout lost its top bar" }
+        checkNotNull(bottomBar) { "The standard layout lost its bottom bar" }
+        val evidence = StringBuilder()
+        val evidenceFile = File(
+            File(instrumentation.targetContext.getExternalFilesDir(null), "learning-ui").apply { mkdirs() },
+            "translation-geometry-cramped.txt"
+        )
+
+        suspend fun settledCard(label: String): android.graphics.RectF {
+            var frame: android.graphics.RectF? = null
+            var previous: android.graphics.RectF? = null
+            var stable = 0
+            val samples = mutableListOf<String>()
+            repeat(20) {
+                kotlinx.coroutines.delay(150)
+                val next = withContext(Dispatchers.Main) { activity.translationCardFrameForTesting?.let { android.graphics.RectF(it) } }
+                samples += next?.toString() ?: "not-measured"
+                if (next != null && next.width() > 0 && next.height() > 0) {
+                    stable = if (previous == next) stable + 1 else 0
+                    previous = next
+                    if (stable >= 3) frame = next
+                }
+            }
+            if (stable < 3 || frame == null) captureReader("android-translation-failure-$label")
+            check(stable >= 3) { "Translation card kept moving: $label; samples=$samples" }
+            val card = checkNotNull(frame) { "No stable translation card: $label" }
+            assertTrue("Outside the safe area, $label: card=$card safe=$safe",
+                card.left >= safe.left - 2 && card.right <= safe.right + 2 &&
+                    card.top >= safe.top - 2 && card.bottom <= safe.bottom + 2)
+            assertTrue("Card under the top bar, $label: card=$card bar=$topBar", card.top >= topBar.bottom - 2)
+            assertTrue("Card under the bottom bar, $label: card=$card bar=$bottomBar", card.bottom <= bottomBar.top + 2)
+            evidence.appendLine("$label card=$card safe=$safe")
+            evidenceFile.writeText(evidence.toString())
+            return card
+        }
+
+        // 40dp of room above and below the selection, far less than a card needs.
+        val selection = android.graphics.RectF(
+            24f, (safe.top - viewport.top) / density + 40f,
+            viewport.width() / density - 24f, (safe.bottom - viewport.top) / density - 40f
+        )
+        val state = TranslationCardState.Success("毎朝、ご飯を食べました。",
+            com.jerreader.shared.translation.TranslationResult(
+                "这是用于离线验证选区占满页面时浮窗保底高度的长译文，内容较多时应在卡片内滚动。".repeat(30),
+                com.jerreader.shared.domain.LanguageCode.JAPANESE,
+                com.jerreader.shared.domain.LanguageCode.CHINESE_SIMPLIFIED, "ui-geometry-mock"))
+        withContext(Dispatchers.Main) { activity.showTranslationGeometryForTesting(selection, false, state) }
+        val cramped = settledCard("cramped")
+        val readableHeight = minOf(100 * density, safe.height() - 2)
+        assertTrue("The card shrank to a sliver: card=$cramped", cramped.height() >= readableHeight)
+        captureReader("android-translation-cramped")
+
+        suspend fun drag(dx: Float, dy: Float, label: String): android.graphics.RectF {
+            withContext(Dispatchers.Main) { activity.dragTranslationCardForTesting(dx, dy) }
+            return settledCard(label)
+        }
+        // Far past every edge: the card stops at the safe area, handle included.
+        val far = 10_000f
+        val top = drag(0f, -far, "dragged-up")
+        assertEquals("Dragged up, the card stops under the top bar", safe.top, top.top, 2f)
+        val corner = drag(far, far, "dragged-down-right")
+        assertEquals("Dragged down, the card stops above the bottom bar", safe.bottom, corner.bottom, 2f)
+        assertEquals("Dragged right, the card stops at the screen edge", safe.right, corner.right, 2f)
+        // It did not store the movement it could not make, so the way back
+        // starts with the first pixel, and the card stays where it is put even
+        // on top of the selection.
+        val step = 40 * density
+        val back = drag(-step, -step, "dragged-back")
+        assertEquals("A drag back moves the card at once", corner.bottom - step, back.bottom, 2f)
+        assertEquals("A drag back moves the card at once", maxOf(safe.left, corner.left - step), back.left, 2f)
+        assertEquals("Dragging changed the card's size", cramped.height(), back.height(), 2f)
+        captureReader("android-translation-cramped-dragged")
     }
 
     @androidx.annotation.RequiresApi(24)

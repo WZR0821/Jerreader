@@ -2,6 +2,8 @@
 
 > 这里是开发过程中的维护记录和开发说明，2026-11-18 从 README 原样移到本文件，按日期记的条目保留原样。其中指向 `dist/` 的安装包和验收页链接只在维护者本机有效（`dist/` 不进仓库），公开的安装包请到 [Releases](https://github.com/WZR0821/Jerreader/releases) 下载。功能介绍、下载和使用说明见 [项目首页](../README.md)。
 
+2026-11-18：**Android 1.7.1（70）构建、验收与打包完成，只有 Android。** 修复 [议题 #2](https://github.com/WZR0821/Jerreader/issues/2) 的两个问题：滚动阅读时横滑不再切换章节（打开 Readium 自带的 `disablePageTurnsWhileScrolling`，竖排除外）；选区占满页面时译文浮窗保留 108dp 最小高度，位置和拖动都留在上下栏之间。iOS 没有这两个问题，按用户决定不改，仍是 1.7.0（69），所以这一版两端版本号不一致，下次一起发版时 build 从 71 起。交付 [Release APK](../dist/Android/Jerreader-Android-1.7.1-build70-20261118-235658-release.apk)；改动与验证见 [1.7.1 维护记录](RELEASE_1.7.1_2026-11-18.md)。未真机验证；按用户决定暂不发布到 GitHub、暂不回复议题。
+
 2026-11-17：**双端 1.7.0（69）构建、验收与打包完成。** 按用户反馈：书架导入可先选格式、选一句不再翻成整段、阅读界面分「标准」「沉浸」两种布局；安卓界面以 iOS 为准逐页对齐（阅读设置改为与 iOS 相同的「阅读与翻译」弹层），安卓发给 AI 代理的请求改成与 iOS 相同的格式；iOS 删掉了不起作用的「分别设置」边距；iPad 版暂停开发。交付 [未签名 IPA](../dist/iOS/Jerreader-1.7.0-build69-20261117-222644-unsigned.ipa) 和 [Release APK](../dist/Android/Jerreader-Android-1.7.0-build69-20261117-231952-release.apk)；改动与验证见 [1.7.0 维护记录](RELEASE_1.7.0_2026-11-17.md)。未真机验证。
 
 2026-11-16：**双端 1.6.0（68）构建、验收与打包完成。** AI 大模型设置参考饭耳重做（添加供应商不分国内外，Claude、ChatGPT、DeepSeek 置顶，每个供应商多个模型，可单独设接口格式和思考强度），设置首页改为 iOS 设置样式，设置首页与「学习 → 翻译」页刚好一屏；Android 照 iOS 移植。交付 [未签名 IPA](../dist/iOS/Jerreader-1.6.0-build68-20261116-123923-unsigned.ipa) 和 [Release APK](../dist/Android/Jerreader-Android-1.6.0-build68-20261116-123313-release.apk)；改动与验证见 [1.6.0 维护记录](RELEASE_1.6.0_2026-11-16.md)。未真机验证。
@@ -24,7 +26,7 @@
 
 Jerreader 是一款面向中、英、日阅读与学习的 iOS 和 Android 电子书阅读器。它支持 EPUB、PDF、DOCX 和 TXT，以原文阅读为主，查词和简体中文翻译按需显示，不把译文插入原文。
 
-## 当前源码：iOS / Android 1.7.0（69）
+## 当前源码：iOS 1.7.0（69）/ Android 1.7.1（70）
 
 当前版本已经完成导入、书架、实际 EPUB 阅读、阅读内翻译和学习记录主流程：
 
@@ -176,9 +178,9 @@ scripts/safe_xcodebuild.sh build
 
 2026-11-13 起系统负载和温控降频只记录，不再排队或中止任务（此前是 150 的负载排队门槛）；其他构建运行时仍然等待，再逐个执行。iOS 与 Android 打包共用排队锁，编译固定单 job / 单 worker；Android 入口为 `scripts/safe_android_build.sh`。内存、磁盘、显示异常及模拟器授权保护继续生效。打 IPA 可以用 `scripts/background_build.py submit` 放到登录会话之外运行，系统把会话踢回登录界面时任务不会中断。
 
-Android 构建和打包见 [构建与交付](android/BUILD_AND_PACKAGE.md)。1.7.0 的改动、实测结果和没验证的部分见 [1.7.0 维护记录](RELEASE_1.7.0_2026-11-17.md)，1.4.0 的界面验收见 [1.4.0 界面验收](UI_PARITY_1.4.0.md)；新能力方案见 [新功能开发方向](FEATURE_DIRECTIONS.md)。
+Android 构建和打包见 [构建与交付](android/BUILD_AND_PACKAGE.md)。1.7.0 的改动、实测结果和没验证的部分见 [1.7.0 维护记录](RELEASE_1.7.0_2026-11-17.md)，只有 Android 的 1.7.1 见 [1.7.1 维护记录](RELEASE_1.7.1_2026-11-18.md)，1.4.0 的界面验收见 [1.4.0 界面验收](UI_PARITY_1.4.0.md)；新能力方案见 [新功能开发方向](FEATURE_DIRECTIONS.md)。
 
-项目本身不包含 API Key。测试使用 Mock、注入式 HTTP Client 和本地夹具，不依赖外网。2026-11-17 的 1.7.0：iOS XCTest 275 项通过、3 项跳过（要外部真实书籍）、0 失败；UI 测试 16 项通过、11 项跳过（10 项要真实注音 EPUB，1 项是 iPad 专用）。Android 共享层测试 88 项、App 单元测试 95 项全过，模拟器设备测试 49 项（回归 37、界面 12）全过，Release 包在模拟器上能安装、启动并打开 EPUB 和 PDF。运行记录和边界见 [1.7.0 维护记录](RELEASE_1.7.0_2026-11-17.md)，1.4.1 的见 [1.4.1 维护记录](HOTFIX_1.4.1_2026-10-17.md)。真实系统语言包下载、真机和个人证书重签等仍按维护计划单独验收。
+项目本身不包含 API Key。测试使用 Mock、注入式 HTTP Client 和本地夹具，不依赖外网。2026-11-17 的 1.7.0：iOS XCTest 275 项通过、3 项跳过（要外部真实书籍）、0 失败；UI 测试 16 项通过、11 项跳过（10 项要真实注音 EPUB，1 项是 iPad 专用）。Android 共享层测试 88 项、App 单元测试 95 项全过，模拟器设备测试 49 项（回归 37、界面 12）全过，Release 包在模拟器上能安装、启动并打开 EPUB 和 PDF。2026-11-18 的 Android 1.7.1：共享层测试 88 项（没有改动，沿用上一轮结果）、App 单元测试 95 项全过，模拟器设备测试 50 项（回归 38、界面 12）全过，Release 包冒烟通过；iOS 没有改动，没有重新验证。运行记录和边界见 [1.7.0 维护记录](RELEASE_1.7.0_2026-11-17.md)、[1.7.1 维护记录](RELEASE_1.7.1_2026-11-18.md)，1.4.1 的见 [1.4.1 维护记录](HOTFIX_1.4.1_2026-10-17.md)。真实系统语言包下载、真机和个人证书重签等仍按维护计划单独验收。
 
 ## 目录
 

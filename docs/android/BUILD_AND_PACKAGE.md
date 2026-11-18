@@ -19,14 +19,14 @@ Android 运行时不依赖 Google Play Services。JitPack 只在构建期用于 
 scripts/package_android_parity.sh
 ```
 
-当前源码版本为 1.7.0 / versionCode 69。本机 macOS 打包脚本经 `scripts/safe_android_build.sh` 进入与 iOS 共用的排队锁，采用 UTF-8 环境、单 worker、串行执行共享层测试、Android 单元测试、lint 和 APK 构建。已有构建或资源暂不稳定时等待（2026-11-13 起系统负载和温控降频只记录，不再因负载超过 150 排队）；不启动模拟器，也不自动删除构建目录中的文件。排队细节见 [安全验证](../IOS_SAFE_TESTING.md)。成功后根据 APK 元数据命名，例如：
+当前源码版本为 1.7.1 / versionCode 70（iOS 仍为 1.7.0 / 69）。本机 macOS 打包脚本经 `scripts/safe_android_build.sh` 进入与 iOS 共用的排队锁，采用 UTF-8 环境、单 worker、串行执行共享层测试、Android 单元测试、lint 和 APK 构建。已有构建或资源暂不稳定时等待（2026-11-13 起系统负载和温控降频只记录，不再因负载超过 150 排队）；不启动模拟器，也不自动删除构建目录中的文件。排队细节见 [安全验证](../IOS_SAFE_TESTING.md)。成功后根据 APK 元数据命名，例如：
 
-- `dist/Android/Jerreader-Android-1.7.0-build69-debug.apk`
-- `dist/Android/Jerreader-Android-1.7.0-build69-debug.apk.sha256`
+- `dist/Android/Jerreader-Android-1.7.1-build70-debug.apk`
+- `dist/Android/Jerreader-Android-1.7.1-build70-debug.apk.sha256`
 
 该包使用 Android SDK 自动生成的 debug 证书签名，可直接侧载，但不是商店发布包。
 
-正式交付的 Release APK 从仓库外、被 Git 忽略的 `keystore.properties` 读取签名配置（没有这个文件时 Release 不签名）。目前它指向的仍是 Android SDK 的 debug 证书，1.7.0 的 Release APK 也是这样签的，用户手机上的旧版可以直接覆盖升级。在保留上述 Debug 测试产物的同时，可通过同一串行入口额外构建 Release：
+正式交付的 Release APK 从仓库外、被 Git 忽略的 `keystore.properties` 读取签名配置（没有这个文件时 Release 不签名）。目前它指向的仍是 Android SDK 的 debug 证书，1.7.0、1.7.1 的 Release APK 也是这样签的，用户手机上的旧版可以直接覆盖升级。在保留上述 Debug 测试产物的同时，可通过同一串行入口额外构建 Release：
 
 ```sh
 JERREADER_ANDROID_PACKAGE_VARIANT=release scripts/safe_android_build.sh
@@ -34,7 +34,7 @@ JERREADER_ANDROID_PACKAGE_VARIANT=release scripts/safe_android_build.sh
 
 该选项只接受 `debug` / `release`，仅用于 Android 构建；Release 的 lint 和打包仍在同一单 worker 调用内运行。密钥配置保持在被忽略的本地文件中，不写入报告、仓库或安装包。是否实际可安装以 APK 签名校验结果为准。设置 `JERREADER_ANDROID_RELEASE_SMOKE=1` 后执行安全设备验收，会在原有 Debug 仪器化测试完成后，在同一临时设备中额外安装 Release 并检查离线启动与书架界面；不会触碰真实设备数据。
 
-最终交付在设备阶段通过后，再运行 `scripts/package_release_apk.py --build-log <本次成功构建目录> --device-log <本次成功设备目录> --previous-apk <上一签名兼容的APK>`。脚本拒绝重复 DEX 类型、测试夹具、缺失本轮功能标记或签名身份改变的包，生成带时间戳的 Release APK、SHA-256 与 validation.json。不能仅凭 Gradle 成功或安装成功交付。1.7.0（69）的回归与正式包状态见 [1.7.0 维护记录](../RELEASE_1.7.0_2026-11-17.md)，1.4.1（60）的回归、图集与正式包见 [1.4.1 维护记录](../HOTFIX_1.4.1_2026-10-17.md)。完整设备集现为 49 项（37 项回归＋12 项界面），正式包必须与设备实际安装和启动的候选摘要一致。
+最终交付在设备阶段通过后，再运行 `scripts/package_release_apk.py --build-log <本次成功构建目录> --device-log <本次成功设备目录> --previous-apk <上一签名兼容的APK>`。脚本拒绝重复 DEX 类型、测试夹具、缺失本轮功能标记或签名身份改变的包，生成带时间戳的 Release APK、SHA-256 与 validation.json。不能仅凭 Gradle 成功或安装成功交付。1.7.1（70）的回归与正式包状态见 [1.7.1 维护记录](../RELEASE_1.7.1_2026-11-18.md)，1.7.0（69）的见 [1.7.0 维护记录](../RELEASE_1.7.0_2026-11-17.md)，1.4.1（60）的回归、图集与正式包见 [1.4.1 维护记录](../HOTFIX_1.4.1_2026-10-17.md)。完整设备集现为 50 项（38 项回归＋12 项界面），正式包必须与设备实际安装和启动的候选摘要一致。
 
 
 ## 历史 M4 点按查词阶段可安装 APK

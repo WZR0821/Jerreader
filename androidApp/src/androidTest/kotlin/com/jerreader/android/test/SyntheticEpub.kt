@@ -8,8 +8,12 @@ import java.util.zip.ZipOutputStream
 
 fun createSyntheticEpub(
     file: File,
-    identifier: String = "jerreader-${System.nanoTime()}"
+    identifier: String = "jerreader-${System.nanoTime()}",
+    // Paragraphs added after chapter one's fixed content, for tests that need
+    // a chapter longer than one screen.
+    fillerParagraphs: Int = 0
 ) {
+    val filler = (1..fillerParagraphs).joinToString("") { "<p>这是让第一章超过一屏的填充段落，第 $it 段。</p>" }
     ZipOutputStream(file.outputStream().buffered()).use { archive ->
         val mimetype = "application/epub+zip".encodeToByteArray()
         val checksum = CRC32().apply { update(mimetype) }
@@ -94,7 +98,7 @@ fun createSyntheticEpub(
                     <h1>第一章</h1>
                     <p>这是不含版权内容的合成 EPUB 测试夹具。</p>
                     <p id="english-sentence">She <span id="english-word">went</span> home. Then she opened a book.</p>
-                    <p id="japanese-sentence">昨日ご飯を<span id="japanese-word">食べました</span>。</p>
+                    <p id="japanese-sentence">昨日ご飯を<span id="japanese-word">食べました</span>。</p>$filler
                   </body>
                 </html>
             """.trimIndent()

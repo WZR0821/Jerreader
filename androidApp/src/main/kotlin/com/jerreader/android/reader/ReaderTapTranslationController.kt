@@ -58,6 +58,13 @@ class ReaderTapTranslationController(
      * can show or hide its bars the way iOS does for an empty hit.
      */
     private val onBlankTap: (() -> Unit)? = null,
+    /**
+     * False while the book scrolls: a tap near the left or right edge then
+     * translates like any other tap instead of jumping a whole chapter, which
+     * is what a "page turn" amounts to there. iOS ignores these taps while
+     * scrolling as well (`ignoreWhileScrolling`).
+     */
+    private val tapPageTurnsAvailable: () -> Boolean = { true },
     private val timeSource: () -> Long = System::currentTimeMillis
 ) {
     private var navigator: EpubNavigatorFragment? = null
@@ -118,7 +125,7 @@ class ReaderTapTranslationController(
         override fun onTap(event: TapEvent): Boolean {
             val preferences = settings.preferences.value
             if (!preferences.quickTranslationEnabled) return false
-            if (!preferences.disablesTapPageTurnsDuringQuickTranslation) {
+            if (!preferences.disablesTapPageTurnsDuringQuickTranslation && tapPageTurnsAvailable()) {
                 val width = navigator?.publicationView?.width?.takeIf { it > 0 } ?: 0
                 if (width > 0 && event.point.x <= width * EDGE_PAGE_TURN_RATIO) {
                     invalidateForNewTap()

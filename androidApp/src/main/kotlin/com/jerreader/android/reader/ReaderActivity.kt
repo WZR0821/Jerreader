@@ -44,8 +44,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -61,6 +59,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.boundsInParent
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.material3.Text
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -141,6 +140,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import org.json.JSONArray
 import org.json.JSONObject
 import org.readium.adapter.pdfium.navigator.PdfiumDefaults
@@ -255,6 +255,8 @@ class ReaderActivity : AppCompatActivity() {
     private var readerContentTopPx = 0
     private var readerContentBottomPx = 0
     private var publicationWritingModeIsVertical by mutableStateOf(false)
+    /** The EPUB navigator was built with `disablePageTurnsWhileScrolling`, see [epubConfiguration]. */
+    private var scrollPageTurnsDisabled = false
     private var pdfGeometryView: View? = null
     private var pdfGeometryScrollListener: ViewTreeObserver.OnScrollChangedListener? = null
     private var pdfGeometryLayoutListener: View.OnLayoutChangeListener? = null
@@ -296,6 +298,22 @@ class ReaderActivity : AppCompatActivity() {
         val dx: Float,
         val dy: Float
     )
+
+    /**
+     * Where the floating card was last laid out: its resting corner before the
+     * drag and collision offsets, and the range its corner may take so the
+     * whole card stays inside the safe area.
+     */
+    private class FloatingCardPlacement {
+        var originX = 0f
+        var originY = 0f
+        var minX = 0f
+        var maxX = 0f
+        var minY = 0f
+        var maxY = 0f
+    }
+
+    private val floatingCardPlacement = FloatingCardPlacement()
 
     private data class PendingAnnotation(
         val selectedText: String,
@@ -979,13 +997,15 @@ class ReaderActivity : AppCompatActivity() {
                     onHighlightChanged = ::updateSelectionAnchor,
                     onSelectionInvalidated = ::clearTransientCardPresentation,
                     appearance = { currentAppearance },
-                    onBlankTap = ::handleContentTap
+                    onBlankTap = ::handleContentTap,
+                    tapPageTurnsAvailable = { !scrollModeBlocksPageTurns() }
                 )
                 tapTranslationController = tapController
-                val factory = EpubNavigatorFactory(openedPublication).createFragmentFactory(
+                val navigatorFactory = EpubNavigatorFactory(openedPublication)
+                val factory = navigatorFactory.createFragmentFactory(
                     initialLocator = initialLocator,
                     initialPreferences = basePreferences,
-                    configuration = epubConfiguration(tapController)
+                    configuration = epubConfiguration(navigatorFactory, tapController, basePreferences)
                 )
                 attachEpubNavigator(factory)
             }
@@ -1016,12 +1036,47 @@ class ReaderActivity : AppCompatActivity() {
      * (14dp here, iOS's content inset) and, by default, by the display cutout
      * as well. The container's own padding already keeps clear of the cutout,
      * so Readium adding it again only widened the blank margins.
+     *
+     * While a book scrolls, Readium reads any sideways finger movement past
+     * the touch slop as a page turn; a scrolling chapter is a single page
+     * wide, so the turn lands in the neighbouring chapter. A scroll flick that
+     * drifted a few millimetres sideways was enough to lose one's place
+     * (GitHub issue #2). iOS has always opened its navigator with
+     * `disablePageTurnsWhileScrolling`; this sets the same switch.
+     *
+     * Vertical text is left alone. Readium forces it into scroll mode, the
+     * page then scrolls sideways, and swiping past its edge is the only
+     * gesture that reaches the next chapter. That turn is only taken at the
+     * edge, so it is not the accidental one described above.
      */
-    private fun epubConfiguration(tapController: ReaderTapTranslationController) =
-        EpubNavigatorFragment.Configuration(
+    private fun epubConfiguration(
+        navigatorFactory: EpubNavigatorFactory,
+        tapController: ReaderTapTranslationController,
+        preferences: EpubPreferences
+    ): EpubNavigatorFragment.Configuration {
+        // What Readium itself will resolve for these preferences and this
+        // book's metadata. It only changes with 排版方向, which rebuilds the
+        // navigator (`recreateNavigatorForOrientation`) and comes back here.
+        val laysOutVerticalText = navigatorFactory
+            .createPreferencesEditor(preferences)
+            .verticalText
+            .effectiveValue
+        scrollPageTurnsDisabled = !laysOutVerticalText
+        return EpubNavigatorFragment.Configuration(
             selectionActionModeCallback = tapController.selectionActionModeCallback,
             shouldApplyInsetsPadding = false
-        )
+        ).apply { disablePageTurnsWhileScrolling = scrollPageTurnsDisabled }
+    }
+
+    /**
+     * True while the EPUB scrolls with Readium's page turns switched off (see
+     * [epubConfiguration]). `goForward()` and `goBackward()` do nothing at all
+     * then, so whatever still turns a page has to say what it means instead.
+     */
+    internal fun scrollModeBlocksPageTurns(): Boolean {
+        val epubNavigator = navigator ?: return false
+        return scrollPageTurnsDisabled && epubNavigator.settings.value.scroll
+    }
 
     private fun attachEpubNavigator(factory: FragmentFactory) {
         attachNavigator(factory, EpubNavigatorFragment::class.java)
@@ -1195,11 +1250,16 @@ class ReaderActivity : AppCompatActivity() {
             ?: false
     }
 
+    // A scrolling chapter has no pages, so 上一页 / 下一页 step one chapter
+    // there. Readium did exactly that for these buttons before its page turns
+    // were switched off for scrolling, and iOS does the same.
     private fun goToPreviousPage() {
+        if (scrollModeBlocksPageTurns()) return goToAdjacentChapter(-1)
         navigator?.goBackward(animated = false) ?: pdfNavigator?.goBackward(animated = false)
     }
 
     private fun goToNextPage() {
+        if (scrollModeBlocksPageTurns()) return goToAdjacentChapter(1)
         navigator?.goForward(animated = false) ?: pdfNavigator?.goForward(animated = false)
     }
 
@@ -1305,10 +1365,11 @@ class ReaderActivity : AppCompatActivity() {
             supportFragmentManager.commitNow { remove(existing) }
         }
         navigator = null
-        val factory = EpubNavigatorFactory(openedPublication).createFragmentFactory(
+        val navigatorFactory = EpubNavigatorFactory(openedPublication)
+        val factory = navigatorFactory.createFragmentFactory(
             initialLocator = resumeLocator,
             initialPreferences = preferences,
-            configuration = epubConfiguration(tapController)
+            configuration = epubConfiguration(navigatorFactory, tapController, preferences)
         )
         attachEpubNavigator(factory)
     }
@@ -1768,9 +1829,14 @@ class ReaderActivity : AppCompatActivity() {
                 else -> roomBelow > roomAbove
             }
             val availableCardRoom = if (placeBelow) roomBelow else roomAbove
+            // Never squeeze the card below a readable height, as iOS
+            // `ReaderTranslationOverlayPlacement` does. A selection that fills
+            // most of the page used to leave a sliver against the screen edge
+            // with its header and drag handle cut off (GitHub issue #2); the
+            // card now keeps its minimum and overlaps the selection instead.
             val cardHeight = minOf(
                 preferredCardHeight,
-                availableCardRoom.coerceAtLeast(1.dp)
+                maxOf(availableCardRoom, minimumCardHeight)
             )
             // A vertical Japanese page reads in columns, so iOS puts the card
             // beside the tapped column instead of above or below it.
@@ -1833,6 +1899,16 @@ class ReaderActivity : AppCompatActivity() {
                     selectionRightPx > selectionLeftPx ||
                     selectionBottomPx > selectionTopPx
                 if (!hasAnchor) return@onGloballyPositioned
+                // The reader moved the card: leave it where they put it.
+                if (cardDragX != 0f || cardDragY != 0f) return@onGloballyPositioned
+                val placement = floatingCardPlacement
+
+                // Staying on screen comes before clearing the selection, so
+                // every move stops at the safe area.
+                fun withinSafeArea(shift: PopupShift) = PopupShift(
+                    (bounds.left + shift.dx).coerceIn(placement.minX, placement.maxX) - bounds.left,
+                    (bounds.top + shift.dy).coerceIn(placement.minY, placement.maxY) - bounds.top
+                )
 
                 fun isClear(shift: PopupShift): Boolean {
                     val left = bounds.left + shift.dx
@@ -1850,7 +1926,7 @@ class ReaderActivity : AppCompatActivity() {
                     return withinSafeBounds && !intersectsSelection
                 }
 
-                fun collisionScore(shift: PopupShift): Float {
+                fun overlapArea(shift: PopupShift): Float {
                     val left = bounds.left + shift.dx
                     val top = bounds.top + shift.dy
                     val right = bounds.right + shift.dx
@@ -1859,16 +1935,7 @@ class ReaderActivity : AppCompatActivity() {
                         maxOf(left, expandedSelectionLeft)).coerceAtLeast(0f)
                     val overlapHeight = (minOf(bottom, expandedSelectionBottom) -
                         maxOf(top, expandedSelectionTop)).coerceAtLeast(0f)
-                    val overlapArea = overlapWidth * overlapHeight
-                    val overflow = (safeLeftPx - left).coerceAtLeast(0f) +
-                        (right - safeRightPx).coerceAtLeast(0f) +
-                        (safeTopPx - top).coerceAtLeast(0f) +
-                        (bottom - safeBottomPx).coerceAtLeast(0f)
-                    // Clearing the selection is more important than making a
-                    // very large card perfectly fit in an unusually small
-                    // window, but both penalties are deterministic.
-                    return overlapArea * 1000f + overflow * 100f +
-                        abs(shift.dx) + abs(shift.dy)
+                    return overlapWidth * overlapHeight
                 }
 
                 val current = PopupShift(0f, 0f)
@@ -1879,14 +1946,23 @@ class ReaderActivity : AppCompatActivity() {
                     PopupShift(0f, expandedSelectionTop - bounds.bottom),
                     PopupShift(expandedSelectionLeft - bounds.right, 0f),
                     PopupShift(expandedSelectionRight - bounds.left, 0f)
-                )
+                ).map(::withinSafeArea)
+                // No spot on screen clears the selection when it fills the
+                // page. Cover less of it if a move really does, otherwise stay:
+                // the old fallback pushed the card off screen to clear the
+                // text, which left its drag handle out of reach (issue #2).
+                // The margin is a pixel of movement, so rounding cannot make
+                // the card hop between two equally poor spots.
+                val worthMoving = overlapArea(current) - (bounds.width + bounds.height)
                 val shift = candidates
                     .filter(::isClear)
                     .minByOrNull { abs(it.dx) + abs(it.dy) }
-                    ?: candidates.minByOrNull(::collisionScore)
-                    ?: current
-                val nextX = popupAvoidanceX + shift.dx
-                val nextY = popupAvoidanceY + shift.dy
+                    ?: candidates
+                        .filter { overlapArea(it) < worthMoving }
+                        .minByOrNull(::overlapArea)
+                    ?: return@onGloballyPositioned
+                val nextX = bounds.left + shift.dx - placement.originX
+                val nextY = bounds.top + shift.dy - placement.originY
                 if (abs(nextX - popupAvoidanceX) > 0.5f ||
                     abs(nextY - popupAvoidanceY) > 0.5f
                 ) {
@@ -1894,57 +1970,67 @@ class ReaderActivity : AppCompatActivity() {
                     popupAvoidanceY = nextY
                 }
             }
+            // One placement step for every card, after iOS
+            // `ReaderTranslationOverlayPlacement`: start beside the selection
+            // using the measured size, add the drag and the collision
+            // correction, then keep the whole card inside the safe area.
+            fun placedCard(origin: (width: Int, height: Int) -> Offset) =
+                Modifier.layout { measurable, layerConstraints ->
+                    val placeable = measurable.measure(
+                        androidx.compose.ui.unit.Constraints(
+                            maxWidth = (safeRightPx - safeLeftPx).toInt().coerceAtLeast(0),
+                            maxHeight = layerConstraints.maxHeight
+                        )
+                    )
+                    layout(layerConstraints.maxWidth, layerConstraints.maxHeight) {
+                        val start = origin(placeable.width, placeable.height)
+                        val placement = floatingCardPlacement
+                        placement.originX = start.x
+                        placement.originY = start.y
+                        placement.minX = safeLeftPx
+                        placement.maxX = maxOf(safeLeftPx, safeRightPx - placeable.width)
+                        placement.minY = safeTopPx
+                        placement.maxY = maxOf(safeTopPx, safeBottomPx - placeable.height)
+                        placeable.place(
+                            (start.x + cardDragX + popupAvoidanceX)
+                                .coerceIn(placement.minX, placement.maxX).roundToInt(),
+                            (start.y + cardDragY + popupAvoidanceY)
+                                .coerceIn(placement.minY, placement.maxY).roundToInt()
+                        )
+                    }
+                }
+            val layerWidthPx = constraints.maxWidth.toFloat()
             val cardModifier = when {
                 useTopBanner ->
-                    Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(start = 12.dp, top = safeTop, end = 12.dp, bottom = 0.dp)
+                    placedCard { width, _ -> Offset((layerWidthPx - width) / 2f, safeTopPx) }
                         .widthIn(max = 420.dp)
                         .fillMaxWidth()
                         .heightIn(max = topBannerHeight)
-                        .offset {
-                            IntOffset(
-                                (cardDragX + popupAvoidanceX).toInt(),
-                                (cardDragY + popupAvoidanceY).toInt()
-                            )
-                        }
                         .then(popupCollisionModifier)
 
                 isVertical && sideWidth >= 144.dp -> {
-                    Modifier
-                        .align(if (placeLeft) Alignment.TopStart else Alignment.TopEnd)
-                        .padding(top = verticalCardTop)
-                        .padding(horizontal = selectionGap)
+                    val verticalCardTopPx = with(density) { verticalCardTop.toPx() }
+                    placedCard { width, _ ->
+                        Offset(
+                            if (placeLeft) gapPx else layerWidthPx - gapPx - width,
+                            verticalCardTopPx
+                        )
+                    }
                         .widthIn(max = sideWidth)
                         .heightIn(max = verticalCardHeight)
-                        .offset {
-                            IntOffset(
-                                (cardDragX + popupAvoidanceX).toInt(),
-                                (cardDragY + popupAvoidanceY).toInt()
-                            )
-                        }
                         .then(popupCollisionModifier)
                 }
                 else -> {
-                    Modifier
-                        .align(if (placeBelow) Alignment.TopStart else Alignment.BottomStart)
-                        .padding(
-                            top = if (placeBelow) selectionBottom + selectionGap else 0.dp,
-                            bottom = if (placeBelow) 0.dp else (available - selectionTop + selectionGap)
-                                .coerceAtLeast(0.dp)
-                        )
-                        .padding(horizontal = 12.dp)
+                    val belowPx = with(density) { (selectionBottom + selectionGap).toPx() }
+                    val abovePx = with(density) { (selectionTop - selectionGap).toPx() }
+                    placedCard { _, height ->
+                        Offset(safeLeftPx, if (placeBelow) belowPx else abovePx - height)
+                    }
                         // iOS keeps the overlay narrow so the page stays readable
                         // beside it instead of spanning the full width.
                         .widthIn(max = 320.dp)
                         .fillMaxWidth()
                         .heightIn(max = cardHeight)
-                        .offset {
-                            IntOffset(
-                                (cardDragX + popupAvoidanceX).toInt(),
-                                (cardDragY + popupAvoidanceY).toInt()
-                            )
-                        }
                         .then(popupCollisionModifier)
                 }
             }
@@ -2014,12 +2100,7 @@ class ReaderActivity : AppCompatActivity() {
                         } },
                         crossPageMessage = crossPageMessage,
                         isExpandingCrossPage = isExpandingCrossPage,
-                        onDrag = { dx, dy ->
-                            val maxX = constraints.maxWidth * 0.45f
-                            val maxY = constraints.maxHeight * 0.35f
-                            cardDragX = (cardDragX + dx).coerceIn(-maxX, maxX)
-                            cardDragY = (cardDragY + dy).coerceIn(-maxY, maxY)
-                        },
+                        onDrag = ::dragFloatingCard,
                         onOpenSettings = ::openTranslationSettings
                     )
                 }
@@ -2053,6 +2134,22 @@ class ReaderActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * Moves the card with the reader's finger, starting from where it really
+     * is and stopping at the safe area. The old limit was a share of the
+     * screen either way, which let the header and its drag handle leave the
+     * screen with no way to bring the card back (GitHub issue #2).
+     */
+    private fun dragFloatingCard(dx: Float, dy: Float) {
+        val placement = floatingCardPlacement
+        val restX = placement.originX + popupAvoidanceX
+        val restY = placement.originY + popupAvoidanceY
+        val x = (restX + cardDragX).coerceIn(placement.minX, placement.maxX)
+        val y = (restY + cardDragY).coerceIn(placement.minY, placement.maxY)
+        cardDragX = (x + dx).coerceIn(placement.minX, placement.maxX) - restX
+        cardDragY = (y + dy).coerceIn(placement.minY, placement.maxY) - restY
     }
 
     @androidx.compose.runtime.Composable
@@ -2692,6 +2789,18 @@ class ReaderActivity : AppCompatActivity() {
             viewport.top + selection.bottom * density)
         currentTranslationState = state
         setFloatingLayerVisible(true)
+    }
+
+    /** Drags the translation card by the same path as its handle, in pixels. */
+    internal fun dragTranslationCardForTesting(dx: Float, dy: Float) {
+        check(com.jerreader.android.BuildConfig.DEBUG)
+        dragFloatingCard(dx, dy)
+    }
+
+    /** The bottom bar's 上一页 / 下一页. */
+    internal fun turnPageForTesting(forward: Boolean) {
+        check(com.jerreader.android.BuildConfig.DEBUG)
+        if (forward) goToNextPage() else goToPreviousPage()
     }
 
     /** Window frames of the bars while they show, for the overlay tests. */

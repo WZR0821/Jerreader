@@ -27,6 +27,8 @@ REGRESSION_CLASSES = [
     "learning.BookCoverCacheTest", "learning.ContextualAnalysisPersistenceTest",
     "reader.ReaderMilestoneTwoTest", "reader.ReaderWordLookupTest",
     "translation.TranslationCacheTest",
+    # 2026-11-18, GitHub issue #2: sideways swipes while a book scrolls.
+    "reader.ReaderScrollGestureTest",
 ]
 UI_CLASSES = [
     "learning.LearningUiParityTest#japaneseLearningWorkflow",
