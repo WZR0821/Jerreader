@@ -2,6 +2,8 @@
 
 > 这里是开发过程中的维护记录和开发说明，2026-11-18 从 README 原样移到本文件，按日期记的条目保留原样。其中指向 `dist/` 的安装包和验收页链接只在维护者本机有效（`dist/` 不进仓库），公开的安装包请到 [Releases](https://github.com/WZR0821/Jerreader/releases) 下载。功能介绍、下载和使用说明见 [项目首页](../README.md)。
 
+2026-11-19：**双端 2.0.0 换成 build 72。** 用户真机试 ChatGPT 套餐：登录和模型列表正常，测试连接被 OpenAI 拒绝。原因是请求的 `input` 发成了字符串（套餐接口只收消息数组）；同时错误提示只有笼统的“配置无效”“登录已失效”（403 一律算登录失效），看不到 OpenAI 给的原因。两端一起修好：`input` 改成消息数组，错误按 OpenAI 文档分类并显示原话和请求 id，授权页没允许使用套餐时提示并在下次登录重新显示授权页；安卓被拒时不再换备用服务、译文卡片不显示“重新翻译”，与 iOS 一致。版本号仍是 2.0.0，替换 GitHub v2.0.0 的安装包；改动与验证见 [2.0.0 维护记录](RELEASE_2.0.0_2026-11-19.md) 第 7 节。
+
 2026-11-19：**双端 2.0.0（71）构建、验收与打包完成。** 大版本更新：「设置 → AI 大模型 → 添加供应商」新增「套餐」页（ChatGPT 套餐（实验），用 ChatGPT 账号登录走订阅额度；Claude Max / Ultra 附带 API 额度的用法说明；编程套餐因条款限制不提供）；书架、阅读器、学习和设置按新的「纸墨」[设计规范](DESIGN_2.0.md)重做静态视觉和动效，两端逐页一致；1.7.1 只打了 Android 包、没有单独发布的 [议题 #2](https://github.com/WZR0821/Jerreader/issues/2) 两个修复随本版一起发布。另修了 1.7.0 起 Android 正式包打不开 PDF、本机翻译也用不了的问题（R8 删掉了 ML Kit 组件注册类的构造函数，当时的冒烟只看了阅读页有没有打开），冒烟和打包脚本都补了对应检查。交付 [未签名 IPA](../dist/iOS/Jerreader-2.0.0-build71-20261119-084847-unsigned.ipa) 和 [Release APK](../dist/Android/Jerreader-Android-2.0.0-build71-20261119-124529-release.apk)；改动与验证见 [2.0.0 维护记录](RELEASE_2.0.0_2026-11-19.md)。测试都在模拟器上跑，ChatGPT 套餐没有用真实账号登录过，未真机验证。已推到 GitHub 并发布 [v2.0.0](https://github.com/WZR0821/Jerreader/releases/tag/v2.0.0)，[议题 #2](https://github.com/WZR0821/Jerreader/issues/2) 已回复并关闭。
 
 2026-11-18：**Android 1.7.1（70）构建、验收与打包完成，只有 Android。** 修复 [议题 #2](https://github.com/WZR0821/Jerreader/issues/2) 的两个问题：滚动阅读时横滑不再切换章节（打开 Readium 自带的 `disablePageTurnsWhileScrolling`，竖排除外）；选区占满页面时译文浮窗保留 108dp 最小高度，位置和拖动都留在上下栏之间。iOS 没有这两个问题，按用户决定不改，仍是 1.7.0（69），所以这一版两端版本号不一致，下次一起发版时 build 从 71 起。交付 [Release APK](../dist/Android/Jerreader-Android-1.7.1-build70-20261118-235658-release.apk)；改动与验证见 [1.7.1 维护记录](RELEASE_1.7.1_2026-11-18.md)。未真机验证；按用户决定暂不发布到 GitHub、暂不回复议题。
@@ -28,7 +30,7 @@
 
 Jerreader 是一款面向中、英、日阅读与学习的 iOS 和 Android 电子书阅读器。它支持 EPUB、PDF、DOCX 和 TXT，以原文阅读为主，查词和简体中文翻译按需显示，不把译文插入原文。
 
-## 当前源码：双端 2.0.0（71）
+## 当前源码：双端 2.0.0（72）
 
 当前版本已经完成导入、书架、实际 EPUB 阅读、阅读内翻译和学习记录主流程：
 

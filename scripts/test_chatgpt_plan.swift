@@ -12,6 +12,7 @@ import Foundation
         callbacks()
         try requests()
         stream()
+        refusals()
         try models()
         idToken()
         try await session()
@@ -59,6 +60,8 @@ import Foundation
         precondition(items["code_challenge"] == pkce.challenge && items["code_challenge_method"] == "S256")
         precondition(items["ext_agent_host_id"] == "urn:uuid:host" && items["agent_name_hint"] == "Jerreader")
         precondition(items["login_hint"] == nil && items["client_secret"] == nil)
+        // Consent is not forced on an ordinary sign-in.
+        precondition(items["prompt"] == nil)
         // Strictly encoded, never `localhost`.
         let raw = first.url.absoluteString
         precondition(raw.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A51234%2Fauth%2Fcallback"))
@@ -72,6 +75,14 @@ import Foundation
         precondition(laterItems["login_hint"] == "reader@example.test")
         precondition(laterItems["state"] != nil && laterItems["state"] != laterItems["nonce"])
         precondition(ChatGPTPlanAuthorization(clientID: "  ", hostID: "h", port: 1).isRegistration)
+
+        // After a declined consent the next sign-in asks again, and still
+        // registers nothing new.
+        let again = ChatGPTPlanAuthorization(clientID: "issued-client", hostID: "urn:uuid:host", port: 60_001,
+                                             forceConsent: true)
+        let againItems = query(again.url)
+        precondition(againItems["prompt"] == "consent" && againItems["agent_name_hint"] == nil)
+        precondition(againItems["scope"] == ChatGPTPlan.scope)
     }
 
     // MARK: Callbacks
@@ -169,7 +180,13 @@ import Foundation
         let body = try json(inference)
         precondition(Set(body.keys) == ["model", "instructions", "input", "store", "stream", "reasoning"])
         precondition(body["store"] as? Bool == false && body["stream"] as? Bool == true)
-        precondition(body["instructions"] as? String == "Translate." && body["input"] as? String == "Hello.")
+        precondition(body["instructions"] as? String == "Translate.")
+        // The plan takes input only as a list of messages, never a bare string,
+        // and no system message: the instructions carry the system part.
+        let input = body["input"] as? [[String: Any]]
+        precondition(input?.count == 1 && input?[0]["role"] as? String == "user"
+            && input?[0]["content"] as? String == "Hello.", "\(String(describing: body["input"]))")
+        precondition(!(body["input"] is String))
         precondition((body["reasoning"] as? [String: Any])?["effort"] as? String == "low")
         precondition(Set(body.keys).isDisjoint(with: ChatGPTPlanRequests.omittedFields))
         precondition(ChatGPTPlanRequests.omittedFields.isSuperset(of: ["temperature", "max_output_tokens", "previous_response_id"]))
@@ -213,20 +230,84 @@ import Foundation
         precondition(parse("""
         data: {"type":"response.failed","response":{"error":{"code":"subscription_sharing_usage_limit_exceeded","message":"m"}}}
 
-        """) == .failed(code: "subscription_sharing_usage_limit_exceeded"))
+        """) == .failed(code: "subscription_sharing_usage_limit_exceeded", message: "m"))
         precondition(parse("""
         data: {"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}
 
         """) == .incomplete(reason: "max_output_tokens"))
-        precondition(parse("event: error\ndata: {\"code\":\"server_error\"}\n\n") == .failed(code: "server_error"))
+        precondition(parse("event: error\ndata: {\"code\":\"server_error\"}\n\n") == .failed(code: "server_error", message: nil))
+        precondition(parse("data: {\"type\":\"error\",\"error\":{\"code\":\"x\",\"message\":\"y\"}}\n\n")
+            == .failed(code: "x", message: "y"))
         // The event name alone identifies an event whose data has no type.
         precondition(parse("event: response.completed\ndata: {\"response\":{\"output\":[]}}\n\n") == .completed(""))
 
-        precondition(ChatGPTPlanStream.usageLimitCode(in: Data(#"{"detail":"subscription_sharing_usage_unavailable"}"#.utf8))
+    }
+
+    /// Refusals as OpenAI's token-sharing guide describes them.
+    static func refusals() {
+        func classify(_ status: Int, _ body: String, id: String? = nil) -> ChatGPTPlanRefusal {
+            ChatGPTPlanRefusal.classify(status: status, body: Data(body.utf8), requestID: id)
+        }
+        func rejected(_ refusal: ChatGPTPlanRefusal, line: Int = #line) -> String {
+            guard case .rejected(let text) = refusal else { preconditionFailure("line \(line): \(refusal)") }
+            return text
+        }
+
+        // Only the usage limit stops the plan; the other subscription codes say "later".
+        precondition(classify(429, #"{"error":{"code":"subscription_sharing_usage_limit_exceeded","message":"m"}}"#) == .usageLimit)
+        precondition(classify(403, #"{"detail":"subscription_sharing_usage_limit_exceeded"}"#) == .usageLimit)
+        precondition(classify(503, #"{"error":{"code":"subscription_sharing_usage_unavailable"}}"#) == .temporary)
+        precondition(classify(403, #"{"detail":"subscription_sharing_usage_unavailable"}"#) == .temporary)
+        precondition(classify(503, #"{"error":{"code":"subscription_sharing_user_unavailable"}}"#) == .temporary)
+        precondition(classify(429, #"{"error":{"code":"rate_limit_exceeded"}}"#) == .temporary)
+        precondition(classify(500, "{}") == .temporary && classify(503, "") == .temporary)
+        precondition(classify(401, #"{"error":{"code":"subscription_sharing_invalid_user"}}"#) == .signInRequired)
+        precondition(classify(401, "{}") == .signInRequired)
+
+        // A refused request keeps OpenAI's words, the status, code, param and request id.
+        let capability = rejected(classify(400, """
+        {"error":{"message":"Invalid type for 'input': expected an array.","type":"invalid_request_error",
+        "param":"input","code":"subscription_sharing_unsupported_capability"}}
+        """, id: "req_123"))
+        precondition(capability.contains("不支持这次请求里的 input"), capability)
+        precondition(capability.contains("OpenAI 的说明：Invalid type for 'input': expected an array."), capability)
+        precondition(capability.contains("HTTP 400") && capability.contains("subscription_sharing_unsupported_capability"))
+        precondition(capability.contains("参数 input") && capability.contains("请求 req_123"), capability)
+
+        // 403 is not a sign-out: region, account or policy.
+        let forbidden = rejected(classify(403, #"{"detail":"Not available in your region."}"#, id: "req_9"))
+        precondition(forbidden.contains("所在地区") && forbidden.contains("Not available in your region."), forbidden)
+        precondition(forbidden.contains("HTTP 403") && forbidden.contains("请求 req_9") && !forbidden.contains("登录已失效"))
+        precondition(rejected(classify(403, #"{"error":{"code":"subscription_sharing_user_not_eligible"}}"#))
+            .contains("不能用套餐额度"))
+        precondition(rejected(classify(403, #"{"error":{"code":"subscription_sharing_route_not_supported"}}"#))
+            .contains("不允许用套餐额度调用这个接口"))
+        let scope = rejected(classify(403, #"{"error":{"code":"chatpass_v2_scope_not_authorized","message":"m"}}"#))
+        precondition(scope.contains("没有授权使用套餐额度") && scope.contains("重新登录"), scope)
+        precondition(ChatGPTPlanErrorBody(Data(#"{"error":{"code":"chatpass_v2_invalid_authorization_context"}}"#.utf8)).needsConsent)
+        precondition(!ChatGPTPlanErrorBody(Data(#"{"error":{"code":"model_not_found"}}"#.utf8)).needsConsent)
+        precondition(rejected(classify(404, #"{"error":{"code":"model_not_found","message":"No such model."}}"#))
+            .contains("换一个再试"))
+
+        // Odd bodies: a web page is never shown, plain text is, a long reason is cut.
+        let page = rejected(classify(403, "<html><body>Blocked</body></html>"))
+        precondition(!page.contains("<") && page.contains("HTTP 403"), page)
+        precondition(rejected(classify(400, "bad request")).contains("OpenAI 的说明：bad request"))
+        let long = ChatGPTPlanErrorBody(Data((#"{"error":{"message":""# + String(repeating: "x", count: 500) + #""}}"#).utf8))
+        precondition(long.message?.count == 301 && long.message?.hasSuffix("…") == true)
+        // A code found anywhere in the body counts.
+        precondition(ChatGPTPlanErrorBody(Data(#"{"weird":{"why":"subscription_sharing_usage_unavailable"}}"#.utf8)).code
             == "subscription_sharing_usage_unavailable")
-        precondition(ChatGPTPlanStream.usageLimitCode(in: Data(#"{"error":{"code":"rate_limit_exceeded"}}"#.utf8)) == nil)
-        precondition(ChatGPTPlanStream.isUsageLimit("subscription_sharing_usage_limit_exceeded"))
-        precondition(!ChatGPTPlanStream.isUsageLimit(nil) && !ChatGPTPlanStream.isUsageLimit("server_error"))
+        precondition(ChatGPTPlanErrorBody(Data(#"{"detail":"subscription_sharing_user_not_eligible"}"#.utf8)).code
+            == "subscription_sharing_user_not_eligible")
+
+        // Inside a stream that had begun.
+        precondition(ChatGPTPlanRefusal.streamFailure(code: "subscription_sharing_usage_limit_exceeded", message: nil) == .usageLimit)
+        precondition(ChatGPTPlanRefusal.streamFailure(code: nil, message: "x") == .temporary)
+        precondition(ChatGPTPlanRefusal.streamFailure(code: "server_error", message: "x") == .temporary)
+        precondition(ChatGPTPlanRefusal.streamFailure(code: "subscription_sharing_usage_unavailable", message: nil) == .temporary)
+        let failed = rejected(ChatGPTPlanRefusal.streamFailure(code: "invalid_prompt", message: "Prompt was refused."))
+        precondition(failed.contains("Prompt was refused.") && failed.contains("invalid_prompt") && !failed.contains("HTTP"))
     }
 
     static func models() throws {
@@ -455,6 +536,33 @@ import Foundation
             precondition(store.value == made)
         }
 
+        // Granted scopes without the plan's use: a declined consent. Nothing is
+        // kept and the refresh token is given back.
+        do {
+            let store = MemoryStore()
+            let server = MockServer()
+            server.queue(tokenPath, 200, #"{"access_token":"a1","refresh_token":"r-declined","scope":"openid profile email offline_access"}"#)
+            server.queue("/.well-known/openid-configuration", 200, #"{"revocation_endpoint":"https://auth.openai.com/oauth/revoke"}"#)
+            server.queue("/oauth/revoke", 200, "{}")
+            let session = ChatGPTPlanSession(store: store, client: server, now: { clock.now })
+            let later = ChatGPTPlanAuthorization(clientID: "client-7", hostID: "h", port: 1, state: "s", nonce: "n")
+            await expectError(.planUseNotGranted) {
+                _ = try await session.completeSignIn(code: "c", authorization: later, issuedClientID: nil)
+            }
+            precondition(store.value == nil && store.saves == 0)
+            let current = await session.current()
+            precondition(current == nil)
+            precondition(server.count("/oauth/revoke") == 1 && form(server.requests.last!)["token"] == "r-declined")
+
+            // Granted as a list, or not listed at all: both are a grant.
+            server.queue(tokenPath, 200, #"{"access_token":"a2","refresh_token":"r2","scope":["openid","chatgpt.tokens.use.direct"]}"#)
+            let listed = try await session.completeSignIn(code: "c", authorization: later, issuedClientID: nil)
+            precondition(listed.accessToken == "a2" && store.value == listed)
+            server.queue(tokenPath, 200, #"{"access_token":"a3","refresh_token":"r3","scope":42}"#)
+            let odd = try await session.completeSignIn(code: "c", authorization: later, issuedClientID: nil)
+            precondition(odd.accessToken == "a3")
+        }
+
         // The model list is fetched again once after a refused token.
         do {
             let store = MemoryStore(credential(clock))
@@ -470,8 +578,17 @@ import Foundation
 
             server.queue("/v1/models", 200, #"{"data":[]}"#)
             await expectError(.noModels) { _ = try await session.models() }
-            server.queue("/v1/models", 403, "{}")
-            await expectError(.signInRequired) { _ = try await session.models() }
+            server.queue("/v1/models", 503, #"{"error":{"code":"subscription_sharing_usage_unavailable"}}"#)
+            await expectError(.temporarilyUnavailable) { _ = try await session.models() }
+            server.queue("/v1/models", 403, #"{"detail":"Forbidden here."}"#)
+            do {
+                _ = try await session.models()
+                preconditionFailure("a refused model list was accepted")
+            } catch ChatGPTPlanError.requestRejected(let text) {
+                precondition(text.contains("Forbidden here.") && text.contains("HTTP 403"), text)
+            }
+            // A refusal of the list is not a sign-out.
+            precondition(store.value != nil)
         }
 
         // Signing out forgets the account first and revokes only at OpenAI.

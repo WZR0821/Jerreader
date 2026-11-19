@@ -31,7 +31,8 @@ final class ChatGPTPlanSignIn: NSObject, ASWebAuthenticationPresentationContextP
         let authorization = ChatGPTPlanAuthorization(
             clientID: ChatGPTPlanRegistration.clientID(defaults),
             hostID: ChatGPTPlanRegistration.hostID(defaults),
-            port: port, loginHint: loginHint
+            port: port, loginHint: loginHint,
+            forceConsent: ChatGPTPlanRegistration.consentNeeded(defaults)
         )
 
         let browser = ASWebAuthenticationSession(
@@ -76,9 +77,17 @@ final class ChatGPTPlanSignIn: NSObject, ASWebAuthenticationPresentationContextP
         self.browser = nil
 
         if let issued = callback.issuedClientID { ChatGPTPlanRegistration.saveClientID(issued, defaults) }
-        let credential = try await session.completeSignIn(
-            code: callback.code, authorization: authorization, issuedClientID: callback.issuedClientID
-        )
+        let credential: ChatGPTPlanCredential
+        do {
+            credential = try await session.completeSignIn(
+                code: callback.code, authorization: authorization, issuedClientID: callback.issuedClientID
+            )
+        } catch ChatGPTPlanError.planUseNotGranted {
+            // The next sign-in asks for the plan's use again.
+            ChatGPTPlanRegistration.setConsentNeeded(true, defaults)
+            throw ChatGPTPlanError.planUseNotGranted
+        }
+        ChatGPTPlanRegistration.setConsentNeeded(false, defaults)
         do {
             return Outcome(account: credential.account, models: try await session.models(), modelsError: nil)
         } catch is CancellationError {

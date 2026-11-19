@@ -228,11 +228,17 @@
 - 令牌只存本机：iOS 钥匙串（service `Jerreader.translation-backend`、account `chatgpt-plan-credential`，`ThisDeviceOnly`）；安卓用原有的 `AndroidKeystoreCredentialStore`（系统密钥库加密），单独一个账户 `chatgpt-plan-credential`。本机 host id 和正式 client_id 存普通偏好设置。**都不进备份**；从备份恢复到另一台设备要重新登录。
 - 刷新：过期前 120 秒内的令牌视为过期；刷新不带 scope；同时发起的多个请求只刷新一次（后到的请求拿到刷新好的令牌）；刷新令牌轮换后保存新的。刷新令牌失效（`invalid_grant` 等）就清掉账号，提示重新登录。
 - 退出登录先删本机令牌，再尽力吊销刷新令牌；吊销失败不影响本机状态。
+- 换令牌时核对授予的 scope（build 72 起）：令牌响应列出了 scope 却没有 `chatgpt.tokens.use.direct`，说明用户在授权页没有允许使用套餐，这次登录不保存、刷新令牌当场吊销，提示重新登录并允许；响应没列 scope 时按已授予处理。被拒或请求时收到 `chatpass_v2_scope_not_authorized` / `chatpass_v2_invalid_authorization_context` 后，**只有下一次**登录带 `prompt=consent` 重新显示授权页，登录成功就清掉这个标记，平时不强制授权页。
 
 翻译请求：
 
-- `POST https://api.openai.com/v1/responses`，`store: false`、`stream: true`，带 `instructions` 和 `input`。整段收完再解析事件流，**只有收到 `response.completed` 才算成功**，半截结果不显示、不缓存。
-- 请求被 401 拒绝时换新令牌重试一次；还被拒就提示重新登录。
-- 额度用完（错误码 `subscription_sharing_usage_limit_exceeded` / `subscription_sharing_usage_unavailable`）直接停下，不自动重试，提示去 <https://chatgpt.com/settings/usage> 查看；这两种错误和“需要重新登录”都不提供“重试”按钮。
+- `POST https://api.openai.com/v1/responses`，`store: false`、`stream: true`，带 `instructions` 和 `input`。`input` 必须是消息数组 `[{"role":"user","content":"…"}]`，系统提示放 `instructions`；套餐接口不收字符串形式的 `input`（2.0.0（71）发的是字符串，测试连接和翻译都会被 400 拒绝，build 72 改正）。不带 `temperature`、`max_output_tokens`、`previous_response_id` 等套餐不支持的字段。整段收完再解析事件流，**只有收到 `response.completed` 才算成功**，半截结果不显示、不缓存。
+- 错误按 OpenAI 文档的说法分类（两端同一套规则，iOS `ChatGPTPlanRefusal`、安卓 `ChatGPTPlanRefusal`，对拍用例相同）：
+  - 401：换新令牌重试一次；还被拒就提示重新登录。
+  - 额度用完（`subscription_sharing_usage_limit_exceeded`）直接停下，不自动重试，提示去 <https://chatgpt.com/settings/usage> 查看。
+  - `subscription_sharing_usage_unavailable`、`subscription_sharing_user_unavailable`，以及 408 / 409 / 425 / 429 / 5xx：暂时不可用，按普通失败处理（可自动重试、可换备用服务）。71 把 `usage_unavailable` 当成额度用完，72 改正。
+  - 其余 4xx（含 403）：OpenAI 拒绝了这次请求，**不再一律当成“登录失效”**，也不清掉登录。提示先说明原因（账号或工作区不能用套餐、不支持某个参数、不允许调用这个接口、没有授权使用套餐、模型不可用、地区或账号限制），再附 OpenAI 的原话和“HTTP 状态 · 错误码 · 参数 · 请求 id（`x-request-id`）”，测试连接页的这段文字可以选中复制。错误体可能是 `{"error":{…}}`、直接准入的 `{"detail":…}` 或纯文本；网页不显示，原话超过 300 字截断。
+  - 事件流里的 `response.failed` / `error`：额度码照上面停下；没有错误码、暂时性错误码或 `server_error` 一类算暂时不可用；其他错误码按被拒处理，显示原话。
+- 额度用完、需要重新登录、请求被拒这三种不自动重试，也不换备用服务（与 iOS 只在暂时性错误时换备用服务一致），阅读页不提供“重新翻译”按钮。
 - 模型列表来自 `GET /v1/models`，只列 `visibility` 为 `list` 的模型，显示账号给的名字，存的是模型 id。
 - 测试全部用 Mock：iOS `scripts/test_chatgpt_plan.swift`（host-test 的 `chatgpt-plan` 组，回环监听在本机真实运行，不出本机）和 XCTest `ChatGPTPlanTranslationTests`；安卓是 JVM 单元测试 `ChatGPTPlanProtocolTest`、`ChatGPTPlanSessionTest`、`ChatGPTPlanCompletionTest`、`ChatGPTPlanSettingsTest`（假的 HTTP 客户端；回环监听同样在 127.0.0.1 真实运行）。没有用真实 ChatGPT 账号验证过。

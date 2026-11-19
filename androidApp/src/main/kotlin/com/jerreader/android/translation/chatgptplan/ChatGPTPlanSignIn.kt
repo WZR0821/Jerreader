@@ -89,7 +89,8 @@ object ChatGPTPlanSignIn {
                 clientID = store.chatGPTPlanClientID(),
                 hostID = store.chatGPTPlanHostID(),
                 port = port,
-                loginHint = loginHint
+                loginHint = loginHint,
+                forceConsent = store.chatGPTPlanConsentNeeded
             )
             returnComponent = activity.componentName
             ChatGPTPlanSignInService.start(activity)
@@ -106,7 +107,14 @@ object ChatGPTPlanSignIn {
             watcher.cancel()
             val issued = callback.issuedClientID
             if (issued != null) store.saveChatGPTPlanClientID(issued)
-            val credential = store.chatGPTPlanSession.completeSignIn(callback.code, authorization, issued)
+            val credential = try {
+                store.chatGPTPlanSession.completeSignIn(callback.code, authorization, issued)
+            } catch (error: ChatGPTPlanError.PlanUseNotGranted) {
+                // The next sign-in asks for the plan's use again.
+                store.chatGPTPlanConsentNeeded = true
+                throw error
+            }
+            store.chatGPTPlanConsentNeeded = false
             val models = try {
                 store.chatGPTPlanSession.models()
             } catch (error: CancellationException) {

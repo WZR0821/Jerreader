@@ -2609,7 +2609,7 @@ class ReaderActivity : AppCompatActivity() {
             }
             val explained = outcome.getOrNull()
             if (explained == null) {
-                // A ChatGPT plan out of quota or signed out says so instead.
+                // A ChatGPT plan out of quota, signed out or refused says so instead.
                 crossPageMessage = outcome.exceptionOrNull()?.takeIf { ChatGPTPlanMessages.isStop(it) }?.message
                     ?: if (lensMode == null) {
                         "AI 解析不可用，请先在设置里配置 AI 服务。"

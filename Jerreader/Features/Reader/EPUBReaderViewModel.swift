@@ -2791,6 +2791,8 @@ final class EPUBReaderViewModel {
             return .providerPlanUsageLimit
         case .planSignInRequired:
             return .providerPlanSignInRequired
+        case let .planRequestRejected(message):
+            return .providerPlanRejected(message)
         case .temporarilyUnavailable where provider.isNetworkProvider:
             return .providerUnavailable
         case .resultNotFound where provider.isNetworkProvider:
@@ -2816,6 +2818,8 @@ final class EPUBReaderViewModel {
             return .planUsageLimit
         case .planSignInRequired:
             return .planSignInRequired
+        case let .planRequestRejected(message):
+            return .planRejected(message)
         case .emptyText, .textTooLong, .unsupportedLanguage:
             return .invalidSelection
         case .resultNotFound:

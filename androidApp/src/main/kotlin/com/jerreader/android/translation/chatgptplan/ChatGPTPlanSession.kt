@@ -37,7 +37,7 @@ class UrlConnectionChatGPTPlanHttpClient : ChatGPTPlanHttpClient {
             val status = connection.responseCode
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
             val text = stream?.use { input -> input.readBytes().decodeToString() }.orEmpty()
-            ChatGPTPlanHttpResponse(status, text)
+            ChatGPTPlanHttpResponse(status, text, connection.getHeaderField("x-request-id"))
         } finally {
             connection.disconnect()
         }
@@ -151,6 +151,12 @@ class ChatGPTPlanSession(
         val token = ChatGPTPlanTokenResponse.parse(response.body) ?: throw ChatGPTPlanError.UnexpectedResponse()
         if (token.accessToken.isEmpty()) throw ChatGPTPlanError.UnexpectedResponse()
         val refresh = token.refreshToken?.takeIf { it.isNotEmpty() } ?: throw ChatGPTPlanError.UnexpectedResponse()
+        // A sign-in that may not use the plan cannot translate: it is not
+        // kept, and its refresh token is given back.
+        if (!token.grantsDirectUse) {
+            revoke(refresh, clientID)
+            throw ChatGPTPlanError.PlanUseNotGranted()
+        }
         val account = ChatGPTPlanIDToken.account(token.idToken)
         val time = now()
         val made = ChatGPTPlanCredential(
@@ -199,8 +205,12 @@ class ChatGPTPlanSession(
             response = send(ChatGPTPlanRequests.models(token))
         }
         if (!response.isSuccess) {
-            if (response.status == 401 || response.status == 403) throw ChatGPTPlanError.SignInRequired()
-            throw ChatGPTPlanError.Network()
+            throw when (val refusal = ChatGPTPlanRefusal.classify(response.status, response.body, response.requestID)) {
+                ChatGPTPlanRefusal.SignInRequired -> ChatGPTPlanError.SignInRequired()
+                ChatGPTPlanRefusal.UsageLimit -> ChatGPTPlanError.UsageLimitReached()
+                ChatGPTPlanRefusal.Temporary -> ChatGPTPlanError.TemporarilyUnavailable()
+                is ChatGPTPlanRefusal.Rejected -> ChatGPTPlanError.RequestRejected(refusal.message)
+            }
         }
         val models = ChatGPTPlanModels.parse(response.body)
         if (models.isEmpty()) throw ChatGPTPlanError.NoModels()
@@ -315,9 +325,13 @@ class ChatGPTPlanSession(
     }
 
     private suspend fun revoke(saved: ChatGPTPlanCredential) {
+        revoke(saved.refreshToken, saved.clientID)
+    }
+
+    private suspend fun revoke(refreshToken: String, clientID: String) {
         try {
             val endpoint = revocationEndpoint() ?: return
-            client.send(ChatGPTPlanRequests.revoke(endpoint, saved.refreshToken, saved.clientID))
+            client.send(ChatGPTPlanRequests.revoke(endpoint, refreshToken, clientID))
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {

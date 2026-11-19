@@ -71,8 +71,13 @@ class ConfiguredTranslationService(
 ) : TranslationService, ContextExplanationService {
     override val identifier: String = "configured-ai"
 
-    /** Requests paid by the ChatGPT plan, through its signed-in session. */
-    private val planCompletion = ChatGPTPlanCompletion(settings.chatGPTPlanSession)
+    /**
+     * Requests paid by the ChatGPT plan, through its signed-in session. A
+     * refusal for a missing grant makes the next sign-in ask for it again.
+     */
+    private val planCompletion = ChatGPTPlanCompletion(settings.chatGPTPlanSession) {
+        settings.chatGPTPlanConsentNeeded = true
+    }
 
     override suspend fun translate(request: TranslationRequest): TranslationResult =
         translate(request, override = null)
@@ -101,7 +106,7 @@ class ConfiguredTranslationService(
                 error is TranslationFailure.TextTooLong ||
                 error is TranslationFailure.UnsupportedLanguage ||
                 error is TranslationFailure.LocalModelsMissing ||
-                // A ChatGPT plan out of quota or signed out stops; nothing answers in its place.
+                // A ChatGPT plan out of quota, signed out or refused stops; nothing answers in its place.
                 ChatGPTPlanMessages.isStop(error)
             ) {
                 throw error
@@ -285,9 +290,9 @@ class ConfiguredTranslationService(
     }
 
     /**
-     * One answer paid by the ChatGPT plan. A usage limit or an ended sign-in
-     * stops at once and is never retried; other failures are retried like any
-     * provider's.
+     * One answer paid by the ChatGPT plan. A usage limit, an ended sign-in or
+     * a refusal stops at once and is never retried; passing failures are
+     * retried like any provider's.
      */
     private suspend fun planText(
         configuration: TranslationServiceConfiguration,

@@ -486,6 +486,8 @@ enum ReaderTranslationDisplayError: Equatable, Sendable {
     case providerAuthenticationFailed
     case providerPlanUsageLimit
     case providerPlanSignInRequired
+    /// OpenAI refused the plan request; the text is OpenAI's reason.
+    case providerPlanRejected(String)
     case providerUnavailable
     case appleLanguagePreparationTimedOut
     case timedOut
@@ -513,9 +515,11 @@ enum ReaderTranslationDisplayError: Equatable, Sendable {
         case .providerAuthenticationFailed:
             return "AI 翻译验证失败，请检查保存在钥匙串中的 API Key 或代理凭据。"
         case .providerPlanUsageLimit:
-            return "ChatGPT 套餐的额度已用完或暂时不可用，已暂停用它翻译。到 chatgpt.com/settings/usage 查看用量，或在设置里换一个模型。"
+            return "ChatGPT 套餐的额度已用完，已暂停用它翻译。到 chatgpt.com/settings/usage 查看用量，或在设置里换一个模型。"
         case .providerPlanSignInRequired:
             return "ChatGPT 登录已失效，请到“设置 → AI 大模型”重新登录。"
+        case let .providerPlanRejected(message):
+            return message
         case .providerUnavailable:
             return "AI 翻译服务暂时无法连接，请检查网络、模型或稍后重试。"
         case .appleLanguagePreparationTimedOut:
@@ -533,7 +537,7 @@ enum ReaderTranslationDisplayError: Equatable, Sendable {
         switch self {
         case .emptySelection, .textTooLong, .unsupportedLanguage, .sameLanguage,
              .providerConfigurationInvalid, .providerAuthenticationFailed,
-             .providerPlanUsageLimit, .providerPlanSignInRequired:
+             .providerPlanUsageLimit, .providerPlanSignInRequired, .providerPlanRejected:
             return false
         case .languageDownloadDeclined, .userCancelled, .translationUnavailable,
              .providerUnavailable, .appleLanguagePreparationTimedOut,
@@ -594,6 +598,8 @@ enum ReaderContextExplanationError: Equatable, Sendable {
     case authenticationFailed
     case planUsageLimit
     case planSignInRequired
+    /// OpenAI refused the plan request; the text is OpenAI's reason.
+    case planRejected(String)
     case emptyResponse
     case timedOut
     case unavailable
@@ -608,9 +614,11 @@ enum ReaderContextExplanationError: Equatable, Sendable {
         case .authenticationFailed:
             return "AI 服务验证失败，请检查 API Key。"
         case .planUsageLimit:
-            return "ChatGPT 套餐的额度已用完或暂时不可用。到 chatgpt.com/settings/usage 查看用量，或在设置里换一个模型。"
+            return "ChatGPT 套餐的额度已用完。到 chatgpt.com/settings/usage 查看用量，或在设置里换一个模型。"
         case .planSignInRequired:
             return "ChatGPT 登录已失效，请到“设置 → AI 大模型”重新登录。"
+        case let .planRejected(message):
+            return message
         case .emptyResponse:
             return "AI 服务已返回，但没有可显示的语法分析。请重新生成。"
         case .timedOut:
@@ -628,7 +636,7 @@ enum ReaderContextExplanationError: Equatable, Sendable {
             return true
         case .configurationMissing, .configurationInvalid,
              .authenticationFailed, .invalidSelection,
-             .planUsageLimit, .planSignInRequired:
+             .planUsageLimit, .planSignInRequired, .planRejected:
             return false
         }
     }

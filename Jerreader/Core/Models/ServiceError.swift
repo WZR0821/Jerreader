@@ -15,6 +15,10 @@ enum ServiceError: LocalizedError, Equatable, Sendable {
     case planUsageLimitReached
     /// The ChatGPT sign-in ended; only signing in again helps.
     case planSignInRequired
+    /// OpenAI refused a plan request. The text says why in OpenAI's words,
+    /// with the status, code and request id. Retrying the same request does
+    /// not help.
+    case planRequestRejected(String)
 
     var errorDescription: String? {
         switch self {
@@ -39,9 +43,11 @@ enum ServiceError: LocalizedError, Equatable, Sendable {
         case .authenticationFailed:
             return "翻译服务拒绝了访问，请检查钥匙串中的 API Key 或代理凭据。"
         case .planUsageLimitReached:
-            return "ChatGPT 套餐的额度已用完或暂时不可用，已暂停用它翻译。到 chatgpt.com/settings/usage 查看用量；Plus 的 5 小时额度和 ChatGPT、Codex 等共用。"
+            return "ChatGPT 套餐的额度已用完，已暂停用它翻译。到 chatgpt.com/settings/usage 查看用量；Plus 的 5 小时额度和 ChatGPT、Codex 等共用。"
         case .planSignInRequired:
             return "ChatGPT 登录已失效。请到“设置 → AI 大模型”重新登录。"
+        case .planRequestRejected(let message):
+            return message
         }
     }
 }

@@ -1,10 +1,12 @@
-# Jerreader 2.0.0（71）维护记录 · 2026-11-19
+# Jerreader 2.0.0（72）维护记录 · 2026-11-19
 
-状态：**双端 2.0.0（71）已构建、验收并打包（2026-11-19）。** iOS：host-test、analyze、模拟器 XCTest 与 UI 测试通过，未签名 IPA 已打出；Android：Release 构建（单元测试、Lint）、完整设备测试与 Release 冒烟通过，正式 APK 已打出。两个包都已复制到桌面。验证中发现 Android 1.7.0 起的正式包打不开 PDF（当时的冒烟假通过），这一版已修好并补了检查，见第 5 节。没有真机验证，没有用真实账号或 API Key。
+> 2.0.0 最初以 build 71 发布。同日用户在真机上试 ChatGPT 套餐，登录和模型列表都正常，测试连接却被 OpenAI 拒绝；原因是请求里的 `input` 发成了字符串，套餐接口只收消息数组。修好后仍叫 2.0.0，build 改为 **72**，替换了 GitHub 上 v2.0.0 的安装包，见第 7 节。下面第 1 至 6 节是 71 的原始记录。
+
+状态（71）：**双端 2.0.0（71）已构建、验收并打包（2026-11-19）。** iOS：host-test、analyze、模拟器 XCTest 与 UI 测试通过，未签名 IPA 已打出；Android：Release 构建（单元测试、Lint）、完整设备测试与 Release 冒烟通过，正式 APK 已打出。两个包都已复制到桌面。验证中发现 Android 1.7.0 起的正式包打不开 PDF（当时的冒烟假通过），这一版已修好并补了检查，见第 5 节。没有真机验证，没有用真实账号或 API Key。
 
 ## 1. 版本与标识
 
-- 双端版本 **2.0.0**，build / versionCode **71**。1.7.0 是 69，1.7.1（70）只打了 Android 包、没有单独发布；2.0.0 起两端重新同号。这次新增 AI 套餐，界面整体重做，按版本规则升主版本。
+- 双端版本 **2.0.0**，build / versionCode **71**（现为 72，见第 7 节）。1.7.0 是 69，1.7.1（70）只打了 Android 包、没有单独发布；2.0.0 起两端重新同号。这次新增 AI 套餐，界面整体重做，按版本规则升主版本。
 - 只改 iOS App 目标的 Debug / Release（`CURRENT_PROJECT_VERSION`、`MARKETING_VERSION`），测试目标仍为 1 / 1.0。Android 在 `androidApp/build.gradle.kts`。
 - bundle ID（`com.raydon.Jerreader`）、applicationId（`com.jerreader.android`）和签名证书都没变。Android 沿用原来的签名，可以覆盖安装 1.7.x。
 
@@ -80,3 +82,37 @@ Android（构建都是 `JERREADER_ANDROID_PACKAGE_VARIANT=release scripts/safe_a
 - iOS UI 测试里要真实注音 EPUB 的 10 项和 iPad 的 1 项照旧跳过；iPad 版已暂停，不验收。
 - GitHub 上 v1.7.0 的发布说明写着 Release 包“能打开 EPUB 和 PDF”，那是当时冒烟的假通过（见第 5 节）。2.0.0 发布后，应用户要求在那一行下面补了一句更正（11-19），说明这个包其实打不开 PDF、本机翻译也用不了，并指向 2.0.0；2.0.0 的发布说明里也写明了这个问题已修复。
 - 写这份记录时还没提交 git；后来已提交（`ea323c6`），11-19 推到 GitHub 并发了 [v2.0.0 Release](https://github.com/WZR0821/Jerreader/releases/tag/v2.0.0)（附双端安装包，下载回来核对过 SHA-256），在议题 #2 下回复后关闭为已完成。
+
+## 7. build 72：ChatGPT 套餐的请求被拒（2026-11-19）
+
+用户真机截图（iPhone）：登录 ChatGPT、取模型列表都正常，「测试连接」（模型 GPT-6.2-Sol）却报“翻译服务配置无效，请检查 HTTPS 地址、模型和请求格式”，看不出 OpenAI 给的原因。71 的 iOS 只在 OpenAI 返回 400、404、405、415、422 时才这样说。
+
+原因，对照 OpenAI 的 [token sharing 文档](https://developers.openai.com/siwc/token-sharing-open-source) 逐项核对后确定：
+
+1. **`input` 格式不对。** 两端都把 `input` 发成了字符串；套餐接口要求 `input` 是消息数组（`[{"role":"user","content":"…"}]`），字符串会被 400 拒绝，和截图里的提示对得上。Mock 测试是照着我们自己写的格式做的，所以没发现。这是主要原因；OpenAI 的原话被应用丢掉了，所以无法百分之百确认。
+2. **错误提示把原因藏了。** iOS 把 400 一类说成“配置无效”、把所有 403 都当成“登录失效”，安卓把 403 当成登录失效、其他 4xx 只说“返回 HTTP xxx”；OpenAI 返回的说明、错误码、参数和请求 id 都没显示，用户无从判断。
+3. 另有两处和文档不符：`subscription_sharing_usage_unavailable`（暂时查不到用量）被当成“额度用完”；换令牌时没核对用户是否在授权页允许了使用套餐。
+
+修复（两端相同，build 72，版本号仍是 2.0.0）：
+
+- `input` 改成消息数组，其他字段不变（`instructions`、`store: false`、`stream: true`，可选 `reasoning`）。
+- 错误分类按文档重写（规则见 [架构说明](ARCHITECTURE.md) 的「2.0.0 AI 套餐与「纸墨」界面」一节）：401 换令牌重试一次再提示登录；额度用完照旧停下；暂时性错误可重试、可换备用服务；其余 4xx（含 403）不再当成登录失效、不清登录，显示原因、OpenAI 的原话和“HTTP 状态 · 错误码 · 参数 · 请求 id”。测试连接页的错误文字可以选中复制，方便反馈。
+- 授权页没有允许使用套餐时，这次登录不保存、刷新令牌当场吊销并提示；之后下一次登录带 `prompt=consent` 重新显示授权页（只这一次）。
+- 安卓与 iOS 对齐：套餐请求被拒时不再换备用服务（iOS 只在暂时性错误时换），阅读页的译文卡片在额度用完、需要登录、被拒这三种情况下不显示“重新翻译”，卡片菜单里的“重新翻译”变灰，与 iOS 相同。
+- 测试：iOS 主机测试 `scripts/test_chatgpt_plan.swift` 加了 `refusals()` 一组和请求格式、授权页、scope 核对的用例，XCTest `BackendTranslationServiceTests` 加了 403、不支持的参数、未授权、事件流失败四项，原来把“暂时查不到用量”当成额度用完的一项改成按暂时不可用判断；安卓 `ChatGPTPlanProtocolTest`、`ChatGPTPlanCompletionTest`、`ChatGPTPlanSessionTest` 加了同样的用例（两端用同一组错误体）。
+- 代码：iOS `ChatGPTPlan.swift`、`ChatGPTPlanSignIn.swift`、`BackendTranslationService.swift`、`ServiceError.swift`、`ReaderModels.swift`、`EPUBReaderViewModel.swift`、`AIProviderViews.swift`；安卓 `chatgptplan/` 下四个文件、`ConfiguredTranslationService.kt`、`AndroidTranslationSettingsStore.kt`、`ReaderTapTranslationController.kt`、`PdfTapTranslationController.kt`、`AIModelsScreen.kt`，shared 的 `TranslationCard.kt`（失败卡片加 `canRetry`）。
+
+验证（build 72，日志都在 `.build/SafeValidationLogs/`；打 IPA 在后台入口的源码副本里）：
+
+- iOS `20261119-135246-le__tsu0`（host-test）：**通过**，16 项全过，含 `chatgpt-plan`（新加的 `refusals()` 等用例）和 `parity-fixtures`。
+- iOS `20261119-141715-__0ib_xl`（`scripts/background_build.py submit ipa`，Release，generic iOS device，不签名）：**通过**，没有源码警告（只有 `.pcm` 模块缓存警告和原有的 scheme 构建顺序警告）。IPA `dist/iOS/Jerreader-2.0.0-build72-20261119-142025-unsigned.ipa`，15,004,902 字节，SHA-256 `3459d52ae351e6b1467d589b8969a324eb752b638e08bb703720ee548fe38ea1`，CFBundleShortVersionString 2.0.0、CFBundleVersion 72。
+- iOS `20261119-145255-klm_ef_6`（test，模拟器 YomiReader QA，iOS 18.2）：**通过**，XCTest 290 通过、3 跳过、0 失败（71 是 286 通过；多出的是新加的 4 项，改写的“暂时查不到用量”一项也在其中；跳过的 3 项照旧要外部真实书籍）。编译没有源码警告，只有原有的 scheme 构建顺序警告。上面打 IPA 用的源码副本和这次测的源码逐个文件相同。
+- iOS UI 测试没有重跑。这次界面只改了两处：测试连接失败的文字可以选中复制；套餐被拒时译文卡片不显示“重新翻译”。UI 测试不连网，既不点测试连接，也不会出现套餐被拒，走不到这两处；其余界面和 71 相同。
+- Android `20261119-142129-nz04lhmm`（构建）：**通过**，13 分 7 秒。shared 主机测试 88 项、androidApp 单元测试 145 项（71 是 138，多出的 7 项是这次的新用例）全部通过；lintDebug、lintRelease 没有错误。新警告只有一条：`ChatGPTPlanProtocolTest.kt:383` 多余的 `!!`（测试代码，不影响结果）。`ConfiguredTranslationService.kt` 里 `when` 不完整的警告在 71 的 `113115` 构建就有，那段代码没动。
+- Android `20261119-143537-cat186tt`（设备测试，full 范围 + Release 冒烟，模拟器 API 35）：**通过**。仪器测试 50 项全过（回归 38 项 + 学习界面 12 项）；Release 冒烟里 EPUB、PDF 都真的打开了（看过 `android-release-reader-pdf.png`），ML Kit 组件注册类都能创建，书架、学习、设置三个标签都能打开。
+- 打包：`scripts/package_release_apk.py`，`--previous-apk` 用 71 的包。Android 正式包 `dist/Android/Jerreader-Android-2.0.0-build72-20261119-145248-release.apk`，42,367,100 字节，SHA-256 `2337b9dcc00ade86466d832ad1fecc7b937aa71095ab1be8973ea667aae7b551`，versionName 2.0.0、versionCode 72，只有 arm64-v8a；和模拟器上验过的 x86_64 包除原生库外逐项相同，签名证书和 71 相同，可以覆盖安装。
+
+没验证的（build 72）：
+
+- 71 在用户的 iPhone 上用真实 ChatGPT 账号登录、取模型列表都成功，说明手机上的回环登录确实可用（第 6 节当时没法确认）。72 改的请求格式和出错处理只用 Mock 测过，还没有用真实账号重新试测试连接和翻译；万一仍被拒，提示里会有 OpenAI 的原话、错误码和请求 id，可以据此定位。
+- Android 的 ChatGPT 套餐仍没有用真实账号登录过。两端仍没有系统的真机验收。

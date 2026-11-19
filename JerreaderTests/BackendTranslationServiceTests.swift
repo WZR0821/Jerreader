@@ -761,8 +761,11 @@ final class ChatGPTPlanTranslationTests: XCTestCase {
         XCTAssertEqual(body["store"] as? Bool, false)
         XCTAssertEqual(body["stream"] as? Bool, true)
         XCTAssertTrue((body["instructions"] as? String)?.contains("只输出译文") == true)
-        let input = try XCTUnwrap(body["input"] as? String)
-        XCTAssertTrue(input.contains("<source>\nThe night was quiet.\n</source>"))
+        // The plan takes input only as a list of messages, never a bare string.
+        let input = try XCTUnwrap(body["input"] as? [[String: Any]])
+        XCTAssertEqual(input.count, 1)
+        XCTAssertEqual(input.first?["role"] as? String, "user")
+        XCTAssertTrue((input.first?["content"] as? String)?.contains("<source>\nThe night was quiet.\n</source>") == true)
         // Nothing the plan does not take goes out.
         XCTAssertTrue(Set(body.keys).isSubset(of: ["model", "instructions", "input", "store", "stream", "reasoning"]))
         XCTAssertTrue(Set(body.keys).isDisjoint(with: ChatGPTPlanRequests.omittedFields))
@@ -812,12 +815,81 @@ final class ChatGPTPlanTranslationTests: XCTestCase {
         XCTAssertTrue(refreshes.isEmpty)
     }
 
-    func testPlanUsageUnavailableOnForbiddenIsAUsageLimit() async {
+    func testPlanUsageUnavailableIsTemporaryNotALimit() async {
+        let unavailable = PlanServerStub()
+        await unavailable.queue(responsesPath, 503, #"{"error":{"code":"subscription_sharing_usage_unavailable"}}"#)
+        await assertTranslation(
+            Self.service(server: unavailable, store: PlanStoreStub(Self.credential(access: "plan-a1"))),
+            throws: .temporarilyUnavailable
+        )
+
+        let forbidden = PlanServerStub()
+        await forbidden.queue(responsesPath, 403, #"{"detail":"subscription_sharing_usage_unavailable"}"#)
+        await assertTranslation(
+            Self.service(server: forbidden, store: PlanStoreStub(Self.credential(access: "plan-a1"))),
+            throws: .temporarilyUnavailable
+        )
+    }
+
+    func testForbiddenPlanRequestShowsOpenAIsReasonAndKeepsTheSignIn() async throws {
         let server = PlanServerStub()
-        await server.queue(responsesPath, 403, #"{"detail":"subscription_sharing_usage_unavailable"}"#)
+        await server.queue(responsesPath, 403, #"{"detail":"Not available in your region."}"#,
+                           headers: ["x-request-id": "req_403"])
+        let store = PlanStoreStub(Self.credential(access: "plan-a1"))
+        let service = Self.service(server: server, store: store)
+
+        let message = try await rejectedMessage(service)
+        XCTAssertTrue(message.contains("Not available in your region."), message)
+        XCTAssertTrue(message.contains("HTTP 403"), message)
+        XCTAssertTrue(message.contains("请求 req_403"), message)
+        XCTAssertFalse(message.contains("登录已失效"), message)
+        // A 403 is not a refused token: no refresh, no sign-out.
+        let refreshes = await server.requests(to: tokenPath)
+        XCTAssertTrue(refreshes.isEmpty)
+        XCTAssertNotNil(store.value)
+    }
+
+    func testUnsupportedPlanCapabilityNamesTheParameter() async throws {
+        let server = PlanServerStub()
+        await server.queue(responsesPath, 400, """
+        {"error":{"message":"Invalid type for 'input'.","type":"invalid_request_error","param":"input","code":"subscription_sharing_unsupported_capability"}}
+        """)
         let service = Self.service(server: server, store: PlanStoreStub(Self.credential(access: "plan-a1")))
 
-        await assertTranslation(service, throws: .planUsageLimitReached)
+        let message = try await rejectedMessage(service)
+        XCTAssertTrue(message.contains("不支持这次请求里的 input"), message)
+        XCTAssertTrue(message.contains("Invalid type for 'input'."), message)
+        XCTAssertTrue(message.contains("subscription_sharing_unsupported_capability"), message)
+        XCTAssertEqual(
+            ReaderTranslationDisplayError.providerPlanRejected(message).canRetry, false
+        )
+    }
+
+    func testPlanUseNotAuthorizedAsksForConsentAtTheNextSignIn() async throws {
+        let server = PlanServerStub()
+        await server.queue(responsesPath, 403, #"{"error":{"code":"chatpass_v2_scope_not_authorized","message":"Scope missing."}}"#)
+        let flag = ConsentFlag()
+        let service = Self.service(server: server, store: PlanStoreStub(Self.credential(access: "plan-a1")),
+                                   consent: { flag.raise() })
+
+        let message = try await rejectedMessage(service)
+        XCTAssertTrue(message.contains("没有授权使用套餐额度"), message)
+        XCTAssertTrue(flag.raised)
+    }
+
+    func testFailedStreamWithAnotherCodeShowsTheReason() async throws {
+        let server = PlanServerStub()
+        await server.queue(responsesPath, 200, """
+        event: response.failed
+        data: {"type":"response.failed","response":{"error":{"code":"invalid_prompt","message":"Prompt was refused."}}}
+
+
+        """)
+        let service = Self.service(server: server, store: PlanStoreStub(Self.credential(access: "plan-a1")))
+
+        let message = try await rejectedMessage(service)
+        XCTAssertTrue(message.contains("Prompt was refused."), message)
+        XCTAssertTrue(message.contains("invalid_prompt"), message)
     }
 
     func testOrdinaryRateLimitIsTemporary() async {
@@ -916,7 +988,11 @@ final class ChatGPTPlanTranslationTests: XCTestCase {
 
     // MARK: Helpers
 
-    private static func service(server: PlanServerStub, store: PlanStoreStub) -> DirectAITranslationService {
+    private static func service(
+        server: PlanServerStub,
+        store: PlanStoreStub,
+        consent: @escaping @Sendable () -> Void = {}
+    ) -> DirectAITranslationService {
         DirectAITranslationService(
             configuration: .init(
                 provider: .chatGPTPlan,
@@ -925,8 +1001,27 @@ final class ChatGPTPlanTranslationTests: XCTestCase {
                 apiKey: "chatgpt-plan"
             ),
             client: server,
-            planSession: ChatGPTPlanSession(store: store, client: server)
+            planSession: ChatGPTPlanSession(store: store, client: server),
+            planConsentNeeded: consent
         )
+    }
+
+    /// The text of a refused plan request; fails the test for anything else.
+    private func rejectedMessage(
+        _ service: DirectAITranslationService,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws -> String {
+        do {
+            _ = try await Self.translate(with: service)
+        } catch ServiceError.planRequestRejected(let message) {
+            return message
+        } catch {
+            XCTFail("Expected a rejected plan request, got \(error)", file: file, line: line)
+            return ""
+        }
+        XCTFail("Expected a rejected plan request, nothing was thrown", file: file, line: line)
+        return ""
     }
 
     private static func translate(with service: DirectAITranslationService) async throws -> TranslationResult {
@@ -985,11 +1080,11 @@ final class ChatGPTPlanTranslationTests: XCTestCase {
 /// Answers by URL path from a script, for both the plan's sign-in requests
 /// and the translation requests; refuses to connect when nothing is queued.
 private actor PlanServerStub: BackendTranslationHTTPClient, ChatGPTPlanHTTPClient {
-    private var replies: [String: [(status: Int, body: String)]] = [:]
+    private var replies: [String: [(status: Int, body: String, headers: [String: String])]] = [:]
     private var log: [URLRequest] = []
 
-    func queue(_ path: String, _ status: Int, _ body: String) {
-        replies[path, default: []].append((status, body))
+    func queue(_ path: String, _ status: Int, _ body: String, headers: [String: String] = [:]) {
+        replies[path, default: []].append((status, body, headers))
     }
 
     func requests(to path: String) -> [URLRequest] {
@@ -1008,9 +1103,27 @@ private actor PlanServerStub: BackendTranslationHTTPClient, ChatGPTPlanHTTPClien
             url: request.url!,
             statusCode: reply.status,
             httpVersion: "HTTP/1.1",
-            headerFields: ["Content-Type": "application/json"]
+            headerFields: ["Content-Type": "application/json"].merging(reply.headers) { $1 }
         )!
         return (Data(reply.body.utf8), response)
+    }
+}
+
+/// Records that the plan asked for consent at the next sign-in.
+private final class ConsentFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    var raised: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    func raise() {
+        lock.lock()
+        defer { lock.unlock() }
+        value = true
     }
 }
 

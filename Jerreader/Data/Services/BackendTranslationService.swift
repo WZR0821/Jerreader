@@ -308,15 +308,20 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
     private let client: any BackendTranslationHTTPClient
     /// Hands out the access token of a ChatGPT plan; unused by other providers.
     private let planSession: ChatGPTPlanSession
+    /// Called when OpenAI says the plan's use was never granted, so the next
+    /// sign-in shows the consent page again.
+    private let planConsentNeeded: @Sendable () -> Void
 
     init(
         configuration: DirectAITranslationConfiguration,
         client: any BackendTranslationHTTPClient = URLSessionBackendTranslationHTTPClient(),
-        planSession: ChatGPTPlanSession = .shared
+        planSession: ChatGPTPlanSession = .shared,
+        planConsentNeeded: @escaping @Sendable () -> Void = { ChatGPTPlanRegistration.setConsentNeeded(true) }
     ) {
         self.configuration = configuration
         self.client = client
         self.planSession = planSession
+        self.planConsentNeeded = planConsentNeeded
     }
 
     var providerIdentifier: String {
@@ -545,34 +550,34 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
             token = try await planAccessToken(rejected: token)
             (data, response) = try await send(try request(token))
         }
-        switch response.statusCode {
-        case 200 ..< 300:
-            break
-        case 429 where ChatGPTPlanStream.usageLimitCode(in: data) != nil:
-            throw ServiceError.planUsageLimitReached
-        case 401:
-            throw ServiceError.planSignInRequired
-        case 403 where ChatGPTPlanStream.usageLimitCode(in: data) != nil:
-            throw ServiceError.planUsageLimitReached
-        case 403:
-            throw ServiceError.planSignInRequired
-        case 400, 404, 405, 415, 422:
-            throw ServiceError.invalidConfiguration
-        default:
-            throw ServiceError.temporarilyUnavailable
+        // OpenAI's own reason is kept: the status, the code and the request id.
+        guard (200 ..< 300).contains(response.statusCode) else {
+            if ChatGPTPlanErrorBody(data).needsConsent { planConsentNeeded() }
+            throw Self.serviceError(ChatGPTPlanRefusal.classify(
+                status: response.statusCode, body: data,
+                requestID: response.value(forHTTPHeaderField: "x-request-id")
+            ))
         }
         switch ChatGPTPlanStream.parse(data) {
         case .completed(let text):
             let answer = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !answer.isEmpty else { throw ServiceError.resultNotFound }
             return answer
-        case .failed(let code):
-            throw ChatGPTPlanStream.isUsageLimit(code)
-                ? ServiceError.planUsageLimitReached : ServiceError.temporarilyUnavailable
+        case .failed(let code, let message):
+            throw Self.serviceError(ChatGPTPlanRefusal.streamFailure(code: code, message: message))
         case .incomplete:
             throw ServiceError.resultNotFound
         case .interrupted:
             throw ServiceError.temporarilyUnavailable
+        }
+    }
+
+    private static func serviceError(_ refusal: ChatGPTPlanRefusal) -> ServiceError {
+        switch refusal {
+        case .signInRequired: return .planSignInRequired
+        case .usageLimit: return .planUsageLimitReached
+        case .temporary: return .temporarilyUnavailable
+        case .rejected(let message): return .planRequestRejected(message)
         }
     }
 

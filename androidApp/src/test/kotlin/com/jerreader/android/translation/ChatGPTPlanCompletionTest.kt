@@ -9,13 +9,14 @@ import com.jerreader.android.translation.chatgptplan.ChatGPTPlanSession
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * One translation paid by the plan, with a fake client: success only on
- * `response.completed`, one retry with a fresh token, and usage limits and
- * ended sign-ins that stop the request instead of retrying it.
+ * `response.completed`, one retry with a fresh token, and usage limits,
+ * ended sign-ins and refusals that stop the request instead of retrying it.
  */
 class ChatGPTPlanCompletionTest {
     private val clock = 1_800_000_000_000L
@@ -31,7 +32,11 @@ class ChatGPTPlanCompletionTest {
         val body = JSONObject(sent.body!!)
         assertEquals("gpt-test", body.getString("model"))
         assertEquals("Translate into Chinese.", body.getString("instructions"))
-        assertEquals("Hello", body.getString("input"))
+        // A list of messages: the plan refuses a bare string.
+        val input = body.getJSONArray("input")
+        assertEquals(1, input.length())
+        assertEquals("user", input.getJSONObject(0).getString("role"))
+        assertEquals("Hello", input.getJSONObject(0).getString("content"))
         assertEquals(false, body.getBoolean("store"))
         assertEquals(true, body.getBoolean("stream"))
         assertTrue(ALLOWED_FIELDS.containsAll(body.keys().asSequence().toSet()))
@@ -82,7 +87,7 @@ class ChatGPTPlanCompletionTest {
     @Test fun usageLimitsStopTheRequest() = runBlocking<Unit> {
         for (response in listOf(
             ChatGPTPlanHttpResponse(429, """{"error":{"code":"subscription_sharing_usage_limit_exceeded"}}"""),
-            ChatGPTPlanHttpResponse(403, """{"detail":"subscription_sharing_usage_unavailable"}"""),
+            ChatGPTPlanHttpResponse(403, """{"detail":"subscription_sharing_usage_limit_exceeded"}"""),
             completedWith("""{"type":"response.failed","response":{"error":{"code":"subscription_sharing_usage_limit_exceeded"}}}""")
         )) {
             val client = FakePlanClient { response }
@@ -92,12 +97,86 @@ class ChatGPTPlanCompletionTest {
         }
     }
 
+    @Test fun usageUnavailableIsTemporaryNotALimit() = runBlocking<Unit> {
+        for (response in listOf(
+            ChatGPTPlanHttpResponse(503, """{"error":{"code":"subscription_sharing_usage_unavailable"}}"""),
+            ChatGPTPlanHttpResponse(403, """{"detail":"subscription_sharing_usage_unavailable"}""")
+        )) {
+            assertEquals(ChatGPTPlanServiceFailure.Temporary(), failure(FakePlanClient { response }))
+        }
+    }
+
+    @Test fun aForbiddenRequestShowsOpenAIsReasonAndKeepsTheSignIn() = runBlocking<Unit> {
+        val store = MemoryPlanStore(credential())
+        val client = FakePlanClient {
+            ChatGPTPlanHttpResponse(403, """{"detail":"Not available in your region."}""", requestID = "req_403")
+        }
+        val error = runCatching {
+            ChatGPTPlanCompletion(ChatGPTPlanSession(store, client, now = { clock })).complete(direct(), "i", "t", quick = true)
+        }.exceptionOrNull()
+        assertTrue(error.toString(), error is ChatGPTPlanServiceFailure.Rejected)
+        val detail = (error as ChatGPTPlanServiceFailure.Rejected).detail
+        assertTrue(detail, detail.contains("Not available in your region."))
+        assertTrue(detail, detail.contains("HTTP 403") && detail.contains("请求 req_403"))
+        assertFalse(detail, detail.contains("登录已失效"))
+        // No refresh, no sign-out.
+        assertEquals(listOf(ChatGPTPlan.RESPONSES_URL), client.requests.map { it.url })
+        assertEquals("access-1", store.load()?.accessToken)
+    }
+
+    @Test fun anUnsupportedCapabilityNamesTheParameter() = runBlocking<Unit> {
+        val client = FakePlanClient {
+            ChatGPTPlanHttpResponse(
+                400,
+                """{"error":{"message":"Invalid type for 'input'.","param":"input","code":"subscription_sharing_unsupported_capability"}}"""
+            )
+        }
+        val detail = (failure(client) as ChatGPTPlanServiceFailure.Rejected).detail
+        assertTrue(detail, detail.startsWith("OpenAI 的套餐接口不支持这次请求里的 input。"))
+        assertTrue(detail, detail.contains("OpenAI 的说明：Invalid type for 'input'."))
+        assertTrue(detail, detail.contains("参数 input"))
+        assertEquals(1, client.requests.size)
+    }
+
+    @Test fun aSignInWithoutThePlansGrantAsksForConsentNextTime() = runBlocking<Unit> {
+        var asked = 0
+        val client = FakePlanClient {
+            ChatGPTPlanHttpResponse(403, """{"error":{"code":"chatpass_v2_scope_not_authorized","message":"m"}}""")
+        }
+        val completion = ChatGPTPlanCompletion(
+            ChatGPTPlanSession(MemoryPlanStore(credential()), client, now = { clock })
+        ) { asked += 1 }
+        val error = runCatching { completion.complete(direct(), "i", "t", quick = true) }.exceptionOrNull()
+        val detail = (error as ChatGPTPlanServiceFailure.Rejected).detail
+        assertTrue(detail, detail.contains("没有授权使用套餐额度"))
+        assertEquals(1, asked)
+
+        // Other refusals leave the next sign-in alone.
+        val other = ChatGPTPlanCompletion(
+            ChatGPTPlanSession(
+                MemoryPlanStore(credential()),
+                FakePlanClient { ChatGPTPlanHttpResponse(403, "{}") },
+                now = { clock }
+            )
+        ) { asked += 1 }
+        runCatching { other.complete(direct(), "i", "t", quick = true) }
+        assertEquals(1, asked)
+    }
+
+    @Test fun aFailedStreamWithAnotherCodeShowsTheReason() = runBlocking<Unit> {
+        val client = FakePlanClient {
+            completedWith("""{"type":"response.failed","response":{"error":{"code":"invalid_prompt","message":"Prompt was refused."}}}""")
+        }
+        val detail = (failure(client) as ChatGPTPlanServiceFailure.Rejected).detail
+        assertTrue(detail, detail.contains("Prompt was refused.") && detail.contains("invalid_prompt"))
+        assertEquals(1, client.requests.size)
+    }
+
     @Test fun eachRefusalIsToldApart() = runBlocking<Unit> {
-        val rejected = """{"error":{"message":"unknown model"}}"""
         val cases = listOf(
-            ChatGPTPlanHttpResponse(403, "{}") to ChatGPTPlanServiceFailure.SignInRequired(),
-            ChatGPTPlanHttpResponse(400, rejected) to ChatGPTPlanServiceFailure.Rejected(400, rejected),
-            ChatGPTPlanHttpResponse(422, "") to ChatGPTPlanServiceFailure.Rejected(422, ""),
+            ChatGPTPlanHttpResponse(400, """{"error":{"message":"unknown model"}}""") to
+                ChatGPTPlanServiceFailure.Rejected("OpenAI 拒绝了这次请求。\nOpenAI 的说明：unknown model\n（HTTP 400）"),
+            ChatGPTPlanHttpResponse(422, "") to ChatGPTPlanServiceFailure.Rejected("OpenAI 拒绝了这次请求。\n（HTTP 422）"),
             ChatGPTPlanHttpResponse(429, """{"error":{"code":"rate_limit_exceeded"}}""") to ChatGPTPlanServiceFailure.Temporary(),
             ChatGPTPlanHttpResponse(500, "") to ChatGPTPlanServiceFailure.Temporary(),
             completedWith("""{"type":"response.failed","response":{"error":{"code":"server_error"}}}""") to
@@ -111,8 +190,7 @@ class ChatGPTPlanCompletionTest {
             val error = failure(FakePlanClient { response })
             assertEquals(expected, error)
             if (expected is ChatGPTPlanServiceFailure.Rejected) {
-                assertEquals(expected.status, (error as ChatGPTPlanServiceFailure.Rejected).status)
-                assertEquals(expected.body, error.body)
+                assertEquals(expected.detail, (error as ChatGPTPlanServiceFailure.Rejected).detail)
             }
         }
     }
@@ -132,18 +210,18 @@ class ChatGPTPlanCompletionTest {
     private suspend fun failure(client: FakePlanClient): Throwable? =
         runCatching { completion(client).complete(direct(), "i", "t", quick = true) }.exceptionOrNull()
 
-    private fun completion(client: FakePlanClient): ChatGPTPlanCompletion {
-        val credential = ChatGPTPlanCredential(
-            clientID = "app_saved",
-            accessToken = "access-1",
-            refreshToken = "refresh-1",
-            expiresAtMillis = clock + 3_600_000,
-            email = null,
-            planType = "plus",
-            signedInAtMillis = clock
-        )
-        return ChatGPTPlanCompletion(ChatGPTPlanSession(MemoryPlanStore(credential), client, now = { clock }))
-    }
+    private fun completion(client: FakePlanClient): ChatGPTPlanCompletion =
+        ChatGPTPlanCompletion(ChatGPTPlanSession(MemoryPlanStore(credential()), client, now = { clock }))
+
+    private fun credential() = ChatGPTPlanCredential(
+        clientID = "app_saved",
+        accessToken = "access-1",
+        refreshToken = "refresh-1",
+        expiresAtMillis = clock + 3_600_000,
+        email = null,
+        planType = "plus",
+        signedInAtMillis = clock
+    )
 
     private fun direct(reasoning: AIReasoningEffort? = null) = DirectAIConfiguration(
         kind = AIProviderKind.CHATGPT_PLAN,

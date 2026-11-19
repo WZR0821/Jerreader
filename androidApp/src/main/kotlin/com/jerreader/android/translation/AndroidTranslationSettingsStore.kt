@@ -398,6 +398,19 @@ class AndroidTranslationSettingsStore(
         storage.edit { putString(KEY_PLAN_CLIENT_ID, id) }
     }
 
+    /**
+     * Set when the plan's use was declined or OpenAI said the sign-in lacks
+     * it: the next sign-in shows OpenAI's consent page again. Cleared by a
+     * sign-in that grants it.
+     */
+    var chatGPTPlanConsentNeeded: Boolean
+        get() = storage.getBoolean(KEY_PLAN_CONSENT_NEEDED, false)
+        set(value) {
+            storage.edit {
+                if (value) putBoolean(KEY_PLAN_CONSENT_NEEDED, true) else remove(KEY_PLAN_CONSENT_NEEDED)
+            }
+        }
+
     /** Whether the page shown after the first sign-in was closed. */
     var chatGPTPlanWelcomeShown: Boolean
         get() = storage.getBoolean(KEY_PLAN_WELCOME_SHOWN, false)
@@ -810,6 +823,7 @@ class AndroidTranslationSettingsStore(
         private const val KEY_PLAN_CLIENT_ID = "translation.chatgptPlan.clientID"
         private const val KEY_PLAN_WELCOME_SHOWN = "translation.chatgptPlan.welcomeShown"
         private const val KEY_PLAN_MODEL_NAMES = "translation.chatgptPlan.modelNames"
+        private const val KEY_PLAN_CONSENT_NEEDED = "translation.chatgptPlan.consentNeeded"
         private const val KEY_PROVIDER_MODE = "provider.mode"
         private const val KEY_AI_PROVIDERS = "translation.aiProviders.v1"
         private const val KEY_LEGACY_DIRECT_PROVIDER = "direct.provider"

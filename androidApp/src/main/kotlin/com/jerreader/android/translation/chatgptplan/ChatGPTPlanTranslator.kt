@@ -11,8 +11,13 @@ import kotlinx.coroutines.CancellationException
  * with a fresh token when it is refused, and success only on
  * `response.completed`, so a cut-off answer is never shown or cached.
  * Throws [ChatGPTPlanServiceFailure]; the caller tells it in its own words.
+ * [onConsentNeeded] runs when OpenAI says the sign-in lacks the plan's grant,
+ * so the next sign-in shows the consent page again.
  */
-class ChatGPTPlanCompletion(private val session: ChatGPTPlanSession) {
+class ChatGPTPlanCompletion(
+    private val session: ChatGPTPlanSession,
+    private val onConsentNeeded: () -> Unit = {}
+) {
     suspend fun complete(
         direct: DirectAIConfiguration,
         instructions: String,
@@ -27,16 +32,9 @@ class ChatGPTPlanCompletion(private val session: ChatGPTPlanSession) {
             token = accessToken(rejected = token)
             response = send(ChatGPTPlanRequests.responses(token, direct.model, instructions, input, extra, timeout))
         }
-        val status = response.status
-        val usageLimit = ChatGPTPlanStream.usageLimitCode(response.body) != null
-        when {
-            status in 200..299 -> Unit
-            status == 429 && usageLimit -> throw ChatGPTPlanServiceFailure.UsageLimitReached()
-            status == 401 -> throw ChatGPTPlanServiceFailure.SignInRequired()
-            status == 403 && usageLimit -> throw ChatGPTPlanServiceFailure.UsageLimitReached()
-            status == 403 -> throw ChatGPTPlanServiceFailure.SignInRequired()
-            status in REJECTED_STATUSES -> throw ChatGPTPlanServiceFailure.Rejected(status, response.body)
-            else -> throw ChatGPTPlanServiceFailure.Temporary()
+        if (response.status !in 200..299) {
+            if (ChatGPTPlanErrorBody.parse(response.body).needsConsent) onConsentNeeded()
+            throw failure(ChatGPTPlanRefusal.classify(response.status, response.body, response.requestID))
         }
         return when (val outcome = ChatGPTPlanStream.parse(response.body)) {
             is ChatGPTPlanStreamOutcome.Completed -> {
@@ -44,14 +42,18 @@ class ChatGPTPlanCompletion(private val session: ChatGPTPlanSession) {
                 if (!TranslationInputPolicy.isVisiblyNonEmpty(answer)) throw ChatGPTPlanServiceFailure.ResultNotFound()
                 answer
             }
-            is ChatGPTPlanStreamOutcome.Failed -> throw if (ChatGPTPlanStream.isUsageLimit(outcome.code)) {
-                ChatGPTPlanServiceFailure.UsageLimitReached()
-            } else {
-                ChatGPTPlanServiceFailure.Temporary()
-            }
+            is ChatGPTPlanStreamOutcome.Failed ->
+                throw failure(ChatGPTPlanRefusal.streamFailure(outcome.code, outcome.message))
             is ChatGPTPlanStreamOutcome.Incomplete -> throw ChatGPTPlanServiceFailure.ResultNotFound()
             ChatGPTPlanStreamOutcome.Interrupted -> throw ChatGPTPlanServiceFailure.Temporary()
         }
+    }
+
+    private fun failure(refusal: ChatGPTPlanRefusal): ChatGPTPlanServiceFailure = when (refusal) {
+        ChatGPTPlanRefusal.SignInRequired -> ChatGPTPlanServiceFailure.SignInRequired()
+        ChatGPTPlanRefusal.UsageLimit -> ChatGPTPlanServiceFailure.UsageLimitReached()
+        ChatGPTPlanRefusal.Temporary -> ChatGPTPlanServiceFailure.Temporary()
+        is ChatGPTPlanRefusal.Rejected -> ChatGPTPlanServiceFailure.Rejected(refusal.message)
     }
 
     private suspend fun accessToken(rejected: String?): String = try {
@@ -75,6 +77,5 @@ class ChatGPTPlanCompletion(private val session: ChatGPTPlanSession) {
     companion object {
         const val QUICK_TIMEOUT_MILLIS = 30_000
         const val EXPLANATION_TIMEOUT_MILLIS = 60_000
-        private val REJECTED_STATUSES = setOf(400, 404, 405, 415, 422)
     }
 }

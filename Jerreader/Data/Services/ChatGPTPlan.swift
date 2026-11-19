@@ -32,6 +32,9 @@ enum ChatGPTPlan {
     /// The name shown on OpenAI's consent page. Kept the same on every install.
     static let agentName = "Jerreader"
     static let scope = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"
+    /// The grant that lets the plan pay. A sign-in whose granted scopes leave
+    /// it out cannot translate, so it is not kept.
+    static let directUseScope = "chatgpt.tokens.use.direct"
     static let callbackPath = "/auth/callback"
     /// Where the loopback listener sends the browser once it has the code, so
     /// the sign-in sheet closes by itself.
@@ -40,10 +43,26 @@ enum ChatGPTPlan {
     /// The keychain account of the signed-in credential, beside the API keys.
     static let credentialAccount = "chatgpt-plan-credential"
     static let keychainService = "Jerreader.translation-backend"
-    /// Error codes that mean the plan cannot pay for more requests right now.
-    static let usageLimitCodes = [
-        "subscription_sharing_usage_limit_exceeded",
+    /// The plan's usage limit is reached. Nothing retries it; the user waits
+    /// or checks chatgpt.com/settings/usage.
+    static let usageLimitCode = "subscription_sharing_usage_limit_exceeded"
+    /// OpenAI cannot check or serve the plan right now; a later try may work.
+    static let temporaryCodes: Set<String> = [
         "subscription_sharing_usage_unavailable",
+        "subscription_sharing_user_unavailable",
+    ]
+    /// The token was issued without the plan's grant: only a new sign-in
+    /// that shows OpenAI's consent page again helps.
+    static let consentCodes: Set<String> = [
+        "chatpass_v2_scope_not_authorized",
+        "chatpass_v2_invalid_authorization_context",
+    ]
+    /// Codes found in an error body even when it is not in the usual shape.
+    static let knownCodes: [String] = [usageLimitCode] + temporaryCodes.sorted() + consentCodes.sorted() + [
+        "subscription_sharing_user_not_eligible",
+        "subscription_sharing_unsupported_capability",
+        "subscription_sharing_route_not_supported",
+        "subscription_sharing_invalid_user",
     ]
     /// A token this close to expiry is refreshed before it is used.
     static let refreshMargin: TimeInterval = 120
@@ -59,7 +78,13 @@ enum ChatGPTPlanError: LocalizedError, Equatable, Sendable {
     case registrationIncomplete
     case authorizationFailed(String)
     case signInRequired
+    /// Signed in, but the consent page did not grant the plan's use.
+    case planUseNotGranted
     case usageLimitReached
+    /// OpenAI cannot serve the plan right now.
+    case temporarilyUnavailable
+    /// OpenAI refused the request; the text gives its reason and the request id.
+    case requestRejected(String)
     case noModels
     case listenerUnavailable
     /// The system sign-in sheet could not be shown.
@@ -80,8 +105,14 @@ enum ChatGPTPlanError: LocalizedError, Equatable, Sendable {
             return "ChatGPT 拒绝了登录（\(reason)），请重新登录。"
         case .signInRequired:
             return "ChatGPT 登录已失效，请重新登录。"
+        case .planUseNotGranted:
+            return "登录成功了，但这次没有允许 Jerreader 使用你的 ChatGPT 套餐额度。再登录一次，在 OpenAI 的授权页上允许使用套餐；不想用套餐的话，可以改用 API Key。"
         case .usageLimitReached:
-            return "ChatGPT 套餐的额度已用完或暂时不可用。到 chatgpt.com/settings/usage 查看用量；Plus 的 5 小时额度和 ChatGPT、Codex 等共用。"
+            return "ChatGPT 套餐的额度已用完。到 chatgpt.com/settings/usage 查看用量；Plus 的 5 小时额度和 ChatGPT、Codex 等共用。"
+        case .temporarilyUnavailable:
+            return "OpenAI 暂时无法处理 ChatGPT 套餐的请求，请稍后重试。"
+        case .requestRejected(let message):
+            return message
         case .noModels:
             return "这个 ChatGPT 账号没有可用的模型。"
         case .listenerUnavailable:
@@ -158,11 +189,14 @@ struct ChatGPTPlanAuthorization: Sendable {
     let nonce: String
     let pkce: ChatGPTPlanPKCE
     var loginHint: String?
+    /// Shows OpenAI's consent page again (`prompt=consent`): only after the
+    /// plan's use was declined, never on every sign-in.
+    var forceConsent: Bool
 
     /// The first sign-in on this install registers it.
     var isRegistration: Bool { clientID == ChatGPTPlan.dynamicClientID }
 
-    init(clientID: String?, hostID: String, port: UInt16, loginHint: String? = nil,
+    init(clientID: String?, hostID: String, port: UInt16, loginHint: String? = nil, forceConsent: Bool = false,
          state: String = ChatGPTPlanEncoding.randomToken(bytes: 24),
          nonce: String = ChatGPTPlanEncoding.randomToken(bytes: 24),
          pkce: ChatGPTPlanPKCE = .random()) {
@@ -174,6 +208,7 @@ struct ChatGPTPlanAuthorization: Sendable {
         self.nonce = nonce
         self.pkce = pkce
         self.loginHint = loginHint
+        self.forceConsent = forceConsent
     }
 
     /// Only the port may change between sign-ins; the host is always 127.0.0.1.
@@ -198,6 +233,7 @@ struct ChatGPTPlanAuthorization: Sendable {
         if let loginHint = loginHint?.trimmingCharacters(in: .whitespacesAndNewlines), !loginHint.isEmpty {
             pairs.append(("login_hint", loginHint))
         }
+        if forceConsent { pairs.append(("prompt", "consent")) }
         var components = URLComponents(url: ChatGPTPlan.authorizeURL, resolvingAgainstBaseURL: false)!
         components.percentEncodedQuery = ChatGPTPlanEncoding.formEncoded(pairs)
         return components.url!
@@ -239,12 +275,40 @@ struct ChatGPTPlanTokenResponse: Decodable, Sendable {
     let refreshToken: String?
     let idToken: String?
     let expiresIn: Double?
+    /// The granted scopes, when OpenAI lists them (a space-separated string,
+    /// or a list). Absent means the requested scopes were granted.
+    let scope: String?
 
     enum CodingKeys: String, CodingKey {
         case accessToken = "access_token"
         case refreshToken = "refresh_token"
         case idToken = "id_token"
         case expiresIn = "expires_in"
+        case scope
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        accessToken = try container.decode(String.self, forKey: .accessToken)
+        refreshToken = try container.decodeIfPresent(String.self, forKey: .refreshToken)
+        idToken = try container.decodeIfPresent(String.self, forKey: .idToken)
+        expiresIn = try container.decodeIfPresent(Double.self, forKey: .expiresIn)
+        // An odd scope never fails the whole response.
+        if let text = try? container.decodeIfPresent(String.self, forKey: .scope) {
+            scope = text
+        } else if let list = try? container.decodeIfPresent([String].self, forKey: .scope) {
+            scope = list.joined(separator: " ")
+        } else {
+            scope = nil
+        }
+    }
+
+    /// False only when OpenAI listed the granted scopes and the plan's use is
+    /// not among them, which is what a declined consent looks like.
+    var grantsDirectUse: Bool {
+        guard let scope else { return true }
+        return scope.split(whereSeparator: { $0 == " " || $0 == "," || $0 == "\n" || $0 == "\t" })
+            .contains { $0 == ChatGPTPlan.directUseScope }
     }
 }
 
@@ -345,13 +409,14 @@ enum ChatGPTPlanRequests {
 
     /// The Responses request of the plan: `store: false` and `stream: true`,
     /// instructions apart from the input, and none of the fields the plan
-    /// does not take. `extra` may only add reasoning.
+    /// does not take. `extra` may only add reasoning. The plan takes `input`
+    /// only as a list of messages, never as a bare string.
     static func responses(accessToken: String, model: String, instructions: String, input: String,
                           extra: [String: Any] = [:], timeoutInterval: TimeInterval = 30) throws -> URLRequest {
         var body: [String: Any] = [
             "model": model,
             "instructions": instructions,
-            "input": input,
+            "input": [["role": "user", "content": input]],
             "store": false,
             "stream": true,
         ]
@@ -425,7 +490,7 @@ enum ChatGPTPlanModels {
 
 enum ChatGPTPlanStreamOutcome: Equatable, Sendable {
     case completed(String)
-    case failed(code: String?)
+    case failed(code: String?, message: String?)
     case incomplete(reason: String?)
     /// The stream ended without `response.completed`, `failed` or `incomplete`.
     case interrupted
@@ -460,30 +525,19 @@ enum ChatGPTPlanStream {
                 return .completed(final.isEmpty ? deltas : final)
             case "response.failed":
                 let error = (object["response"] as? [String: Any])?["error"] as? [String: Any]
-                return .failed(code: error?["code"] as? String)
+                return .failed(code: error?["code"] as? String, message: error?["message"] as? String)
             case "response.incomplete":
                 let details = (object["response"] as? [String: Any])?["incomplete_details"] as? [String: Any]
                 return .incomplete(reason: details?["reason"] as? String)
             case "error":
                 let nested = object["error"] as? [String: Any]
-                return .failed(code: (object["code"] as? String) ?? (nested?["code"] as? String))
+                return .failed(code: (object["code"] as? String) ?? (nested?["code"] as? String),
+                               message: (object["message"] as? String) ?? (nested?["message"] as? String))
             default:
                 continue
             }
         }
         return .interrupted
-    }
-
-    /// The usage-limit code of an error body sent before any stream, such as
-    /// `{"detail": "…"}` or `{"error": {"code": "…"}}`.
-    static func usageLimitCode(in data: Data) -> String? {
-        guard let text = String(data: data, encoding: .utf8) else { return nil }
-        return ChatGPTPlan.usageLimitCodes.first { text.contains($0) }
-    }
-
-    static func isUsageLimit(_ code: String?) -> Bool {
-        guard let code else { return false }
-        return ChatGPTPlan.usageLimitCodes.contains(code)
     }
 
     private static func outputText(of response: [String: Any]?) -> String {
@@ -499,6 +553,138 @@ enum ChatGPTPlanStream {
 
 private extension String {
     var trimmingLeadingSpace: String { hasPrefix(" ") ? String(dropFirst()) : self }
+}
+
+// MARK: - Refusals
+
+/// What an OpenAI error body says: `{"error": {"message", "code", "param"}}`,
+/// a direct-admission `{"detail": …}`, or plain text. Never a web page.
+struct ChatGPTPlanErrorBody: Equatable, Sendable {
+    var code: String?
+    var param: String?
+    var message: String?
+
+    init(code: String? = nil, param: String? = nil, message: String? = nil) {
+        self.code = code
+        self.param = param
+        self.message = message
+    }
+
+    init(_ data: Data) {
+        let raw = String(decoding: data, as: UTF8.self)
+        if let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            let error = object["error"] as? [String: Any]
+            let detail = object["detail"] as? [String: Any]
+            code = Self.text(error?["code"]) ?? Self.text(detail?["code"]) ?? Self.text(object["code"])
+            param = Self.text(error?["param"]) ?? Self.text(detail?["param"]) ?? Self.text(object["param"])
+            message = Self.text(error?["message"]) ?? Self.text(object["error"]) ?? Self.text(detail?["message"])
+                ?? Self.text(object["detail"]) ?? Self.text(object["message"])
+            // A bare code as the whole message, such as {"detail":"subscription_sharing_usage_unavailable"}.
+            if code == nil, let message, Self.isCode(message) { code = message }
+        } else {
+            let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            message = text.isEmpty || text.hasPrefix("<") ? nil : text
+        }
+        if code == nil { code = ChatGPTPlan.knownCodes.first { raw.contains($0) } }
+        if let text = message, text.count > 300 { message = String(text.prefix(300)) + "…" }
+    }
+
+    /// A refusal that only a sign-in with OpenAI's consent page fixes.
+    var needsConsent: Bool { code.map(ChatGPTPlan.consentCodes.contains) ?? false }
+
+    private static func text(_ value: Any?) -> String? {
+        guard let value = (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else { return nil }
+        return value
+    }
+
+    private static func isCode(_ text: String) -> Bool {
+        let letters: ClosedRange<Unicode.Scalar> = "a" ... "z"
+        let digits: ClosedRange<Unicode.Scalar> = "0" ... "9"
+        return text.count <= 80 && text.unicodeScalars.allSatisfy {
+            letters.contains($0) || digits.contains($0) || $0 == "_" || $0 == "."
+        }
+    }
+}
+
+/// How the plan's API refused a request, read the way OpenAI's
+/// token-sharing guide describes its errors.
+enum ChatGPTPlanRefusal: Equatable, Sendable {
+    /// Even a fresh token was not accepted: sign in again.
+    case signInRequired
+    /// The plan's usage limit is reached; nothing retries it.
+    case usageLimit
+    /// OpenAI cannot serve this right now; a later try may work.
+    case temporary
+    /// OpenAI refused this request. The text gives OpenAI's reason with the
+    /// status, code and request id, for the user and for a support request.
+    case rejected(String)
+
+    /// A refusal before any stream began.
+    static func classify(status: Int, body: Data, requestID: String?) -> ChatGPTPlanRefusal {
+        let error = ChatGPTPlanErrorBody(body)
+        if error.code == ChatGPTPlan.usageLimitCode { return .usageLimit }
+        if let code = error.code, ChatGPTPlan.temporaryCodes.contains(code) { return .temporary }
+        switch status {
+        case 401:
+            return .signInRequired
+        case 408, 409, 425, 429, 500...:
+            return .temporary
+        case 400 ..< 500:
+            let id = requestID?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return .rejected(message(status: status, error: error, requestID: id?.isEmpty == false ? id : nil))
+        default:
+            return .temporary
+        }
+    }
+
+    /// A `response.failed` or `error` event of a stream that had begun.
+    static func streamFailure(code: String?, message text: String?) -> ChatGPTPlanRefusal {
+        if code == ChatGPTPlan.usageLimitCode { return .usageLimit }
+        guard let code, !code.isEmpty, !ChatGPTPlan.temporaryCodes.contains(code),
+              !transientStreamCodes.contains(code)
+        else { return .temporary }
+        let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return .rejected(message(status: nil, error: ChatGPTPlanErrorBody(
+            code: code, message: trimmed?.isEmpty == false ? trimmed : nil), requestID: nil))
+    }
+
+    private static let transientStreamCodes: Set<String> = [
+        "server_error", "internal_error", "rate_limit_exceeded", "overloaded", "timeout",
+    ]
+
+    /// What the user reads: what it means, OpenAI's own words, then the facts
+    /// a support request needs.
+    static func message(status: Int?, error: ChatGPTPlanErrorBody, requestID: String?) -> String {
+        var lines = [lead(status: status, error: error)]
+        if let text = error.message, text != error.code { lines.append("OpenAI 的说明：\(text)") }
+        let facts = [status.map { "HTTP \($0)" }, error.code, error.param.map { "参数 \($0)" },
+                     requestID.map { "请求 \($0)" }].compactMap { $0 }
+        if !facts.isEmpty { lines.append("（\(facts.joined(separator: " · "))）") }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func lead(status: Int?, error: ChatGPTPlanErrorBody) -> String {
+        switch error.code ?? "" {
+        case "subscription_sharing_user_not_eligible":
+            return "这个 ChatGPT 账号或工作区现在不能用套餐额度。"
+        case "subscription_sharing_unsupported_capability":
+            return error.param.map { "OpenAI 的套餐接口不支持这次请求里的 \($0)。" }
+                ?? "OpenAI 的套餐接口不支持这次请求的某项设置。"
+        case "subscription_sharing_route_not_supported":
+            return "OpenAI 不允许用套餐额度调用这个接口。"
+        case "subscription_sharing_invalid_user":
+            return "OpenAI 不认这次登录的账号，请退出登录后重新登录。"
+        case let code where ChatGPTPlan.consentCodes.contains(code):
+            return "这次登录没有授权使用套餐额度。请退出登录后重新登录，并在 OpenAI 的授权页上允许使用套餐。"
+        case "model_not_found":
+            return "这个账号现在不能用这个模型，请刷新模型后换一个再试。"
+        default:
+            return status == 403
+                ? "OpenAI 拒绝了这次请求，可能是所在地区、账号或工作区的限制。"
+                : "OpenAI 拒绝了这次请求。"
+        }
+    }
 }
 
 // MARK: - Storage and the session
@@ -572,6 +758,17 @@ enum ChatGPTPlanRegistration {
     static let clientIDKey = "translation.chatgptPlan.clientID"
     static let welcomeShownKey = "translation.chatgptPlan.welcomeShown"
     static let modelNamesKey = "translation.chatgptPlan.modelNames"
+    /// Set when the plan's use was declined, so the next sign-in shows
+    /// OpenAI's consent page again; cleared by a sign-in that grants it.
+    static let consentNeededKey = "translation.chatgptPlan.consentNeeded"
+
+    static func consentNeeded(_ defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: consentNeededKey)
+    }
+
+    static func setConsentNeeded(_ needed: Bool, _ defaults: UserDefaults = .standard) {
+        if needed { defaults.set(true, forKey: consentNeededKey) } else { defaults.removeObject(forKey: consentNeededKey) }
+    }
 
     static func hostID(_ defaults: UserDefaults = .standard) -> String {
         if let saved = defaults.string(forKey: hostIDKey), saved.hasPrefix("urn:uuid:") { return saved }
@@ -645,6 +842,15 @@ actor ChatGPTPlanSession {
         guard let token = try? JSONDecoder().decode(ChatGPTPlanTokenResponse.self, from: data),
               !token.accessToken.isEmpty, let refresh = token.refreshToken, !refresh.isEmpty
         else { throw ChatGPTPlanError.unexpectedResponse }
+        // A sign-in that may not use the plan cannot translate: it is not
+        // kept, and its refresh token is given back.
+        guard token.grantsDirectUse else {
+            if let endpoint = await revocationEndpoint() {
+                _ = try? await client.data(for: ChatGPTPlanRequests.revoke(
+                    endpoint: endpoint, refreshToken: refresh, clientID: clientID))
+            }
+            throw ChatGPTPlanError.planUseNotGranted
+        }
         let account = ChatGPTPlanIDToken.account(from: token.idToken)
         let made = ChatGPTPlanCredential(
             clientID: clientID, accessToken: token.accessToken, refreshToken: refresh, idToken: token.idToken,
@@ -680,10 +886,14 @@ actor ChatGPTPlanSession {
             token = try await accessToken(rejected: token)
             (data, response) = try await send(ChatGPTPlanRequests.models(accessToken: token))
         }
-        switch response.statusCode {
-        case 200 ..< 300: break
-        case 401, 403: throw ChatGPTPlanError.signInRequired
-        default: throw ChatGPTPlanError.network
+        if !(200 ..< 300).contains(response.statusCode) {
+            switch ChatGPTPlanRefusal.classify(status: response.statusCode, body: data,
+                                               requestID: response.value(forHTTPHeaderField: "x-request-id")) {
+            case .signInRequired: throw ChatGPTPlanError.signInRequired
+            case .usageLimit: throw ChatGPTPlanError.usageLimitReached
+            case .temporary: throw ChatGPTPlanError.temporarilyUnavailable
+            case .rejected(let message): throw ChatGPTPlanError.requestRejected(message)
+            }
         }
         let models = try ChatGPTPlanModels.parse(data)
         guard !models.isEmpty else { throw ChatGPTPlanError.noModels }

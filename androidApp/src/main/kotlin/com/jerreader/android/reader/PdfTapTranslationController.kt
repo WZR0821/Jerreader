@@ -17,6 +17,7 @@ import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.jerreader.android.translation.AndroidTranslationSettingsStore
+import com.jerreader.android.translation.chatgptplan.ChatGPTPlanMessages
 import com.jerreader.shared.domain.LanguageCode
 import com.jerreader.shared.translation.QuickTranslationUnit
 import com.jerreader.shared.translation.ReaderCrossPageContextBuilder
@@ -568,7 +569,8 @@ class PdfTapTranslationController(
         } catch (error: TranslationFailure) {
             TranslationCardState.Failure(
                 request.text,
-                error.message ?: "翻译失败。"
+                error.message ?: "翻译失败。",
+                canRetry = !ChatGPTPlanMessages.isStop(error)
             ).also { if (token == requestToken) publish(it) }
         } catch (_: Exception) {
             TranslationCardState.Failure(

@@ -8,6 +8,7 @@ import com.jerreader.android.translation.chatgptplan.ChatGPTPlanCredential
 import com.jerreader.android.translation.chatgptplan.ChatGPTPlanEncoding
 import com.jerreader.android.translation.chatgptplan.ChatGPTPlanEntries
 import com.jerreader.android.translation.chatgptplan.ChatGPTPlanError
+import com.jerreader.android.translation.chatgptplan.ChatGPTPlanErrorBody
 import com.jerreader.android.translation.chatgptplan.ChatGPTPlanIDToken
 import com.jerreader.android.translation.chatgptplan.ChatGPTPlanLoopbackServer
 import com.jerreader.android.translation.chatgptplan.ChatGPTPlanMessageContext
@@ -15,6 +16,7 @@ import com.jerreader.android.translation.chatgptplan.ChatGPTPlanMessages
 import com.jerreader.android.translation.chatgptplan.ChatGPTPlanModel
 import com.jerreader.android.translation.chatgptplan.ChatGPTPlanModels
 import com.jerreader.android.translation.chatgptplan.ChatGPTPlanPKCE
+import com.jerreader.android.translation.chatgptplan.ChatGPTPlanRefusal
 import com.jerreader.android.translation.chatgptplan.ChatGPTPlanRequests
 import com.jerreader.android.translation.chatgptplan.ChatGPTPlanServiceFailure
 import com.jerreader.android.translation.chatgptplan.ChatGPTPlanSession
@@ -127,6 +129,8 @@ class ChatGPTPlanProtocolTest {
         assertEquals("app_test", query["client_id"])
         assertFalse(query.containsKey("agent_name_hint"))
         assertEquals("reader@example.com", query["login_hint"])
+        // OpenAI's consent page is not forced on every sign-in.
+        assertFalse(query.containsKey("prompt"))
         assertEquals(43, authorization.pkce.verifier.length)
         assertEquals(32, authorization.state.length)
         assertEquals(32, authorization.nonce.length)
@@ -134,6 +138,12 @@ class ChatGPTPlanProtocolTest {
         val blank = ChatGPTPlanAuthorization(clientID = "  ", hostID = HOST_ID, port = 1, loginHint = " ")
         assertTrue(blank.isRegistration)
         assertFalse(blank.queryPairs.toMap().containsKey("login_hint"))
+        // After the plan's use was declined, the next sign-in asks again with the same scopes.
+        val again = ChatGPTPlanAuthorization(clientID = "app_test", hostID = HOST_ID, port = 1, forceConsent = true)
+        val asked = again.queryPairs.toMap()
+        assertEquals("consent", asked["prompt"])
+        assertEquals(ChatGPTPlan.SCOPE, asked["scope"])
+        assertFalse(asked.containsKey("agent_name_hint"))
     }
 
     @Test fun callbackIsCheckedAgainstTheAttempt() {
@@ -224,7 +234,13 @@ class ChatGPTPlanProtocolTest {
         assertEquals(setOf("model", "instructions", "input", "store", "stream", "reasoning"), body.keys().asSequence().toSet())
         assertEquals("gpt-test", body.getString("model"))
         assertEquals("Translate.", body.getString("instructions"))
-        assertEquals("こんにちは", body.getString("input"))
+        // The plan takes the input only as a list of messages, never as a bare string.
+        assertFalse(body.get("input") is String)
+        val input = body.getJSONArray("input")
+        assertEquals(1, input.length())
+        assertEquals(setOf("role", "content"), input.getJSONObject(0).keys().asSequence().toSet())
+        assertEquals("user", input.getJSONObject(0).getString("role"))
+        assertEquals("こんにちは", input.getJSONObject(0).getString("content"))
         assertFalse(body.getBoolean("store"))
         assertTrue(body.getBoolean("stream"))
         assertEquals("low", body.getJSONObject("reasoning").getString("effort"))
@@ -291,15 +307,105 @@ class ChatGPTPlanProtocolTest {
         val incomplete = sse("""{"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}""")
         assertEquals(ChatGPTPlanStreamOutcome.Incomplete("max_output_tokens"), ChatGPTPlanStream.parse(incomplete))
 
-        assertTrue(ChatGPTPlanStream.isUsageLimit("subscription_sharing_usage_limit_exceeded"))
-        assertTrue(ChatGPTPlanStream.isUsageLimit("subscription_sharing_usage_unavailable"))
-        assertFalse(ChatGPTPlanStream.isUsageLimit("server_error"))
-        assertFalse(ChatGPTPlanStream.isUsageLimit(null))
+        // The failure's own words are kept, from either kind of event.
+        val reasoned = sse("""{"type":"response.failed","response":{"error":{"code":"invalid_prompt","message":"Prompt was refused."}}}""")
+        assertEquals(ChatGPTPlanStreamOutcome.Failed("invalid_prompt", "Prompt was refused."), ChatGPTPlanStream.parse(reasoned))
+        val nested = sse("""{"type":"error","error":{"code":"invalid_prompt","message":"Prompt was refused."}}""")
+        assertEquals(ChatGPTPlanStreamOutcome.Failed("invalid_prompt", "Prompt was refused."), ChatGPTPlanStream.parse(nested))
+    }
+
+    /** The same cases as the iOS host test, so both apps read OpenAI's errors alike. */
+    @Test fun refusalsAreReadTheWayOpenAIDescribesThem() {
+        fun classify(status: Int, body: String, id: String? = null) = ChatGPTPlanRefusal.classify(status, body, id)
+        fun rejected(refusal: ChatGPTPlanRefusal): String {
+            assertTrue(refusal.toString(), refusal is ChatGPTPlanRefusal.Rejected)
+            return (refusal as ChatGPTPlanRefusal.Rejected).message
+        }
+
+        // Only the usage limit stops the plan; the other subscription codes say "later".
         assertEquals(
-            "subscription_sharing_usage_limit_exceeded",
-            ChatGPTPlanStream.usageLimitCode("""{"detail":"subscription_sharing_usage_limit_exceeded"}""")
+            ChatGPTPlanRefusal.UsageLimit,
+            classify(429, """{"error":{"code":"subscription_sharing_usage_limit_exceeded","message":"m"}}""")
         )
-        assertNull(ChatGPTPlanStream.usageLimitCode("""{"error":{"code":"rate_limit_exceeded"}}"""))
+        assertEquals(ChatGPTPlanRefusal.UsageLimit, classify(403, """{"detail":"subscription_sharing_usage_limit_exceeded"}"""))
+        assertEquals(ChatGPTPlanRefusal.Temporary, classify(503, """{"error":{"code":"subscription_sharing_usage_unavailable"}}"""))
+        assertEquals(ChatGPTPlanRefusal.Temporary, classify(403, """{"detail":"subscription_sharing_usage_unavailable"}"""))
+        assertEquals(ChatGPTPlanRefusal.Temporary, classify(503, """{"error":{"code":"subscription_sharing_user_unavailable"}}"""))
+        assertEquals(ChatGPTPlanRefusal.Temporary, classify(429, """{"error":{"code":"rate_limit_exceeded"}}"""))
+        assertEquals(ChatGPTPlanRefusal.Temporary, classify(500, "{}"))
+        assertEquals(ChatGPTPlanRefusal.Temporary, classify(503, ""))
+        assertEquals(ChatGPTPlanRefusal.SignInRequired, classify(401, """{"error":{"code":"subscription_sharing_invalid_user"}}"""))
+        assertEquals(ChatGPTPlanRefusal.SignInRequired, classify(401, "{}"))
+
+        // A refused request keeps OpenAI's words, the status, code, param and request id.
+        val capability = rejected(
+            classify(
+                400,
+                """{"error":{"message":"Invalid type for 'input': expected an array.","type":"invalid_request_error",
+                "param":"input","code":"subscription_sharing_unsupported_capability"}}""",
+                id = "req_123"
+            )
+        )
+        assertTrue(capability, capability.contains("不支持这次请求里的 input"))
+        assertTrue(capability, capability.contains("OpenAI 的说明：Invalid type for 'input': expected an array."))
+        assertTrue(capability, capability.contains("HTTP 400") && capability.contains("subscription_sharing_unsupported_capability"))
+        assertTrue(capability, capability.contains("参数 input") && capability.contains("请求 req_123"))
+        assertEquals(
+            "OpenAI 的套餐接口不支持这次请求里的 input。\n" +
+                "OpenAI 的说明：Invalid type for 'input': expected an array.\n" +
+                "（HTTP 400 · subscription_sharing_unsupported_capability · 参数 input · 请求 req_123）",
+            capability
+        )
+
+        // 403 is not a sign-out: region, account or policy.
+        val forbidden = rejected(classify(403, """{"detail":"Not available in your region."}""", id = " req_9 "))
+        assertTrue(forbidden, forbidden.contains("所在地区") && forbidden.contains("Not available in your region."))
+        assertTrue(forbidden, forbidden.contains("HTTP 403") && forbidden.contains("请求 req_9）") && !forbidden.contains("登录已失效"))
+        assertTrue(rejected(classify(403, """{"error":{"code":"subscription_sharing_user_not_eligible"}}""")).contains("不能用套餐额度"))
+        assertTrue(
+            rejected(classify(403, """{"error":{"code":"subscription_sharing_route_not_supported"}}"""))
+                .contains("不允许用套餐额度调用这个接口")
+        )
+        val scope = rejected(classify(403, """{"error":{"code":"chatpass_v2_scope_not_authorized","message":"m"}}"""))
+        assertTrue(scope, scope.contains("没有授权使用套餐额度") && scope.contains("重新登录"))
+        assertTrue(ChatGPTPlanErrorBody.parse("""{"error":{"code":"chatpass_v2_invalid_authorization_context"}}""").needsConsent)
+        assertFalse(ChatGPTPlanErrorBody.parse("""{"error":{"code":"model_not_found"}}""").needsConsent)
+        assertTrue(
+            rejected(classify(404, """{"error":{"code":"model_not_found","message":"No such model."}}""")).contains("换一个再试")
+        )
+
+        // Odd bodies: a web page is never shown, plain text is, a long reason is cut.
+        val page = rejected(classify(403, "<html><body>Blocked</body></html>"))
+        assertTrue(page, !page.contains("<") && page.contains("HTTP 403"))
+        assertTrue(rejected(classify(400, "bad request")).contains("OpenAI 的说明：bad request"))
+        val long = ChatGPTPlanErrorBody.parse("""{"error":{"message":"""" + "x".repeat(500) + """"}}""")
+        assertEquals(301, long.message!!.length)
+        assertTrue(long.message!!.endsWith("…"))
+        // A code found anywhere in the body counts.
+        assertEquals(
+            "subscription_sharing_usage_unavailable",
+            ChatGPTPlanErrorBody.parse("""{"weird":{"why":"subscription_sharing_usage_unavailable"}}""").code
+        )
+        assertEquals(
+            "subscription_sharing_user_not_eligible",
+            ChatGPTPlanErrorBody.parse("""{"detail":"subscription_sharing_user_not_eligible"}""").code
+        )
+
+        // Inside a stream that had begun.
+        assertEquals(ChatGPTPlanRefusal.UsageLimit, ChatGPTPlanRefusal.streamFailure("subscription_sharing_usage_limit_exceeded", null))
+        assertEquals(ChatGPTPlanRefusal.Temporary, ChatGPTPlanRefusal.streamFailure(null, "x"))
+        assertEquals(ChatGPTPlanRefusal.Temporary, ChatGPTPlanRefusal.streamFailure("server_error", "x"))
+        assertEquals(ChatGPTPlanRefusal.Temporary, ChatGPTPlanRefusal.streamFailure("subscription_sharing_usage_unavailable", null))
+        val failed = rejected(ChatGPTPlanRefusal.streamFailure("invalid_prompt", "Prompt was refused."))
+        assertTrue(failed, failed.contains("Prompt was refused.") && failed.contains("invalid_prompt") && !failed.contains("HTTP"))
+
+        // Every refused text stops the plan, and only those: other providers' errors may still fall back.
+        for (text in listOf(capability, forbidden, scope, page, failed)) {
+            assertTrue(text, ChatGPTPlanRefusal.isRejection(text))
+        }
+        assertTrue(ChatGPTPlanRefusal.isRejection(rejected(classify(400, """{"error":{"code":"subscription_sharing_unsupported_capability"}}"""))))
+        assertFalse(ChatGPTPlanRefusal.isRejection("翻译服务返回错误：unknown model"))
+        assertFalse(ChatGPTPlanRefusal.isRejection("翻译服务返回 HTTP 403。"))
     }
 
     @Test fun modelsAreTheListedOnesInOrder() {
@@ -350,6 +456,17 @@ class ChatGPTPlanProtocolTest {
         assertFalse(token.toString().contains("access-test"))
         assertNull(ChatGPTPlanTokenResponse.parse("""{"refresh_token":"refresh-test"}"""))
         assertNull(ChatGPTPlanTokenResponse.parse("x"))
+
+        // The plan's use: granted unless OpenAI listed the scopes without it.
+        assertTrue(token.grantsDirectUse)
+        fun grants(scope: String) = ChatGPTPlanTokenResponse.parse("""{"access_token":"a","scope":$scope}""")!!.grantsDirectUse
+        assertTrue(grants("\"openid profile chatgpt.tokens.use.direct offline_access\""))
+        assertFalse(grants("\"openid profile email offline_access\""))
+        assertFalse(grants("\"chatgpt.tokens.use.directly\""))
+        assertTrue(grants("""["openid","chatgpt.tokens.use.direct"]"""))
+        assertFalse(grants("""["openid","profile"]"""))
+        // An odd scope does not fail the sign-in.
+        assertTrue(grants("42"))
 
         val credential = ChatGPTPlanCredential(
             clientID = "app_test",
@@ -413,17 +530,16 @@ class ChatGPTPlanProtocolTest {
             TranslationFailure.ProviderRejected(ChatGPTPlanMessages.SIGN_IN_EXPLANATION),
             ChatGPTPlanMessages.translationFailure(ChatGPTPlanServiceFailure.SignInRequired(), ChatGPTPlanMessageContext.EXPLANATION)
         )
-        assertEquals(
-            TranslationFailure.ProviderRejected("翻译服务返回错误：unknown model"),
-            ChatGPTPlanMessages.translationFailure(
-                ChatGPTPlanServiceFailure.Rejected(400, """{"error":{"message":"unknown model"}}"""),
-                ChatGPTPlanMessageContext.TRANSLATION
+        // A refusal is told in OpenAI's words on every page.
+        val reason = (ChatGPTPlanRefusal.classify(400, """{"error":{"message":"unknown model"}}""", null) as ChatGPTPlanRefusal.Rejected).message
+        assertEquals("OpenAI 拒绝了这次请求。\nOpenAI 的说明：unknown model\n（HTTP 400）", reason)
+        for (context in ChatGPTPlanMessageContext.entries) {
+            assertEquals(
+                TranslationFailure.ProviderRejected(reason),
+                ChatGPTPlanMessages.translationFailure(ChatGPTPlanServiceFailure.Rejected(reason), context)
             )
-        )
-        assertEquals(
-            TranslationFailure.ProviderRejected("翻译服务返回 HTTP 422。"),
-            ChatGPTPlanMessages.translationFailure(ChatGPTPlanServiceFailure.Rejected(422, ""), ChatGPTPlanMessageContext.TRANSLATION)
-        )
+        }
+        assertEquals(reason, ChatGPTPlanServiceFailure.Rejected(reason).message)
         assertEquals(
             TranslationFailure.ServiceUnavailable,
             ChatGPTPlanMessages.translationFailure(ChatGPTPlanServiceFailure.Temporary(), ChatGPTPlanMessageContext.TRANSLATION)
@@ -438,6 +554,8 @@ class ChatGPTPlanProtocolTest {
             assertTrue(ChatGPTPlanMessages.isStop(TranslationFailure.ProviderRejected(ChatGPTPlanMessages.usageLimit(context))))
             assertTrue(ChatGPTPlanMessages.isStop(TranslationFailure.ProviderRejected(ChatGPTPlanMessages.signIn(context))))
         }
+        // A refused request stops too, as on iOS, where only a passing failure falls back.
+        assertTrue(ChatGPTPlanMessages.isStop(TranslationFailure.ProviderRejected(reason)))
         assertFalse(ChatGPTPlanMessages.isStop(TranslationFailure.ProviderRejected("翻译服务返回 HTTP 422。")))
         assertFalse(ChatGPTPlanMessages.isStop(TranslationFailure.ServiceUnavailable))
         assertFalse(ChatGPTPlanMessages.isStop(null))
@@ -446,7 +564,7 @@ class ChatGPTPlanProtocolTest {
         assertTrue(ChatGPTPlanServiceFailure.ResultNotFound().isTransient)
         assertFalse(ChatGPTPlanServiceFailure.UsageLimitReached().isTransient)
         assertFalse(ChatGPTPlanServiceFailure.SignInRequired().isTransient)
-        assertFalse(ChatGPTPlanServiceFailure.Rejected(400, "").isTransient)
+        assertFalse(ChatGPTPlanServiceFailure.Rejected(reason).isTransient)
     }
 
     @Test fun loopbackHelpers() {

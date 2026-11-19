@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -1143,12 +1144,14 @@ private fun ModelDetailPage(
                             }
                             is ModelTestOutcome.Failed -> {
                                 JerreaderGlyph(JerreaderIcon.WARNING, jerreaderPalette.vermilion, Modifier.size(18.dp))
-                                Text(
-                                    result.message,
-                                    modifier = Modifier.weight(1f),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
+                                // Selectable, so OpenAI's reason and request id can be copied.
+                                SelectionContainer(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        result.message,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
                             }
                             null -> Text(
                                 if (testing) "正在等服务商回复…" else "还没有测试过",

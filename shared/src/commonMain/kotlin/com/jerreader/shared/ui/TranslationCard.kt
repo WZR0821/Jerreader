@@ -81,7 +81,12 @@ sealed interface TranslationCardState {
 
     data class Failure(
         override val sourceText: String,
-        val message: String
+        val message: String,
+        /**
+         * False when asking again cannot help, such as a ChatGPT plan out of
+         * quota or refused: 重新翻译 is hidden, as on iOS.
+         */
+        val canRetry: Boolean = true
     ) : TranslationCardState
 }
 
@@ -376,6 +381,7 @@ private fun TranslationCardBody(
 
                 is TranslationCardState.Failure -> TranslationFailureContent(
                     message = state.message,
+                    canRetry = state.canRetry,
                     compact = compact,
                     onRetry = onRetry,
                     onOpenSettings = onOpenSettings
@@ -407,6 +413,7 @@ private fun TranslationLoadingContent(detail: String, modifier: Modifier = Modif
 @Composable
 private fun TranslationFailureContent(
     message: String,
+    canRetry: Boolean,
     compact: Boolean,
     onRetry: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -416,7 +423,9 @@ private fun TranslationFailureContent(
         Text(message, style = MaterialTheme.typography.bodyMedium)
         val settingsTint = MaterialTheme.colorScheme.onSurface
         val buttons: @Composable () -> Unit = {
-            JerreaderTintedButton(text = "重新翻译", onClick = onRetry, icon = JerreaderIcon.RESTORE, height = 36.dp)
+            if (canRetry) {
+                JerreaderTintedButton(text = "重新翻译", onClick = onRetry, icon = JerreaderIcon.RESTORE, height = 36.dp)
+            }
             JerreaderTintedButton(
                 text = "翻译设置",
                 onClick = onOpenSettings,
@@ -699,7 +708,8 @@ private fun translationMenuGroups(
         onToggleFurigana?.let { toggle ->
             add(CardMenuAction("日语注音", JerreaderIcon.TEXT_FORMAT, checked = japaneseFuriganaEnabled, run = toggle))
         }
-        add(CardMenuAction("重新翻译", JerreaderIcon.RESTORE, run = onRetry))
+        val canRetry = (state as? TranslationCardState.Failure)?.canRetry ?: true
+        add(CardMenuAction("重新翻译", JerreaderIcon.RESTORE, enabled = canRetry, run = onRetry))
     }
     return listOf(translation, tools, request).filter { it.isNotEmpty() }
 }

@@ -6,6 +6,7 @@ import android.view.ActionMode
 import android.view.Menu
 import android.view.MenuItem
 import com.jerreader.android.translation.AndroidTranslationSettingsStore
+import com.jerreader.android.translation.chatgptplan.ChatGPTPlanMessages
 import com.jerreader.shared.domain.LanguageCode
 import com.jerreader.shared.library.ReaderAppearance
 import com.jerreader.shared.library.ReaderSelectionRect
@@ -1289,7 +1290,8 @@ class ReaderTapTranslationController(
         } catch (error: TranslationFailure) {
             TranslationCardState.Failure(
                 sourceText = request.text,
-                message = error.message ?: "翻译失败。"
+                message = error.message ?: "翻译失败。",
+                canRetry = !ChatGPTPlanMessages.isStop(error)
             ).also { publish(token, it) }
         } catch (_: Exception) {
             TranslationCardState.Failure(

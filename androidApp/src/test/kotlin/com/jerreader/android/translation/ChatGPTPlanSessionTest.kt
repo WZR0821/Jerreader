@@ -87,6 +87,43 @@ class ChatGPTPlanSessionTest {
         assertEquals(ChatGPTPlanAccount(), credential.account)
     }
 
+    @Test fun aSignInThatMayNotUseThePlanIsGivenBack() = runBlocking<Unit> {
+        val client = FakePlanClient { request ->
+            when (request.url) {
+                ChatGPTPlan.TOKEN_URL ->
+                    ok("""{"access_token":"a-declined","refresh_token":"r-declined","scope":"openid profile email offline_access"}""")
+                ChatGPTPlan.DISCOVERY_URL -> ok("""{"revocation_endpoint":"https://auth.openai.com/oauth/revoke"}""")
+                else -> ok("{}")
+            }
+        }
+        val store = MemoryPlanStore()
+        val changes = Collections.synchronizedList(mutableListOf<ChatGPTPlanCredential?>())
+        val session = ChatGPTPlanSession(store, client, now = { clock }, onChange = { changes.add(it) })
+        assertEquals(
+            ChatGPTPlanError.PlanUseNotGranted(),
+            runCatching { session.completeSignIn("code-1", authorization(clientID = "app_saved"), null) }.exceptionOrNull()
+        )
+        // Nothing is kept, and the refresh token is given back to OpenAI.
+        assertNull(store.saved)
+        assertNull(session.current())
+        assertTrue(changes.isEmpty())
+        assertEquals(
+            listOf(ChatGPTPlan.TOKEN_URL, ChatGPTPlan.DISCOVERY_URL, "https://auth.openai.com/oauth/revoke"),
+            client.requests.map { it.url }
+        )
+        assertEquals("token=r-declined&token_type_hint=refresh_token&client_id=app_saved", client.requests[2].body)
+
+        // A listed grant, or scopes in an odd shape, sign in as usual.
+        for (scope in listOf(""""openid chatgpt.tokens.use.direct"""", """["openid","chatgpt.tokens.use.direct"]""", "42")) {
+            val granted = ChatGPTPlanSession(
+                MemoryPlanStore(),
+                FakePlanClient { ok("""{"access_token":"a","refresh_token":"r","scope":$scope}""") },
+                now = { clock }
+            )
+            assertEquals("a", granted.completeSignIn("code-1", authorization(clientID = "app_saved"), null).accessToken)
+        }
+    }
+
     @Test fun refusedOrOddExchangesSaveNothing() = runBlocking<Unit> {
         val cases = listOf(
             ChatGPTPlanHttpResponse(400, """{"error":"invalid_grant"}""") to ChatGPTPlanError.AuthorizationFailed("invalid_grant"),
@@ -263,8 +300,11 @@ class ChatGPTPlanSessionTest {
 
     @Test fun modelsReportWhyThereAreNone() = runBlocking<Unit> {
         val cases = listOf(
-            ChatGPTPlanHttpResponse(403, "") to ChatGPTPlanError.SignInRequired(),
-            ChatGPTPlanHttpResponse(500, "") to ChatGPTPlanError.Network(),
+            ChatGPTPlanHttpResponse(429, """{"error":{"code":"subscription_sharing_usage_limit_exceeded"}}""") to
+                ChatGPTPlanError.UsageLimitReached(),
+            ChatGPTPlanHttpResponse(503, """{"error":{"code":"subscription_sharing_usage_unavailable"}}""") to
+                ChatGPTPlanError.TemporarilyUnavailable(),
+            ChatGPTPlanHttpResponse(500, "") to ChatGPTPlanError.TemporarilyUnavailable(),
             ok("""{"models":[]}""") to ChatGPTPlanError.NoModels(),
             ok("""{"models":[{"slug":"hidden","visibility":"hide"}]}""") to ChatGPTPlanError.NoModels()
         )
@@ -276,6 +316,19 @@ class ChatGPTPlanSessionTest {
             )
             assertEquals(expected, runCatching { session.models() }.exceptionOrNull())
         }
+        // 403 is OpenAI refusing, not a sign-out: its reason is shown and the account kept.
+        val store = MemoryPlanStore(credential(expiresAt = clock + 3_600_000))
+        val forbidden = ChatGPTPlanSession(
+            store,
+            FakePlanClient { ChatGPTPlanHttpResponse(403, """{"detail":"Forbidden here."}""", requestID = "req_m") },
+            now = { clock }
+        )
+        val error = runCatching { forbidden.models() }.exceptionOrNull()
+        assertTrue(error.toString(), error is ChatGPTPlanError.RequestRejected)
+        val message = error?.message.orEmpty()
+        assertTrue(message, message.contains("Forbidden here.") && message.contains("HTTP 403") && message.contains("请求 req_m"))
+        assertEquals("access-1", store.saved?.accessToken)
+
         val signedOut = FakePlanClient { ok("{}") }
         assertEquals(
             ChatGPTPlanError.SignInRequired(),

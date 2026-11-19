@@ -742,8 +742,10 @@ struct ModelDetailView: View {
                 .accessibilityIdentifier("connectionResult")
         case .failed(let message):
             Label {
+                // Selectable, so OpenAI's reason and request id can be copied.
                 Text(message).font(.subheadline).foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
             } icon: {
                 JerreaderSymbol(name: "exclamationmark.triangle", size: 18).foregroundStyle(JerreaderTheme.vermilion)
             }
