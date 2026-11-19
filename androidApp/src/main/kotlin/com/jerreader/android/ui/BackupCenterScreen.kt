@@ -1,18 +1,22 @@
 package com.jerreader.android.ui
 
-import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -22,27 +26,42 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.LineHeightStyle
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.jerreader.android.AppGraph
 import com.jerreader.android.backup.RestoreResult
 import com.jerreader.shared.library.LibraryBackupArchiveInfo
 import com.jerreader.shared.library.LibraryBackupPolicy
 import com.jerreader.shared.library.LibraryBackupScope
-import com.jerreader.shared.ui.JerreaderCard
-import com.jerreader.shared.ui.JerreaderDivider
-import com.jerreader.shared.ui.JerreaderFieldLabel
+import com.jerreader.shared.ui.JerreaderGlyph
 import com.jerreader.shared.ui.JerreaderIcon
+import com.jerreader.shared.ui.JerreaderIconTile
 import com.jerreader.shared.ui.JerreaderPrimaryButton
-import com.jerreader.shared.ui.JerreaderRow
-import com.jerreader.shared.ui.JerreaderSection
-import com.jerreader.shared.ui.JerreaderSegmented
-import com.jerreader.shared.ui.*
-import androidx.compose.foundation.layout.Column
-import androidx.compose.ui.Alignment
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import kotlinx.coroutines.launch
+import com.jerreader.shared.ui.JerreaderRowSeparator
+import com.jerreader.shared.ui.JerreaderTintedButton
+import com.jerreader.shared.ui.JerreaderToggle
+import com.jerreader.shared.ui.SettingsActionRow
+import com.jerreader.shared.ui.SettingsGroup
+import com.jerreader.shared.ui.SettingsInsetRow
+import com.jerreader.shared.ui.SettingsMenuRow
+import com.jerreader.shared.ui.SettingsPage
+import com.jerreader.shared.ui.SettingsToggleRow
+import com.jerreader.shared.ui.SettingsValueRow
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -169,13 +188,21 @@ fun BackupCenterScreen(
         SettingsGroup("备份位置", footer = "选择你自己的文件夹，备份直接保存在那里。重装或重签后点‘从备份文件夹恢复’，选择同一文件夹即可恢复并继续使用。") {
             SettingsValueRow("当前文件夹", folder?.displayName ?: "尚未选择外部文件夹", compact = false)
             suggestedFolder?.let { (uri, name) ->
-                SettingsFootnote("刚恢复的备份来自「$name」。")
-                SettingsActionRow("继续备份到这个文件夹", { selectForRestore = false; folderPicker.launch(uri) }, enabled = !busy)
+                // iOS sets the note and its action in one row, so no rule between them.
+                BackupLabelRow(
+                    "刚恢复的备份来自「$name」。",
+                    icon = JerreaderIcon.RESTORE,
+                    iconSize = 16.dp,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    showDivider = false
+                )
+                SettingsActionRow("继续备份到这个文件夹", { selectForRestore = false; folderPicker.launch(uri) }, enabled = !busy, icon = JerreaderIcon.FOLDER)
             }
             SettingsActionRow("选择备份文件夹", { selectForRestore = false; folderPicker.launch(folder?.treeUri) }, enabled = !busy, showDivider = folder != null, icon = JerreaderIcon.FOLDER)
             if (folder != null) SettingsActionRow("停止使用此文件夹", {
                 graph.backupDirectory.clear(); backups = emptyList(); message = "已停止使用该文件夹。"
-            }, enabled = !busy, showDivider = false)
+            }, enabled = !busy, showDivider = false, icon = JerreaderIcon.FOLDER)
         }
         SettingsGroup("自动备份", footer = "在 App 运行时检查是否到期并补做；系统不保证 App 未运行时准点执行。") {
             SettingsToggleRow("自动备份", policy.automaticEnabled,
@@ -183,13 +210,26 @@ fun BackupCenterScreen(
             if (policy.automaticEnabled) SettingsValueRow("上次完成",
                 policy.lastAutomaticBackupAtEpochMillis?.let(::formatTimestamp) ?: "尚未备份", compact = false)
         }
-        SettingsGroup("") {
-            SettingsActionRow("立即备份", {
+        // 2.0: the page's one primary action, a full-width capsule on the canvas
+        // with iOS's 4-point row insets under an untitled section's 3-point top.
+        JerreaderPrimaryButton(
+            "立即备份",
+            onClick = {
                 if (folder == null) {
                     selectForRestore = false; selectForBackup = true; folderPicker.launch(null)
                 } else createBackup()
-            }, enabled = !busy && manualScopes.isNotEmpty())
-            SettingsActionRow("更多备份选项", { showsAdvanced = !showsAdvanced }, showDivider = false, disclosureExpanded = showsAdvanced)
+            },
+            modifier = Modifier.padding(top = 7.dp, bottom = 4.dp),
+            enabled = !busy && manualScopes.isNotEmpty()
+        )
+        SettingsGroup("") {
+            SettingsActionRow("更多备份选项", { showsAdvanced = !showsAdvanced }, showDivider = showsAdvanced, disclosureExpanded = showsAdvanced)
+            // iOS adds "或导出单独副本"; Android has no export.
+            if (showsAdvanced) BackupLabelRow(
+                "按需调整备份范围和保留策略。",
+                textColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                showDivider = false
+            )
         }
         if (showsAdvanced) {
         SettingsGroup("自动策略", footer = "超出限制时从最旧的一份开始清理，并保留最新一份。") {
@@ -220,7 +260,7 @@ fun BackupCenterScreen(
                 }
             }
             SettingsActionRow(if (busy) "处理中…" else "保存到当前文件夹", ::createBackup,
-                enabled = folder != null && manualScopes.isNotEmpty() && !busy, showDivider = false)
+                enabled = folder != null && manualScopes.isNotEmpty() && !busy, showDivider = false, icon = JerreaderIcon.DOWNLOAD)
         }
         }
         SettingsGroup("恢复") {
@@ -228,24 +268,38 @@ fun BackupCenterScreen(
             if (showsAdvanced) SettingsActionRow("选择单个备份文件", { archivePicker.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) },
                 enabled = !busy, showDivider = false)
         }
-        SettingsGroup("当前文件夹中的备份", footer = "列表直接读取当前文件夹。到期、超出份数或容量时会从最旧的开始清理，并尽量保留最新一份。") {
-            if (backups.isEmpty()) SettingsFootnote(if (folder == null) "先选择一个备份文件夹。" else "当前文件夹还没有备份。", showDivider = false)
-            backups.forEach { info ->
-                SettingsInsetRow {
-                    Text(info.name, style = MaterialTheme.typography.bodyLarge)
-                    Text("${formatTimestamp(info.createdAtEpochMillis)} · ${formatBytes(info.sizeBytes)}", style = MaterialTheme.typography.labelMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        LearningButton(enabled = !busy, onClick = { restoringFolder = null; pendingRestore = info }) { Text("恢复") }
-                        LearningButton(enabled = !busy, destructive = true, onClick = { pendingDeletion = info }) { Text("删除") }
-                    }
-                }
+        SettingsGroup(
+            "当前文件夹中的备份",
+            footer = "列表直接读取当前文件夹。到期、超出份数或容量时会从最旧的开始清理，并尽量保留最新一份。",
+            headerDetail = if (backups.isEmpty()) null
+                else "${backups.size} 份 · ${formatBytes(backups.sumOf { it.sizeBytes })}"
+        ) {
+            if (backups.isEmpty()) BackupLabelRow(
+                if (folder == null) "先选择一个备份文件夹。" else "当前文件夹还没有备份。",
+                textColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                showDivider = false
+            )
+            backups.forEachIndexed { index, info ->
+                BackupArchiveRow(
+                    info,
+                    enabled = !busy,
+                    onRestore = { restoringFolder = null; pendingRestore = info },
+                    onDelete = { pendingDeletion = info },
+                    showDivider = index != backups.lastIndex
+                )
             }
         }
+        // iOS's two `Label`s: what never enters a backup, and what a reinstall loses.
         SettingsGroup("重要说明") {
-            SettingsFootnote("目录授权、API Key、代理凭据和可再生的翻译缓存都不会写入备份。", showDivider = false)
+            BackupLabelRow("API Key、代理凭据和可再生的翻译缓存都不会写入备份。", icon = JerreaderIcon.LOCK)
+            BackupLabelRow("文件夹授权只保存在当前安装中，重装后需要再次选择同一文件夹。", icon = JerreaderIcon.WARNING, showDivider = false)
         }
-        message?.let { JerreaderCard { Text(it) } }
-        error?.let { JerreaderCard { Text(it, color = MaterialTheme.colorScheme.error) } }
+        // 2.0 feedback: a jade done notice and a vermilion error banner. iOS shows
+        // these results as alerts; Android keeps them at the foot of the page.
+        if (message != null || error != null) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            message?.let { AINoticeRow(it) }
+            error?.let { AIErrorBanner(it) }
+        }
     }
 
     pendingDeletion?.let { info ->
@@ -388,5 +442,116 @@ private fun BackupScopeRow(option: LibraryBackupScope, selected: Boolean, enable
             }
             JerreaderToggle(selected, onChange, enabled = enabled, label = option.title)
         }
+    }
+}
+
+/**
+ * A `Label` row in `.footnote`, 13 on an 18-point line: the glyph centred in
+ * a 28-point box 20 points in and the text, with the rule under it, from 64,
+ * as iOS lays a Label out in a Form. Without an icon it is a plain footnote.
+ */
+@Composable
+private fun BackupLabelRow(
+    text: String,
+    modifier: Modifier = Modifier,
+    icon: JerreaderIcon? = null,
+    iconSize: Dp = 18.dp,
+    tint: Color = MaterialTheme.colorScheme.primary,
+    textColor: Color = MaterialTheme.colorScheme.onSurface,
+    showDivider: Boolean = true
+) {
+    Column(modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 44.dp).padding(horizontal = 20.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            if (icon != null) Box(Modifier.size(28.dp), contentAlignment = Alignment.Center) {
+                JerreaderGlyph(icon, tint, Modifier.size(iconSize))
+            }
+            Text(
+                text,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodySmall.copy(
+                    lineHeight = 18.sp,
+                    lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None)
+                ),
+                color = textColor
+            )
+        }
+        if (showDivider) JerreaderRowSeparator(start = if (icon != null) 64.dp else 20.dp)
+    }
+}
+
+/**
+ * 2.0 `ManagedBackupRow`: a 36-point drive tile in the backup tint, the date,
+ * the file name and its size, then 恢复 as a 30-point tinted capsule and the
+ * row's ellipsis menu. Android cannot export a copy, so the menu holds 删除
+ * alone, which still asks before deleting.
+ */
+@Composable
+private fun BackupArchiveRow(
+    info: LibraryBackupArchiveInfo,
+    enabled: Boolean,
+    onRestore: () -> Unit,
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier,
+    showDivider: Boolean = true
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    val accent = MaterialTheme.colorScheme.primary
+    val secondary = MaterialTheme.colorScheme.onSurfaceVariant
+    Column(modifier.fillMaxWidth()) {
+        Row(
+            // The menu's glyph sits 7 points inside its 36-point target, so the
+            // row ends 13 points in to put the glyph's edge 20 in, as on iOS.
+            Modifier.fillMaxWidth().padding(start = 20.dp, end = 13.dp, top = 13.dp, bottom = 13.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            JerreaderIconTile(JerreaderIcon.EXTERNAL_DRIVE_FILLED, tint = SettingsTint.backup, size = 36.dp)
+            // iOS keeps at least 32 points before 恢复: an 8-point spacer with
+            // the row's 12-point spacing on either side.
+            Column(Modifier.weight(1f).padding(end = 20.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    formatTimestamp(info.createdAtEpochMillis),
+                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
+                    maxLines = 2
+                )
+                Text(
+                    info.name,
+                    style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
+                    color = secondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(formatBytes(info.sizeBytes), style = MaterialTheme.typography.labelMedium, color = secondary)
+            }
+            // 12 points from the capsule to the glyph: 5 here and the 7 inside the target.
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                JerreaderTintedButton("恢复", onClick = onRestore, enabled = enabled, height = 30.dp)
+                Box {
+                    Box(
+                        Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .clickable(enabled = enabled, role = Role.Button) { menuOpen = true }
+                            .semantics { contentDescription = "更多" },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        JerreaderGlyph(JerreaderIcon.MORE_CIRCLE, accent.copy(alpha = if (enabled) 1f else 0.45f), Modifier.size(22.dp))
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("删除", color = aiRed()) },
+                            onClick = { menuOpen = false; onDelete() },
+                            leadingIcon = { JerreaderGlyph(JerreaderIcon.TRASH, aiRed(), Modifier.size(18.dp)) }
+                        )
+                    }
+                }
+            }
+        }
+        // iOS starts the rule under the text, after the tile.
+        if (showDivider) JerreaderRowSeparator(start = 68.dp)
     }
 }

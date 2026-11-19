@@ -1,6 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Keeps the process alive while the ChatGPT sign-in page is open in the browser. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <!-- Finds the default browser, so the ChatGPT sign-in page opens in it. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
 
     <application
         android:name=".JerreaderApplication"
@@ -70,6 +81,27 @@
                 <data android:mimeType="application/pdf" />
                 <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
                 <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+        <!-- ChatGPT 套餐: the wait for Sign in with ChatGPT, and the way back from the browser. -->
+        <service
+            android:name=".translation.chatgptplan.ChatGPTPlanSignInService"
+            android:exported="false"
+            android:foregroundServiceType="shortService" />
+        <activity
+            android:name=".translation.chatgptplan.ChatGPTAuthRedirectActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:host="chatgpt-auth"
+                    android:path="/done"
+                    android:scheme="jerreader" />
             </intent-filter>
         </activity>
     </application>

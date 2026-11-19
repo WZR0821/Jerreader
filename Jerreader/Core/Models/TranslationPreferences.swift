@@ -67,6 +67,9 @@ enum DirectAIProviderChoice: String, CaseIterable, Codable, Identifiable, Sendab
     case minimax
     case gemini
     case openAICompatible
+    /// A ChatGPT account signed in with Sign in with ChatGPT: its plan pays,
+    /// no API key. Added in 2.0; listed on the 套餐 page, not with the presets.
+    case chatGPTPlan
 
     var id: Self { self }
 
@@ -82,6 +85,7 @@ enum DirectAIProviderChoice: String, CaseIterable, Codable, Identifiable, Sendab
         case .minimax: return "MiniMax"
         case .gemini: return "Gemini"
         case .openAICompatible: return "自定义 API"
+        case .chatGPTPlan: return "ChatGPT 套餐"
         }
     }
 
@@ -100,6 +104,7 @@ enum DirectAIProviderChoice: String, CaseIterable, Codable, Identifiable, Sendab
         case .minimax: return "ProviderLogoMiniMax"
         case .gemini: return "ProviderLogoGemini"
         case .openAICompatible: return "ProviderLogoCompatible"
+        case .chatGPTPlan: return "ProviderLogoChatGPTPlan"
         }
     }
 
@@ -116,6 +121,7 @@ enum DirectAIProviderChoice: String, CaseIterable, Codable, Identifiable, Sendab
         case .minimax: return "M"
         case .gemini: return "✦"
         case .openAICompatible: return "API"
+        case .chatGPTPlan: return "G+"
         }
     }
 

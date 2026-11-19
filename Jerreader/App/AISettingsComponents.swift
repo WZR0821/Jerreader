@@ -5,20 +5,30 @@ import UIKit
 /// third-party logos are bundled; a logo image of the provider's asset name is
 /// used when one is added.
 struct ProviderIcon: View {
+    @Environment(\.colorScheme) private var colorScheme
     var provider: DirectAIProviderChoice
     /// The user's own name for a custom service; its first character becomes the mark.
     var name: String? = nil
     var size: CGFloat = 34
+    /// The hairline around the mark. Nil picks one that keeps a white logo
+    /// apart from light paper and a dark mark apart from dark paper.
+    var edge: Color? = nil
 
     private var customInitial: String? {
         guard provider.isCustom, let first = name?.trimmingCharacters(in: .whitespacesAndNewlines).first else { return nil }
         return String(first).uppercased()
     }
 
+    private var edgeColor: Color {
+        if let edge { return edge }
+        if colorScheme == .dark { return Color.white.opacity(0.1) }
+        return logo == nil ? Color.clear : JerreaderTheme.line
+    }
+
     var body: some View {
         // The mark is an overlay: a list draws its row separator from the first
         // text in the row, and that should be the provider's name, not this letter.
-        RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
+        RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
             .fill(logo == nil ? AnyShapeStyle(provider.tint.gradient) : AnyShapeStyle(Color.white))
             .frame(width: size, height: size)
             .overlay {
@@ -35,6 +45,10 @@ struct ProviderIcon: View {
                     .foregroundStyle(.white)
                 }
             }
+            .overlay {
+                RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
+                    .strokeBorder(edgeColor, lineWidth: colorScheme == .dark ? 1 : 0.75)
+            }
             .accessibilityHidden(true)
     }
 
@@ -45,7 +59,7 @@ extension DirectAIProviderChoice {
     fileprivate var monogram: String? {
         switch self {
         case .anthropic: return "C"
-        case .openAI: return "G"
+        case .openAI, .chatGPTPlan: return "G"
         case .deepSeek: return "D"
         case .qwen: return "通"
         case .doubao: return "豆"
@@ -71,6 +85,8 @@ extension DirectAIProviderChoice {
         case .minimax: hex = 0xD9365E
         case .gemini: hex = 0x3B7DED
         case .openAICompatible: hex = 0x6E7380
+        // The account sign-in is drawn in ChatGPT's black, apart from the API's green.
+        case .chatGPTPlan: hex = 0x1A1A1A
         }
         return Color(
             red: Double((hex >> 16) & 0xFF) / 255,
@@ -83,13 +99,33 @@ extension DirectAIProviderChoice {
 /// A small capsule label such as 推荐 or 正在用.
 struct TagLabel: View {
     var text: String
+    /// Nil is the theme accent; a hero card passes white.
+    var tint: Color? = nil
 
     var body: some View {
-        Text(text).font(.caption2.weight(.semibold)).foregroundStyle(JerreaderTheme.accent)
+        let color = tint ?? JerreaderTheme.accent
+        Text(text).font(.caption2.weight(.semibold)).foregroundStyle(color)
             .padding(.horizontal, 7).padding(.vertical, 2.5)
-            .background(JerreaderTheme.accent.opacity(0.14), in: Capsule())
+            .background(color.opacity(0.14), in: Capsule())
             .fixedSize()
     }
+}
+
+/// Tile colours of the settings rows, as in the system Settings app: each
+/// kind of page keeps its own colour, and only 界面主题 follows the theme.
+enum SettingsTint {
+    /// 默认阅读排版 and the reading pages of the guide.
+    static var reading: Color { JerreaderTheme.vermilion }
+    /// 翻译与 AI.
+    static var translation: Color { JerreaderTheme.dynamic(light: 0x227C8C, dark: 0x6FC3D1) }
+    /// AI 大模型 and AI 套餐.
+    static var models: Color { JerreaderTheme.dynamic(light: 0x6D55C4, dark: 0xB5A3F5) }
+    /// 备份与恢复.
+    static var backup: Color { JerreaderTheme.gold }
+    /// 数据与隐私.
+    static var privacy: Color { JerreaderTheme.jade }
+    /// 操作指南 and other neutral rows.
+    static var guide: Color { JerreaderTheme.dynamic(light: 0x5F6B7A, dark: 0xA4AEBB) }
 }
 
 /// Icon, name and one line of detail: the row used for providers.
@@ -148,8 +184,8 @@ struct ValueRow: View {
             Text(title).foregroundStyle(Color.primary)
             Spacer()
             Text(value).lineLimit(1).foregroundStyle(warn ? Color.orange : Color.secondary)
-            Image(systemName: "chevron.right").font(.footnote.weight(.semibold))
-                .foregroundStyle(Color(uiColor: .tertiaryLabel)).accessibilityHidden(true)
+            JerreaderSymbol(name: "chevron.right", size: 16)
+                .foregroundStyle(Color(uiColor: .tertiaryLabel))
         }
         .contentShape(Rectangle())
     }
@@ -166,14 +202,37 @@ struct DisclosureRow: View {
             HStack {
                 Text(title).foregroundStyle(Color.primary)
                 Spacer()
-                Image(systemName: "chevron.down").font(.footnote.weight(.semibold))
+                JerreaderSymbol(name: "chevron.down", size: 16)
                     .foregroundStyle(Color(uiColor: .tertiaryLabel))
-                    .rotationEffect(.degrees(isExpanded ? 0 : -90)).accessibilityHidden(true)
+                    .rotationEffect(.degrees(isExpanded ? 0 : -90))
             }
             .contentShape(Rectangle())
         }
         .accessibilityValue(isExpanded ? "已展开" : "已收起")
         .accessibilityIdentifier("disclosure-" + title)
+    }
+}
+
+/// The round check of a multiple choice: filled in the accent with a check
+/// when on, an empty ring when off. It springs between the two (`stateChange`).
+struct SettingsCheckMark: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var isOn: Bool
+
+    var body: some View {
+        ZStack {
+            Circle().strokeBorder(Color(uiColor: .tertiaryLabel), lineWidth: 1.5)
+                .opacity(isOn ? 0 : 1)
+            Circle().fill(JerreaderTheme.accent)
+                .scaleEffect(isOn || reduceMotion ? 1 : 0.6)
+                .opacity(isOn ? 1 : 0)
+            JerreaderSymbol(name: "checkmark", size: 14)
+                .foregroundStyle(JerreaderTheme.onPrimaryAction)
+                .opacity(isOn ? 1 : 0)
+        }
+        .frame(width: 24, height: 24)
+        .animation(JerreaderMotion.choose(JerreaderMotion.stateChange, reduceMotion: reduceMotion), value: isOn)
+        .accessibilityHidden(true)
     }
 }
 
@@ -206,7 +265,7 @@ struct ProviderHeader: View {
         HStack(spacing: 15) {
             ProviderIcon(provider: provider, name: name, size: 48)
             VStack(alignment: .leading, spacing: 3) {
-                if let caption { Text(caption).font(.footnote).foregroundStyle(.secondary) }
+                if let caption { JerreaderEyebrow(text: caption) }
                 Text(title).font(.title3.weight(.bold)).lineLimit(2).minimumScaleFactor(0.7)
                 Text(detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
             }
@@ -227,10 +286,11 @@ struct ErrorBanner: View {
             Text(message).font(.subheadline).foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
         } icon: {
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
+            JerreaderSymbol(name: "exclamationmark.triangle", size: 18).foregroundStyle(JerreaderTheme.vermilion)
         }
         .padding(.horizontal, 14).padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(JerreaderTheme.vermilion.opacity(0.1),
+                    in: RoundedRectangle(cornerRadius: JerreaderRadius.control, style: .continuous))
         .accessibilityIdentifier("errorBanner")
     }
 }
@@ -245,8 +305,12 @@ struct SettingsFeedback: View {
             VStack(spacing: 8) {
                 if let error { ErrorBanner(message: error) }
                 if let notice {
-                    Label(notice, systemImage: "checkmark.circle.fill")
-                        .font(.subheadline).foregroundStyle(JerreaderTheme.accent)
+                    Label {
+                        Text(notice)
+                    } icon: {
+                        JerreaderSymbol(name: "checkmark.circle.fill", size: 18)
+                    }
+                    .font(.subheadline).foregroundStyle(JerreaderTheme.jade)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 4).padding(.vertical, 6)
                         .accessibilityIdentifier("settingsNotice")
                 }
@@ -383,12 +447,18 @@ extension View {
         modifier(SettingsListStyle(icons: icons))
     }
 
-    /// A group title in a grouped list: the system look, without forced capitals
-    /// and with less empty space above it. `listSectionSpacing` alone leaves the
-    /// title's own padding in place, which is most of the gap between two groups.
+    /// A group title in a grouped list, without forced capitals and with less
+    /// empty space above it. `listSectionSpacing` alone leaves the title's own
+    /// padding in place, which is most of the gap between two groups.
     func sectionTitle() -> some View {
-        textCase(nil).listRowInsets(EdgeInsets(top: ListMetrics.titleTop, leading: 20,
-                                               bottom: ListMetrics.titleBottom, trailing: 20))
+        settingsHeader().listRowInsets(EdgeInsets(top: ListMetrics.titleTop, leading: 20,
+                                                  bottom: ListMetrics.titleBottom, trailing: 20))
+    }
+
+    /// The 2.0 group title of every settings page: footnote semibold with a
+    /// little tracking, in the secondary colour, without forced capitals.
+    func settingsHeader() -> some View {
+        font(.footnote.weight(.semibold)).tracking(0.6).foregroundStyle(.secondary).textCase(nil)
     }
 }
 

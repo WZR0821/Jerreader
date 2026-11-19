@@ -1315,6 +1315,20 @@ final class JerreaderOneScreenUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["国内"].exists)
         XCTAssertFalse(app.staticTexts["海外"].exists)
         attach("ai-add-provider")
+
+        // 套餐 shows the ChatGPT plan and Claude's API credits. Nothing here is
+        // tapped that signs in or opens a page, so the test stays offline.
+        let planTab = element("addProviderMode").buttons["套餐"]
+        XCTAssertTrue(planTab.waitForExistence(timeout: 5))
+        planTab.tap()
+        XCTAssertTrue(element("planChatGPTCard").waitForExistence(timeout: 5))
+        XCTAssertTrue(element("continueWithChatGPTButton").exists)
+        XCTAssertFalse(element("planAccountLink").exists, "Signed out, there is no account row")
+        attach("ai-add-provider-plan")
+        app.swipeUp()
+        XCTAssertTrue(element("planClaudeCard").waitForExistence(timeout: 5))
+        XCTAssertTrue(element("planCodingNote").waitForExistence(timeout: 5))
+        attach("ai-add-provider-plan-claude")
         element("cancelAddProvider").tap()
         XCTAssertTrue(app.navigationBars["AI 大模型"].waitForExistence(timeout: 5))
 
@@ -1413,9 +1427,8 @@ final class JerreaderReaderLayoutUITests: XCTestCase {
         openReaderSettings()
         let sheet = app.navigationBars["阅读与翻译"]
         XCTAssertTrue(sheet.waitForExistence(timeout: 5))
-        let segment = app.segmentedControls
-            .containing(.button, identifier: "沉浸")
-            .buttons[title]
+        // 界面布局 is a pill picker; each option carries readerLayout-<mode>.
+        let segment = app.buttons[title == "沉浸" ? "readerLayout-immersive" : "readerLayout-standard"]
         for _ in 0 ..< 4 where !segment.isHittable {
             app.swipeUp()
         }
@@ -1493,6 +1506,55 @@ final class JerreaderReaderLayoutUITests: XCTestCase {
         // Leave the simulator in the default layout.
         chooseLayout("标准")
         XCTAssertFalse(revealTop.exists)
+        app.terminate()
+    }
+
+    /// 2.0 opens a book from the shelf with the iOS 18 zoom transition, which
+    /// on its own can also be dismissed by a downward swipe or a pinch. In a
+    /// reader that would close the book by accident, so the reader turns
+    /// those gestures off; only 关闭阅读器 closes it.
+    func testReaderOpenedFromShelfIgnoresDismissGestures() {
+        app = XCUIApplication()
+        app.launchArguments = [
+            "--jerreader-sample-book-ui-test",
+            "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN",
+            "-ApplePersistenceIgnoreState", "YES",
+        ]
+        app.launch()
+        XCTAssertTrue(readerSettings.waitForExistence(timeout: 60), "The sample book must open")
+        chooseLayout("标准")
+
+        let close = app.buttons["关闭阅读器"]
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        close.tap()
+        waitUntilGone(readerSettings, timeout: 8, "关闭阅读器 returns to the shelf")
+
+        // The book was just read, so the shelf leads with its 继续阅读 card,
+        // whose cover is a zoom source like the grid covers.
+        let hero = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "继续阅读，")).firstMatch
+        XCTAssertTrue(hero.waitForExistence(timeout: 8), "the shelf shows the book just read")
+        attach("library-continue-reading")
+        hero.tap()
+        XCTAssertTrue(readerSettings.waitForExistence(timeout: 30), "the 继续阅读 card opens the reader")
+        Thread.sleep(forTimeInterval: 1.5)
+
+        func assertStillReading(_ gesture: String) {
+            Thread.sleep(forTimeInterval: 1.5)
+            XCTAssertTrue(readerSettings.exists, "\(gesture) must not close the reader")
+            XCTAssertTrue(close.exists, "\(gesture) must not close the reader")
+        }
+        app.swipeDown(velocity: .fast)
+        assertStillReading("a fast downward swipe")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.28))
+            .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.96)))
+        assertStillReading("a long downward drag")
+        app.pinch(withScale: 0.4, velocity: -2)
+        assertStillReading("a pinch")
+        attach("reader-after-dismiss-gestures")
+
+        close.tap()
+        waitUntilGone(readerSettings, timeout: 8, "关闭阅读器 still closes the reader")
+        XCTAssertTrue(hero.waitForExistence(timeout: 8), "the reader closes back to the shelf")
         app.terminate()
     }
 }

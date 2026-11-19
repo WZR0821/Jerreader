@@ -20,14 +20,21 @@ class AIProviderSettingsTest {
         assertEquals(listOf(AIProviderKind.ANTHROPIC, AIProviderKind.OPENAI, AIProviderKind.DEEPSEEK), presets.take(3))
         assertEquals(presets.size, presets.toSet().size)
         assertFalse(AIProviderKind.OPENAI_COMPATIBLE in presets)
-        assertEquals(AIProviderKind.entries.toSet(), (presets + AIProviderKind.OPENAI_COMPATIBLE).toSet())
+        // The ChatGPT plan is added from the 套餐 tab, not from the presets.
+        assertFalse(AIProviderKind.CHATGPT_PLAN in presets)
+        assertEquals(
+            AIProviderKind.entries.toSet(),
+            (presets + AIProviderKind.OPENAI_COMPATIBLE + AIProviderKind.CHATGPT_PLAN).toSet()
+        )
         for (kind in presets) {
             assertTrue("$kind has no models", kind.modelPresets.isNotEmpty())
             assertEquals(kind.modelPresets[0].id, kind.defaultModel)
             assertTrue("$kind address", AIEndpoint.isValid(kind.defaultBaseURL))
         }
-        val marks = AIProviderKind.entries.mapNotNull { it.monogram }
+        // The plan is ChatGPT too and draws the same letter; every other mark differs.
+        val marks = AIProviderKind.entries.filter { it != AIProviderKind.CHATGPT_PLAN }.mapNotNull { it.monogram }
         assertEquals(marks.size, marks.toSet().size)
+        assertEquals("G", AIProviderKind.CHATGPT_PLAN.monogram)
         assertEquals(AIProviderKind.entries.size, AIProviderKind.entries.map { it.tint }.toSet().size)
         assertEquals(listOf(AIProviderKind.DEEPSEEK), AIProviderKind.entries.filter { it.isRecommended })
 

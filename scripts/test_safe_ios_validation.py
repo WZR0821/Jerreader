@@ -725,6 +725,25 @@ class AndroidDeviceSafetyTests(unittest.TestCase):
         for crashes, after in (("Process: com.jerreader.android, PID: 123", "123"), ("", ""), ("", "456")):
             with self.assertRaises(RuntimeError): verify_no_release_crash(crashes, "123", after)
 
+    def test_release_smoke_rejects_reader_failure_and_broken_ml_kit(self):
+        from android_device_validation import verify_release_reader, verify_release_components
+        verify_release_reader('<hierarchy><node package="com.jerreader.android" text="第 1 页" /></hierarchy>', "pdf")
+        for ui in ('<hierarchy><node package="com.jerreader.android" text="无法打开这本书" /></hierarchy>', ""):
+            with self.assertRaises(RuntimeError): verify_release_reader(ui, "pdf")
+        verify_release_components("I MlKitContext: ready\n")
+        for log in ("W ComponentDiscovery: Invalid component registrar.\n",
+                    "com.google.firebase.components.InvalidRegistrarException: Could not instantiate X\n"):
+            with self.assertRaises(RuntimeError): verify_release_components(log)
+
+    def test_release_package_requires_the_strengthened_smoke(self):
+        from package_release_apk import verify_release_smoke
+        opened = ("opened epub in ReaderActivity and returned to the library\n"
+                  "opened pdf in ReaderActivity and returned to the library\n")
+        verify_release_smoke(opened + "created every ML Kit component registrar\n")
+        for smoke in (opened, "opened epub in ReaderActivity and returned to the library\n"
+                      "created every ML Kit component registrar\n"):
+            with self.assertRaises(ValueError): verify_release_smoke(smoke)
+
     def test_release_package_delivers_arm64_twin_of_validated_split(self):
         import zipfile
         from package_release_apk import abi_element, verify_split_pair

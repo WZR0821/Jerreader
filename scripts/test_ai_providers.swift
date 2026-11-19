@@ -18,7 +18,14 @@ import Foundation
         let presets = DirectAIProviderChoice.presets
         precondition(Array(presets.prefix(3)) == [.anthropic, .openAI, .deepSeek])
         precondition(Set(presets).count == presets.count && !presets.contains(.openAICompatible))
-        precondition(Set(presets + [.openAICompatible]) == Set(DirectAIProviderChoice.allCases))
+        precondition(Set(presets + [.openAICompatible, .chatGPTPlan]) == Set(DirectAIProviderChoice.allCases))
+        // The ChatGPT plan signs in instead of taking a key; it is listed on the 套餐 page only.
+        let plan = DirectAIProviderChoice.chatGPTPlan
+        precondition(!presets.contains(plan) && !DirectAIProviderChoice.legacyCases.contains(plan))
+        precondition(plan.usesAccountSignIn && !plan.isCustom)
+        precondition(DirectAIProviderChoice.allCases.filter(\.usesAccountSignIn) == [plan])
+        precondition(plan.defaultStyle == .responses && plan.modelPresets.isEmpty && plan.keyURL == nil)
+        precondition(plan.defaultBaseURL == "https://api.openai.com/v1" && plan.title == "ChatGPT 套餐")
         for kind in presets {
             precondition(!kind.modelPresets.isEmpty, "\(kind) has no models")
             precondition(kind.defaultModel == kind.modelPresets[0].id)
@@ -170,6 +177,11 @@ import Foundation
         precondition(explained["reasoning_effort"] as? String == "low")
 
         precondition(text(fields(.openAI, .responses, "gpt-6-luna")["reasoning"], "effort") == "none")
+        // The plan's known models are tuned like the API's; unknown ones get nothing.
+        precondition(text(fields(.chatGPTPlan, .responses, "gpt-6-luna")["reasoning"], "effort") == "none")
+        precondition(text(fields(.chatGPTPlan, .responses, "gpt-6-astra", .high)["reasoning"], "effort") == "high")
+        precondition(fields(.chatGPTPlan, .responses, "gpt-test").isEmpty)
+        precondition(fields(.chatGPTPlan, .responses, "gpt-6-luna", quick: false).isEmpty)
         precondition(text(fields(.openAI, .responses, "gpt-6-luna", .high)["reasoning"], "effort") == "high")
         precondition(text(fields(.anthropic, .anthropicMessages, "claude-haiku-5-5")["output_config"], "effort") == "low")
         precondition(fields(.anthropic, .anthropicMessages, "claude-haiku-5-5", quick: false).isEmpty)
@@ -199,6 +211,22 @@ import Foundation
         let older = try JSONDecoder().decode(AIProviderSettings.self, from: Data(stored.utf8))
         precondition(older.active.activeModel == AIModelEntry(id: "deepseek-flash", style: .chatCompletions))
         precondition(older.active.name == nil)
+
+        // A provider kind this version does not know is skipped, not a reason to lose the rest.
+        let later = #"{"activeID":"deepSeek","entries":[{"id":"future","kind":"futureKind","baseURL":"https://x.test","model":"m","models":[]},{"id":"deepSeek","kind":"deepSeek","baseURL":"https://api.deepseek.com","model":"deepseek-flash","models":[{"id":"deepseek-flash","style":"chatCompletions"}]}]}"#
+        let skipped = try JSONDecoder().decode(AIProviderSettings.self, from: Data(later.utf8))
+        precondition(skipped.entries.map(\.id) == ["deepSeek"] && skipped.active.id == "deepSeek")
+
+        // The plan's entry round-trips like any other.
+        var withPlan = AIProviderSettings.fresh
+        withPlan.add(AIProviderEntry(id: "chatGPTPlan", kind: .chatGPTPlan, name: nil,
+                                     baseURL: "https://api.openai.com/v1", model: "gpt-test",
+                                     models: [AIModelEntry(id: "gpt-test", style: .responses, reasoning: .low)]),
+                     activeHasKey: false)
+        precondition(withPlan.activeID == "chatGPTPlan" && withPlan.entries.map(\.id) == ["chatGPTPlan"])
+        let planData = try JSONEncoder().encode(withPlan)
+        let planDecoded = try JSONDecoder().decode(AIProviderSettings.self, from: planData)
+        precondition(planDecoded == withPlan)
 
         // A configuration made without a format uses the provider's original one.
         let endpoint = URL(string: "https://example.test/v1beta")!

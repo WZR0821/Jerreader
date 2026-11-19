@@ -11,12 +11,19 @@ struct OfflineDictionaryView: View {
         LearningPage {
             LearningHint(text: "基础词典已内置，无需下载。句段翻译语言包由 iOS 在首次使用时管理。")
             LearningCard {
-                Text("英语扩展词典").font(.headline)
+                HStack(alignment: .center, spacing: JerreaderSpacing.sm) {
+                    JerreaderIconTile(systemImage: "externaldrive", size: 40)
+                    Text("英语扩展词典").font(.headline)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    LearningChip(
+                        text: installed ? "已下载" : "未下载",
+                        tint: installed ? JerreaderTheme.jade : Color.secondary
+                    )
+                }
                 LearningHint(text: "下载 65.9 MB，安装需预留 300 MB，用于离线查词。")
-                Text(installed ? "已下载" : "未下载").font(.caption).foregroundStyle(.secondary)
-                if busy { ProgressView(removing ? "正在卸载…" : "正在下载并建立索引…") }
+                if busy { ProgressView(removing ? "正在卸载…" : "正在下载并建立索引…").font(.subheadline) }
                 if let status { Text(status).font(.caption).foregroundStyle(.secondary) }
-                HStack(spacing: 24) {
+                HStack(spacing: JerreaderSpacing.sm) {
                     Button(busy && !removing ? "取消下载" : "下载") {
                         if busy { task?.cancel(); return }
                         busy = true
@@ -28,7 +35,9 @@ struct OfflineDictionaryView: View {
                             installed = await OfflineDictionaryPackageStore.shared.installed()
                             busy = false
                         }
-                    }.disabled(removing || (installed && !busy))
+                    }
+                    .buttonStyle(LearningActionStyle(kind: .filled))
+                    .disabled(removing || (installed && !busy))
                     Button("卸载", role: .destructive) {
                         busy = true
                         removing = true
@@ -38,7 +47,9 @@ struct OfflineDictionaryView: View {
                             busy = false
                             removing = false
                         }
-                    }.disabled(busy || !installed)
+                    }
+                    .buttonStyle(LearningActionStyle(kind: .tinted))
+                    .disabled(busy || !installed)
                 }
             }
             HStack(spacing: 16) {

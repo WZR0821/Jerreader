@@ -1,11 +1,17 @@
 package com.jerreader.android.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.EaseOut
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +24,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.CircularProgressIndicator
@@ -25,27 +32,42 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.drawOutline
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -54,16 +76,10 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.text.style.LineHeightStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.jerreader.android.R
 import com.jerreader.android.translation.AndroidTranslationSettingsStore
 import com.jerreader.shared.domain.LanguageCode
@@ -78,26 +94,33 @@ import com.jerreader.android.settings.AppThemeChoice
 import com.jerreader.shared.ui.AppGuideScreen
 import com.jerreader.shared.ui.JerreaderGlyph
 import com.jerreader.shared.ui.JerreaderIcon
+import com.jerreader.shared.ui.JerreaderIconTile
 import com.jerreader.shared.ui.JerreaderListDivider
+import com.jerreader.shared.ui.JerreaderMotion
 import com.jerreader.shared.ui.JerreaderNavigationChevron
-import com.jerreader.shared.ui.JerreaderRowChevron
+import com.jerreader.shared.ui.JerreaderPillOption
+import com.jerreader.shared.ui.JerreaderPillPicker
+import com.jerreader.shared.ui.JerreaderRadius
 import com.jerreader.shared.ui.JerreaderRowSeparator
 import com.jerreader.shared.ui.LocalJerreaderColors
+import com.jerreader.shared.ui.LocalSettingsHeader
 import com.jerreader.shared.ui.SettingsActionRow
 import com.jerreader.shared.ui.SettingsDisclosureGroup
 import com.jerreader.shared.ui.SettingsFootnote
 import com.jerreader.shared.ui.SettingsGroup
 import com.jerreader.shared.ui.SettingsInsetRow
-import com.jerreader.shared.ui.SettingsLabelRow
 import com.jerreader.shared.ui.SettingsValueRow
 import com.jerreader.shared.ui.SettingsBareSliderRow
 import com.jerreader.shared.ui.SettingsMenuRow
 import com.jerreader.shared.ui.SettingsPage
-import com.jerreader.shared.ui.SettingsSegmentedRow
-import com.jerreader.shared.ui.SettingsSwatchRow
 import com.jerreader.shared.ui.SettingsToggleRow
 import com.jerreader.shared.ui.SettingsWarningNote
+import com.jerreader.shared.ui.jerreaderCanvasBackground
 import com.jerreader.shared.ui.jerreaderColors
+import com.jerreader.shared.ui.jerreaderPalette
+import com.jerreader.shared.ui.jerreaderPaperCard
+import com.jerreader.shared.ui.jerreaderPressScale
+import com.jerreader.shared.ui.settingsHeaderStyle
 import com.jerreader.shared.library.ReaderAppearance
 import com.jerreader.shared.library.ReaderTextOrientation
 import com.jerreader.shared.library.ReaderThemeOption
@@ -190,23 +213,13 @@ fun SettingsScreen(
         )
 
         SettingsRoute.THEME -> SettingsPage(title = "界面主题", onBack = back, bottomBar = bottomBar) {
-            val dark = isSystemInDarkTheme()
             SettingsGroup(
                 title = "主题色系",
                 icon = JerreaderIcon.PALETTE,
                 footer = "色系会同时调整强调色、按钮、卡片与背景，并自动适配系统深色/浅色外观。" +
                     "阅读页的纸张主题仍在“默认阅读排版”中单独设置。"
             ) {
-                AppThemeChoice.entries.forEach { choice ->
-                    SettingsSwatchRow(
-                        title = choice.title,
-                        detail = choice.detail,
-                        swatch = jerreaderColors(choice, dark).accent,
-                        selected = appPreferences.theme == choice,
-                        onClick = { onThemeChanged(choice) },
-                        showDivider = choice != AppThemeChoice.entries.last()
-                    )
-                }
+                ThemeSwatches(selected = appPreferences.theme, onSelect = onThemeChanged)
             }
         }
 
@@ -260,11 +273,7 @@ fun SettingsScreen(
                     showDivider = !appPreferences.applyReaderDefaultsToExistingBooks
                 )
                 if (appPreferences.applyReaderDefaultsToExistingBooks) {
-                    SettingsLabelRow(
-                        "已自动同步到 $bookCount 本现有书籍",
-                        icon = JerreaderIcon.CHECK_CIRCLE,
-                        secondary = true
-                    )
+                    SettingsSyncedRow("已自动同步到 $bookCount 本现有书籍")
                 } else {
                     SettingsActionRow(
                         "立即应用到书架中的现有书籍",
@@ -330,26 +339,19 @@ fun SettingsScreen(
         SettingsRoute.GUIDE -> AppGuideScreen(onBack = back, bottomBar = bottomBar)
 
         SettingsRoute.PRIVACY -> SettingsPage(title = "数据与隐私", onBack = back, bottomBar = bottomBar) {
+            // iOS `DataPrivacySettingsView`: each promise on a tinted 30dp tile.
             SettingsGroup(
                 title = "本机数据",
                 icon = JerreaderIcon.SHIELD,
                 footer = null
             ) {
-                SettingsLabelRow(
-                    "书籍、书架与学习记录默认只保存在本机",
-                    JerreaderIcon.BOOKS
-                )
-                SettingsLabelRow(
-                    "API Key 只保存在本机安全存储",
-                    JerreaderIcon.LOCK
-                )
-                SettingsLabelRow(
-                    "在线 AI 只接收你主动选择的文字与必要上下文",
-                    JerreaderIcon.SHIELD
-                )
-                SettingsLabelRow(
+                PrivacyFact("书籍、书架与学习记录默认只保存在本机", JerreaderIcon.BOOKS, jerreaderPalette.accent)
+                PrivacyFact("API Key 只保存在本机安全存储", JerreaderIcon.LOCK, SettingsTint.guide)
+                PrivacyFact("在线 AI 只接收你主动选择的文字与必要上下文", JerreaderIcon.SHIELD, SettingsTint.privacy)
+                PrivacyFact(
                     "导入的书籍是只读输入，阅读与翻译不会改写它",
                     JerreaderIcon.DICTIONARY,
+                    SettingsTint.reading,
                     showDivider = false
                 )
             }
@@ -358,11 +360,7 @@ fun SettingsScreen(
                 icon = JerreaderIcon.DOWNLOAD,
                 footer = "密钥不会写入书籍、日志或安装包。备份只写入你选择的位置。"
             ) {
-                SettingsLabelRow(
-                    "备份需要你先授权一个文件夹",
-                    JerreaderIcon.DOWNLOAD,
-                    showDivider = false
-                )
+                PrivacyFact("备份需要你先授权一个文件夹", JerreaderIcon.DOWNLOAD, SettingsTint.backup, showDivider = false)
             }
         }
     }
@@ -388,7 +386,7 @@ private fun ReaderDefaultsSections(
         icon = JerreaderIcon.BOOKS,
         footer = if (appliesToExistingBooks) "当前排版会同步到现有书籍；阅读位置、书签与批注不受影响。" else "当前排版只会自动用于以后导入的新书。"
     ) {
-        SettingsSegmentedRow(
+        SettingsPillRow(
             title = "翻页方式",
             options = listOf(false to "逐页", true to "滚动"),
             selected = appearance.scroll,
@@ -494,7 +492,7 @@ private fun ReaderDefaultsSections(
     // 原版 first); an old 竖排 default reads as 原版.
     SettingsGroup(title = "日文原版排版", icon = JerreaderIcon.TEXT_FORMAT) {
         val horizontal = appearance.orientation == ReaderTextOrientation.HORIZONTAL
-        SettingsSegmentedRow(
+        SettingsPillRow(
             title = "默认版式",
             options = listOf(
                 ReaderTextOrientation.HORIZONTAL to "横排",
@@ -514,6 +512,216 @@ private fun ReaderDefaultsSections(
     }
 }
 
+/**
+ * 界面主题 as iOS `AppThemeColorSettingsView` draws it: the five colours as a
+ * row of round swatches, then the chosen colour's name and what it is. The
+ * chosen swatch carries a 2dp ring in its own colour and a check; the switch
+ * springs (`stateChange`) and ticks.
+ */
+@Composable
+private fun ThemeSwatches(
+    selected: AppThemeChoice,
+    onSelect: (AppThemeChoice) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val haptics = LocalHapticFeedback.current
+    Column(modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 14.dp)) {
+            AppThemeChoice.entries.forEach { choice ->
+                ThemeSwatch(
+                    choice = choice,
+                    isSelected = choice == selected,
+                    onClick = {
+                        if (choice != selected) {
+                            haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                            onSelect(choice)
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+        JerreaderRowSeparator(start = 20.dp)
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 10.dp)
+                .semantics(mergeDescendants = true) {},
+            verticalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            Text(selected.title, style = MaterialTheme.typography.titleMedium)
+            Text(
+                selected.detail,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/** A 44dp colour circle inside a 54dp ring, with the colour's name under it. */
+@Composable
+private fun ThemeSwatch(
+    choice: AppThemeChoice,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val tint = jerreaderColors(choice, jerreaderPalette.isDark).accent
+    val check = jerreaderPalette.onAccent
+    val source = remember { MutableInteractionSource() }
+    val shown by animateFloatAsState(
+        targetValue = if (isSelected) 1f else 0f,
+        animationSpec = JerreaderMotion.stateChange(),
+        label = "themeSwatch"
+    )
+    Column(
+        modifier
+            .jerreaderPressScale(source, pressedScale = 0.94f)
+            .clickable(interactionSource = source, indication = null, role = Role.Button, onClick = onClick)
+            .semantics {
+                contentDescription = "${choice.title}，${choice.detail}"
+                selected = isSelected
+            }
+            .testTag("themeSwatch-${choice.name.lowercase()}"),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Box(Modifier.size(54.dp), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .graphicsLayer {
+                        val scale = 0.84f + 0.16f * shown
+                        scaleX = scale
+                        scaleY = scale
+                        alpha = shown.coerceIn(0f, 1f)
+                    }
+                    .border(2.dp, tint, CircleShape)
+            )
+            Box(
+                Modifier
+                    .size(44.dp)
+                    .background(tint, CircleShape)
+                    .border(0.5.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), CircleShape)
+            )
+            JerreaderGlyph(
+                JerreaderIcon.CHECK,
+                check,
+                Modifier
+                    .size(20.dp)
+                    .graphicsLayer {
+                        val scale = 0.5f + 0.5f * shown
+                        scaleX = scale
+                        scaleY = scale
+                        alpha = shown.coerceIn(0f, 1f)
+                    }
+            )
+        }
+        Text(
+            choice.title,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1
+        )
+    }
+}
+
+/**
+ * The 2.0 pill control on a Form row of its own, where iOS replaced the
+ * system segments, so the chosen option carries the theme colour. [title]
+ * names it for accessibility, as the row's label did. Switched off it dims to
+ * iOS's 0.45 and takes no touches.
+ */
+@Composable
+private fun <T> SettingsPillRow(
+    title: String,
+    options: List<Pair<T, String>>,
+    selected: T,
+    onSelect: (T) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    showDivider: Boolean = true
+) {
+    Column(modifier.fillMaxWidth().semantics { contentDescription = title }) {
+        Box(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp)) {
+            JerreaderPillPicker(
+                options = options.map { (value, label) -> JerreaderPillOption(value, label) },
+                selected = selected,
+                onSelect = { if (enabled) onSelect(it) },
+                modifier = Modifier.alpha(if (enabled) 1f else 0.45f)
+            )
+            if (!enabled) {
+                // Over the picker, so not even its press or tick answers.
+                Box(
+                    Modifier
+                        .matchParentSize()
+                        .pointerInput(Unit) {
+                            awaitPointerEventScope {
+                                while (true) awaitPointerEvent().changes.forEach { it.consume() }
+                            }
+                        }
+                )
+            }
+        }
+        if (showDivider) JerreaderRowSeparator(start = 20.dp)
+    }
+}
+
+/** iOS's `Label` with a jade `checkmark.circle.fill`: the 已自动同步 line. */
+@Composable
+private fun SettingsSyncedRow(text: String, modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxWidth()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 44.dp)
+                .padding(horizontal = 20.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Box(Modifier.size(28.dp), contentAlignment = Alignment.Center) {
+                JerreaderGlyph(JerreaderIcon.CHECK_CIRCLE, jerreaderPalette.jade, Modifier.size(20.dp))
+            }
+            Text(
+                text,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        JerreaderRowSeparator(start = 64.dp)
+    }
+}
+
+/** One promise about the data, as iOS `fact`: a 30dp tile and the sentence beside it. */
+@Composable
+private fun PrivacyFact(
+    text: String,
+    icon: JerreaderIcon,
+    tint: Color,
+    modifier: Modifier = Modifier,
+    showDivider: Boolean = true
+) {
+    Column(modifier.fillMaxWidth()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 44.dp)
+                .padding(horizontal = 20.dp, vertical = 13.dp)
+                .semantics(mergeDescendants = true) {},
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            JerreaderIconTile(icon, tint = tint, size = 30.dp)
+            Text(text, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+        }
+        // Level with the sentence, as iOS's `listRowSeparatorLeading` guide puts it.
+        if (showDivider) JerreaderRowSeparator(start = 64.dp)
+    }
+}
+
 /** The sliders step by 0.1; floating point drift would show up in the label. */
 private fun roundedTenth(value: Float): Double = kotlin.math.round(value * 10.0) / 10.0
 
@@ -524,18 +732,30 @@ private fun oneDecimal(value: Double): String {
 
 // MARK: Settings home
 
-/** Where a row sits in its group, for a group drawn row by row. */
-private enum class HomeRowPosition { FIRST, MIDDLE, LAST }
+/**
+ * The rows of one settings-home group. Those after the first report their
+ * heights, so that the first row can draw the group's one paper card behind
+ * them all, as iOS `SettingsGroupCards` does from the rows' frames.
+ */
+private class HomeGroup(val size: Int) {
+    private val heights = List(size) { mutableIntStateOf(0) }
 
-/** A system colour in its light and dark appearance. */
-private fun systemColor(dark: Boolean, light: Long, darkValue: Long): Color = Color(if (dark) darkValue else light)
+    fun report(index: Int, height: Int) {
+        val slot = heights[index]
+        if (slot.intValue != height) slot.intValue = height
+    }
+
+    /** How far the card reaches below the first row, [first] pixels tall; a row not yet laid out counts as tall as it. */
+    fun below(first: Int): Int = (1 until size).sumOf { index -> heights[index].intValue.takeIf { it > 0 } ?: first }
+}
 
 /**
  * The settings home, laid out as the iOS `AppSettingsView`: a brand card, the
- * rows of the system Settings app in three groups, and the credit. It fills
- * one screen exactly: its rows share whatever height a taller phone leaves
- * over, so nothing scrolls and no gap is left above the tab bar. Large text or
- * a short screen still scrolls.
+ * rows of the system Settings app in three groups on paper cards, and the
+ * credit. It fills one screen exactly: the brand card, group titles and rows
+ * share whatever height a taller phone leaves over (up to 20, 8 and 22dp each,
+ * as on iOS), so nothing scrolls and no gap is left above the tab bar. Large
+ * text or a short screen still scrolls.
  */
 @Composable
 private fun SettingsHome(
@@ -556,9 +776,14 @@ private fun SettingsHome(
     val appearance = appPreferences.defaultReaderAppearance
     val readerSummary = "${readerThemeTitle(appearance.theme)} · ${if (appearance.scroll) "滚动" else "逐页"}"
     val margin = aiPageMargin()
-    val dark = aiIsDark()
+    val reading = remember { HomeGroup(2) }
+    val translation = remember { HomeGroup(2) }
+    val help = remember { HomeGroup(3) }
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
+        // The 2.0 canvas with its faint accent wash, as iOS draws behind the page.
+        modifier = Modifier.jerreaderCanvasBackground(),
+        containerColor = Color.Transparent,
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = { SettingsLargeTitle("设置", margin) },
         bottomBar = bottomBar
     ) { padding ->
@@ -568,40 +793,53 @@ private fun SettingsHome(
             horizontalPadding = margin
         ) {
             val row = Modifier.stretch(22.dp)
-            HomeBrand()
-            HomeGroupTitle("阅读")
+            val title = Modifier.stretch(8.dp)
+            HomeBrand(Modifier.stretch(20.dp))
+            HomeGroupTitle("阅读", title)
             HomeRow(
-                "界面主题", appPreferences.theme.title, MaterialTheme.colorScheme.primary,
-                HomeRowPosition.FIRST, margin, row, icon = { HomeTileGlyph(JerreaderIcon.PALETTE_FILLED, 24.8.dp) }
-            ) { onRouteChanged(SettingsRoute.THEME) }
+                title = "界面主题", value = appPreferences.theme.title,
+                icon = JerreaderIcon.PALETTE_FILLED, tint = jerreaderPalette.accent,
+                group = reading, index = 0, edge = margin, tag = "themeSettingsLink",
+                onClick = { onRouteChanged(SettingsRoute.THEME) }, modifier = row
+            )
             HomeRow(
-                "默认阅读排版", readerSummary, systemColor(dark, 0xFF5856D6, 0xFF5E5CE6),
-                HomeRowPosition.LAST, margin, row, icon = { HomeTileSizeGlyph() }
-            ) { onRouteChanged(SettingsRoute.READER_DEFAULTS) }
-            HomeGroupTitle("翻译")
-            val translationTint = systemColor(dark, 0xFF007AFF, 0xFF0A84FF)
+                title = "默认阅读排版", value = readerSummary,
+                icon = JerreaderIcon.TEXT_FORMAT, tint = SettingsTint.reading,
+                group = reading, index = 1, edge = margin, tag = "readerDefaultsLink",
+                onClick = { onRouteChanged(SettingsRoute.READER_DEFAULTS) }, modifier = row
+            )
+            HomeGroupTitle("翻译", title)
             HomeRow(
-                "翻译与 AI", providerModeTitle(preferences.providerMode), translationTint,
-                HomeRowPosition.FIRST, margin, row, icon = { HomeTileBubbleGlyph(translationTint) }
-            ) { onRouteChanged(SettingsRoute.TRANSLATION) }
+                title = "翻译与 AI", value = providerModeTitle(preferences.providerMode),
+                icon = JerreaderIcon.TRANSLATION_BUBBLE_FILLED, tint = SettingsTint.translation,
+                group = translation, index = 0, edge = margin, tag = "translationSettingsLink",
+                onClick = { onRouteChanged(SettingsRoute.TRANSLATION) }, modifier = row
+            )
             HomeRow(
-                "AI 大模型", aiSummary, systemColor(dark, 0xFF34C759, 0xFF30D158),
-                HomeRowPosition.LAST, margin, row, warn = aiNeedsKey,
-                icon = { HomeTileGlyph(JerreaderIcon.SPARKLES, 20.2.dp) }
-            ) { onRouteChanged(SettingsRoute.AI_MODELS) }
-            HomeGroupTitle("数据与帮助")
+                title = "AI 大模型", value = aiSummary,
+                icon = JerreaderIcon.SPARKLES, tint = SettingsTint.models,
+                group = translation, index = 1, edge = margin, tag = "aiModelsSettingsLink",
+                onClick = { onRouteChanged(SettingsRoute.AI_MODELS) }, modifier = row, warn = aiNeedsKey
+            )
+            HomeGroupTitle("数据与帮助", title)
             HomeRow(
-                "备份与恢复", null, systemColor(dark, 0xFFFF9500, 0xFFFF9F0A),
-                HomeRowPosition.FIRST, margin, row, icon = { HomeTileGlyph(JerreaderIcon.EXTERNAL_DRIVE_FILLED, 23.2.dp) }
-            ) { onRouteChanged(SettingsRoute.BACKUP) }
+                title = "备份与恢复", value = null,
+                icon = JerreaderIcon.EXTERNAL_DRIVE_FILLED, tint = SettingsTint.backup,
+                group = help, index = 0, edge = margin, tag = "backupSettingsLink",
+                onClick = { onRouteChanged(SettingsRoute.BACKUP) }, modifier = row
+            )
             HomeRow(
-                "数据与隐私", null, systemColor(dark, 0xFF30B0C7, 0xFF40C8E0),
-                HomeRowPosition.MIDDLE, margin, row, icon = { HomeTileGlyph(JerreaderIcon.HAND_FILLED, 21.9.dp) }
-            ) { onRouteChanged(SettingsRoute.PRIVACY) }
+                title = "数据与隐私", value = null,
+                icon = JerreaderIcon.HAND_FILLED, tint = SettingsTint.privacy,
+                group = help, index = 1, edge = margin, tag = "privacySettingsLink",
+                onClick = { onRouteChanged(SettingsRoute.PRIVACY) }, modifier = row
+            )
             HomeRow(
-                "操作指南", null, Color(0xFF8E8E93),
-                HomeRowPosition.LAST, margin, row, icon = { HomeTileQuestionGlyph() }
-            ) { onRouteChanged(SettingsRoute.GUIDE) }
+                title = "操作指南", value = null,
+                icon = JerreaderIcon.QUESTION, tint = SettingsTint.guide,
+                group = help, index = 2, edge = margin, tag = "guideSettingsLink",
+                onClick = { onRouteChanged(SettingsRoute.GUIDE) }, modifier = row
+            )
             HomeCredit(versionName)
         }
     }
@@ -620,15 +858,35 @@ private fun SettingsLargeTitle(title: String, margin: Dp) {
     }
 }
 
+/**
+ * The app's own card: its mark, name and what it does, on paper with a faint
+ * wash of the theme colour from the top-leading corner. Its natural height
+ * (80dp) is the old brand row's, so the page budget holds; a taller phone
+ * gives it up to 20dp more.
+ */
 @Composable
-private fun HomeBrand() {
+private fun HomeBrand(modifier: Modifier = Modifier) {
+    val colors = jerreaderPalette
+    val markShape = RoundedCornerShape(12.dp)
     Row(
-        Modifier
+        modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(aiGroupedColor())
-            .padding(horizontal = 16.dp, vertical = 12.dp)
-            .semantics(mergeDescendants = true) {},
+            .jerreaderPaperCard(RoundedCornerShape(JerreaderRadius.card))
+            .drawBehind {
+                drawRoundRect(
+                    Brush.radialGradient(
+                        colors = listOf(
+                            colors.accent.copy(alpha = if (colors.isDark) 0.16f else 0.10f),
+                            colors.accent.copy(alpha = 0f)
+                        ),
+                        center = Offset.Zero,
+                        radius = 280.dp.toPx()
+                    ),
+                    cornerRadius = CornerRadius(JerreaderRadius.card.toPx())
+                )
+            }
+            .semantics(mergeDescendants = true) {}
+            .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp)
     ) {
@@ -636,10 +894,10 @@ private fun HomeBrand() {
             painter = painterResource(R.drawable.brand_mark),
             contentDescription = null,
             contentScale = ContentScale.Crop,
-            modifier = Modifier.size(56.dp).clip(RoundedCornerShape(12.5.dp))
+            modifier = Modifier.size(52.dp).clip(markShape).border(0.5.dp, colors.line, markShape)
         )
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text("Jerreader", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text("Jerreader", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Text(
                 "原版阅读 · 查词 · 翻译",
                 style = MaterialTheme.typography.bodyMedium,
@@ -649,130 +907,98 @@ private fun HomeBrand() {
     }
 }
 
-@Composable
-private fun HomeGroupTitle(title: String) {
-    Text(
-        title,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 20.dp, end = 20.dp, top = 21.dp, bottom = 5.dp)
-            .semantics { heading() },
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-}
-
 /**
- * The white glyph on a settings-home tile. Each size makes the glyph as wide
- * or as tall as the SF Symbol iOS draws at 17 pt medium in the same 32 pt
- * tile (measured on the iPhone screenshots).
+ * A group title, level with the icon tiles below it. On a taller phone it
+ * takes up to 8dp more above itself, which separates the groups.
  */
 @Composable
-private fun HomeTileGlyph(icon: JerreaderIcon, size: Dp) {
-    JerreaderGlyph(icon, Color.White, Modifier.size(size))
-}
-
-/** Text drawn as a tile glyph: a fixed size that, like SF Symbols, ignores the font scale. */
-@Composable
-private fun HomeTileText(
-    text: AnnotatedString,
-    color: Color,
-    size: Dp,
-    modifier: Modifier = Modifier
-) {
-    val fontSize = with(LocalDensity.current) { size.toSp() }
-    Text(
-        text,
-        modifier,
-        color = color,
-        maxLines = 1,
-        softWrap = false,
-        style = TextStyle(
-            fontSize = fontSize,
-            lineHeight = fontSize,
-            fontWeight = FontWeight.SemiBold,
-            lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both)
+private fun HomeGroupTitle(title: String, modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxWidth(), contentAlignment = Alignment.BottomStart) {
+        Text(
+            title,
+            modifier = Modifier
+                .padding(start = 16.dp, end = 16.dp, top = 21.dp, bottom = 5.dp)
+                .semantics { heading() },
+            style = settingsHeaderStyle,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-    )
-}
-
-/** iOS `textformat.size` in Chinese: a large 大 and a small 小 on one baseline. */
-@Composable
-private fun HomeTileSizeGlyph() {
-    val small = with(LocalDensity.current) { 11.dp.toSp() }
-    // CJK ink sits a little below the centre of the line box.
-    HomeTileText(
-        buildAnnotatedString {
-            append("大")
-            withStyle(SpanStyle(fontSize = small)) { append("小") }
-        },
-        Color.White,
-        15.dp,
-        Modifier.offset(y = (-1.2).dp)
-    )
-}
-
-/** iOS `character.bubble.fill` in Chinese: 字 cut out of a speech bubble. */
-@Composable
-private fun HomeTileBubbleGlyph(tint: Color) {
-    Box(contentAlignment = Alignment.Center) {
-        HomeTileGlyph(JerreaderIcon.SPEECH_BUBBLE_FILLED, 22.4.dp)
-        // Centred on the bubble body, which sits above the tail.
-        HomeTileText(AnnotatedString("字"), lerp(tint, Color.White, 0.08f), 9.8.dp, Modifier.offset(y = (-1.9).dp))
     }
 }
 
-/** iOS `questionmark`: a bare question mark, without the circle of [JerreaderIcon.QUESTION]. */
-@Composable
-private fun HomeTileQuestionGlyph() {
-    HomeTileText(AnnotatedString("?"), Color.White, 22.5.dp)
-}
-
 /**
- * A row in the style of the system Settings app: a coloured tile, the title,
- * and the current value on the trailing side. It takes whatever height the
- * page hands it. [edge] is the space after the chevron, which follows the
- * page margin as in a system list.
+ * A row in the style of the system Settings app: a tinted 30dp tile, the
+ * title, and the current value on the trailing side. It takes whatever height
+ * the page hands it. The group's paper card lies behind the rows (the first
+ * row draws it), so a row adds only its pressed tint and the hairline above
+ * it. [edge] is the space after the chevron, which follows the page margin as
+ * in a system list.
  */
 @Composable
 private fun HomeRow(
     title: String,
     value: String?,
+    icon: JerreaderIcon,
     tint: Color,
-    position: HomeRowPosition,
+    group: HomeGroup,
+    index: Int,
     edge: Dp,
+    tag: String,
+    onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    warn: Boolean = false,
-    icon: @Composable () -> Unit,
-    onClick: () -> Unit
+    warn: Boolean = false
 ) {
-    val top = if (position == HomeRowPosition.FIRST) 10.dp else 0.dp
-    val bottom = if (position == HomeRowPosition.LAST) 10.dp else 0.dp
+    val first = index == 0
+    val top = if (first) JerreaderRadius.card else 0.dp
+    val bottom = if (index == group.size - 1) JerreaderRadius.card else 0.dp
     val shape = RoundedCornerShape(topStart = top, topEnd = top, bottomStart = bottom, bottomEnd = bottom)
+    val source = remember { MutableInteractionSource() }
+    val pressed by source.collectIsPressedAsState()
+    // The tint comes at once and fades out after the finger lifts (iOS `quick`).
+    val pressTint by animateFloatAsState(
+        targetValue = if (pressed) 0.07f else 0f,
+        animationSpec = if (pressed) snap() else tween(durationMillis = 160, easing = EaseOut),
+        label = "homeRowPress"
+    )
+    val ink = MaterialTheme.colorScheme.onSurface
+    val line = jerreaderPalette.line
     Box(
         modifier
             .fillMaxWidth()
-            .clip(shape)
-            .background(aiGroupedColor())
-            .clickable(role = Role.Button, onClick = onClick)
+            .then(if (first) Modifier else Modifier.onSizeChanged { group.report(index, it.height) })
+            .clickable(interactionSource = source, indication = null, role = Role.Button, onClick = onClick)
+            .testTag(tag)
     ) {
+        if (first) {
+            // The group's one card: paper, a 0.75dp hairline and, in light
+            // mode, the e1 shadow, reaching down behind the rows below.
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .reachDown(group::below)
+                    .jerreaderPaperCard(RoundedCornerShape(JerreaderRadius.card))
+            )
+        }
         Row(
             Modifier
                 .fillMaxWidth()
                 .fillMaxHeight()
+                .drawWithContent {
+                    if (pressTint > 0f) {
+                        drawOutline(shape.createOutline(size, layoutDirection, this), ink.copy(alpha = pressTint))
+                    }
+                    drawContent()
+                    if (!first) {
+                        // One pixel, level with the title.
+                        val inset = 60.dp.toPx()
+                        drawRect(line, Offset(inset, 0f), Size(size.width - inset, 1f))
+                    }
+                }
                 .heightIn(min = 44.dp)
-                .padding(start = 16.dp, end = edge, top = 6.dp, bottom = 6.dp),
+                .padding(start = 16.dp, end = edge, top = 7.dp, bottom = 7.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Box(
-                Modifier
-                    .size(32.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Brush.verticalGradient(listOf(lerp(tint, Color.White, 0.16f), tint)))
-                    .clearAndSetSemantics {},
-                contentAlignment = Alignment.Center
-            ) { icon() }
+            JerreaderIconTile(icon, tint = tint, size = 30.dp)
             Row(
                 Modifier.weight(1f),
                 verticalAlignment = Alignment.CenterVertically,
@@ -791,12 +1017,25 @@ private fun HomeRow(
                     )
                 }
             }
-            JerreaderRowChevron(aiTertiary())
-        }
-        if (position != HomeRowPosition.FIRST) {
-            JerreaderListDivider(Modifier.align(Alignment.TopStart).padding(start = 62.dp))
+            JerreaderGlyph(JerreaderIcon.CHEVRON_RIGHT, aiTertiary(), Modifier.size(16.dp))
         }
     }
+}
+
+/**
+ * Lays the content out [extra] pixels taller than this element, hanging below
+ * it, for the card the first row of a group draws behind the rest. Intrinsic
+ * measurement asks with an open height; that passes straight through.
+ */
+private fun Modifier.reachDown(extra: (Int) -> Int): Modifier = this.layout { measurable, constraints ->
+    if (!constraints.hasBoundedWidth || !constraints.hasBoundedHeight) {
+        val placeable = measurable.measure(constraints)
+        return@layout layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+    }
+    val width = constraints.maxWidth
+    val height = constraints.maxHeight
+    val placeable = measurable.measure(Constraints.fixed(width, height + extra(height).coerceAtLeast(0)))
+    layout(width, height) { placeable.place(0, 0) }
 }
 
 @Composable
@@ -808,13 +1047,15 @@ private fun HomeCredit(versionName: String) {
     ) {
         Text(
             "Jerry Wong",
+            modifier = Modifier.testTag("developerCredit"),
             style = MaterialTheme.typography.bodySmall,
             fontFamily = FontFamily.Serif,
             fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.primary
+            color = jerreaderPalette.accent
         )
         Text(
             "Jerreader $versionName",
+            modifier = Modifier.testTag("appVersionLabel"),
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -858,17 +1099,20 @@ internal fun TranslationSettingsContent(
     onOpenAIModels: () -> Unit,
     onOpenOffline: () -> Unit
 ) {
-    TranslationSettings(
-        store = store,
-        preferences = preferences,
-        backendToken = backendToken,
-        actions = actions,
-        onTestConnection = onTestConnection,
-        onOpenAIModels = onOpenAIModels,
-        showsQuickSentenceToggle = showsQuickSentenceToggle
-    )
-    SettingsGroup(title = "", footer = "基础查词无需下载；句段翻译语言包和扩展词典按需准备。") {
-        SettingsLinkRow("离线资源", "", onOpenOffline, showDivider = false)
+    // The 2.0 section titles wherever this page opens, the reader's sheet included, as on iOS.
+    CompositionLocalProvider(LocalSettingsHeader provides true) {
+        TranslationSettings(
+            store = store,
+            preferences = preferences,
+            backendToken = backendToken,
+            actions = actions,
+            onTestConnection = onTestConnection,
+            onOpenAIModels = onOpenAIModels,
+            showsQuickSentenceToggle = showsQuickSentenceToggle
+        )
+        SettingsGroup(title = "", footer = "基础查词无需下载；句段翻译语言包和扩展词典按需准备。") {
+            SettingsLinkRow("离线资源", "", onOpenOffline, showDivider = false)
+        }
     }
 }
 
@@ -946,6 +1190,7 @@ private fun TranslationSettings(
     var testState by remember { mutableStateOf<ConnectionTestState>(ConnectionTestState.Idle) }
     var testJob by remember { mutableStateOf<Job?>(null) }
     val scope = rememberCoroutineScope()
+    val haptics = LocalHapticFeedback.current
 
     LaunchedEffect(backendToken) { tokenText = backendToken }
     // Any change to what the test would use makes its last result stale.
@@ -997,6 +1242,8 @@ private fun TranslationSettings(
                 error.message ?: "连接失败，请检查网络、模型和凭据。"
             }
             testState = if (failure == null) ConnectionTestState.Success else ConnectionTestState.Failure(failure)
+            // iOS gives the success haptic when the test passes.
+            if (failure == null) haptics.performHapticFeedback(HapticFeedbackType.Confirm)
             testJob = null
         }
     }
@@ -1005,7 +1252,7 @@ private fun TranslationSettings(
     SettingsGroup(title = "翻译", icon = JerreaderIcon.SPEECH_BUBBLE, accentedHeader = true) {
         if (showsQuickSentenceToggle) {
             SettingsToggleRow("轻点正文快速翻译", quick, actions.updateQuickEnabled)
-            SettingsSegmentedRow(
+            SettingsPillRow(
                 title = "翻译范围",
                 options = listOf(
                     QuickTranslationUnit.SENTENCE to "句子",
@@ -1038,7 +1285,11 @@ private fun TranslationSettings(
             title = "翻译服务",
             options = TranslationProviderMode.entries.map { it to providerModeTitle(it) },
             selected = preferences.providerMode,
-            onSelect = actions.updateProviderMode
+            onSelect = {
+                // iOS ticks whenever the service changes.
+                if (it != preferences.providerMode) haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                actions.updateProviderMode(it)
+            }
         )
         SettingsMenuRow(
             title = "原文语言",
@@ -1099,92 +1350,95 @@ private fun TranslationSettings(
         )
         SettingsFootnote(fallbackDescription(preferences, directReady, backendReady))
 
-        if (preferences.providerMode != TranslationProviderMode.ON_DEVICE) {
-            SettingsDisclosureGroup("提示词与 AI 行为") {
-                PromptEditor(
-                    title = "翻译提示词",
-                    value = preferences.translationPromptTemplate,
-                    onValueChange = actions.updatePrompt,
-                    onReset = { actions.updatePrompt(TranslationPreferences.DEFAULT_TRANSLATION_PROMPT) }
-                )
-                JerreaderListDivider()
-                PromptEditor(
-                    title = "句子结构分析提示词",
-                    value = preferences.grammarAnalysisPromptTemplate,
-                    onValueChange = actions.updateGrammarPrompt,
-                    onReset = { actions.updateGrammarPrompt(TranslationPreferences.DEFAULT_GRAMMAR_PROMPT) }
-                )
-                Text(
-                    "可使用 {source_language}、{target_language} 和 {response_language} 占位符。" +
-                        "修改提示词后会生成新的缓存版本，不会误用旧结果。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-
-        when (preferences.providerMode) {
-            TranslationProviderMode.ON_DEVICE -> SettingsFootnote(
-                "无需账号或 API Key。基础查词开箱可用；句段翻译请先在‘离线资源’中准备语言包。",
-                showDivider = false
-            )
-
-            TranslationProviderMode.DIRECT_API -> {
-                // Providers, keys and models live on their own page, as in the
-                // settings home's AI 大模型 row.
-                val active = providers.active
-                val model = active.model.trim()
-                SettingsLinkRow(
-                    title = "AI 大模型",
-                    value = if (model.isEmpty()) active.displayName else "${active.displayName} · $model",
-                    onClick = onOpenAIModels
-                )
-                SettingsInsetRow {
-                    ConfigurationStatus(store.directAPIConfigurationMessage(), ready = directReady)
-                }
-                ConnectionTest(testState, enabled = canTest && testState != ConnectionTestState.Testing, showDivider = false) {
-                    testConnection()
+        // The rows that follow the service; iOS springs them (`stateChange`) when it changes.
+        Column(Modifier.fillMaxWidth().animateContentSize(JerreaderMotion.stateChange())) {
+            if (preferences.providerMode != TranslationProviderMode.ON_DEVICE) {
+                SettingsDisclosureGroup("提示词与 AI 行为") {
+                    PromptEditor(
+                        title = "翻译提示词",
+                        value = preferences.translationPromptTemplate,
+                        onValueChange = actions.updatePrompt,
+                        onReset = { actions.updatePrompt(TranslationPreferences.DEFAULT_TRANSLATION_PROMPT) }
+                    )
+                    JerreaderListDivider()
+                    PromptEditor(
+                        title = "句子结构分析提示词",
+                        value = preferences.grammarAnalysisPromptTemplate,
+                        onValueChange = actions.updateGrammarPrompt,
+                        onReset = { actions.updateGrammarPrompt(TranslationPreferences.DEFAULT_GRAMMAR_PROMPT) }
+                    )
+                    Text(
+                        "可使用 {source_language}、{target_language} 和 {response_language} 占位符。" +
+                            "修改提示词后会生成新的缓存版本，不会误用旧结果。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
 
-            TranslationProviderMode.BACKEND_PROXY -> {
-                SettingsFieldRow(
-                    value = preferences.backendEndpoint,
-                    onValueChange = actions.updateBackendEndpoint,
-                    placeholder = "https://example.com/translate",
-                    label = "HTTPS 翻译代理地址",
-                    keyboardType = KeyboardType.Uri
+            when (preferences.providerMode) {
+                TranslationProviderMode.ON_DEVICE -> SettingsFootnote(
+                    "无需账号或 API Key。基础查词开箱可用；句段翻译请先在‘离线资源’中准备语言包。",
+                    showDivider = false
                 )
-                SettingsFieldRow(
-                    value = preferences.backendModel,
-                    onValueChange = actions.updateBackendModel,
-                    placeholder = "模型名称（可选）"
-                )
-                SettingsFieldRow(
-                    value = tokenText,
-                    onValueChange = {
-                        tokenText = it
-                        actions.updateBackendToken(it)
-                    },
-                    placeholder = "代理访问凭据（可选）",
-                    keyboardType = KeyboardType.Password,
-                    visualTransformation = PasswordVisualTransformation()
-                )
-                SettingsInsetRow {
-                    ConfigurationStatus(store.backendConfigurationMessage(), ready = backendReady)
-                }
-                ConnectionTest(testState, enabled = canTest && testState != ConnectionTestState.Testing) {
-                    testConnection()
-                }
-                SettingsDisclosureGroup("AI 代理接入说明", showDivider = false) {
-                    SettingsNote(
-                        "代理凭据只加密保存在本机。请填写你自己控制的 HTTPS 代理，" +
-                            "不要直接填写供应商原始 API Key。"
+
+                TranslationProviderMode.DIRECT_API -> {
+                    // Providers, keys and models live on their own page, as in the
+                    // settings home's AI 大模型 row.
+                    val active = providers.active
+                    val model = active.model.trim()
+                    SettingsLinkRow(
+                        title = "AI 大模型",
+                        value = if (model.isEmpty()) active.displayName else "${active.displayName} · $model",
+                        onClick = onOpenAIModels
                     )
-                    SettingsNote(
-                        "代理需接受 text、可选 context、sourceLanguage、targetLanguage、model，" +
-                            "并返回 translatedText 或 translation。"
+                    SettingsInsetRow {
+                        ConfigurationStatus(store.directAPIConfigurationMessage(), ready = directReady)
+                    }
+                    ConnectionTest(testState, enabled = canTest && testState != ConnectionTestState.Testing, showDivider = false) {
+                        testConnection()
+                    }
+                }
+
+                TranslationProviderMode.BACKEND_PROXY -> {
+                    SettingsFieldRow(
+                        value = preferences.backendEndpoint,
+                        onValueChange = actions.updateBackendEndpoint,
+                        placeholder = "https://example.com/translate",
+                        label = "HTTPS 翻译代理地址",
+                        keyboardType = KeyboardType.Uri
                     )
+                    SettingsFieldRow(
+                        value = preferences.backendModel,
+                        onValueChange = actions.updateBackendModel,
+                        placeholder = "模型名称（可选）"
+                    )
+                    SettingsFieldRow(
+                        value = tokenText,
+                        onValueChange = {
+                            tokenText = it
+                            actions.updateBackendToken(it)
+                        },
+                        placeholder = "代理访问凭据（可选）",
+                        keyboardType = KeyboardType.Password,
+                        visualTransformation = PasswordVisualTransformation()
+                    )
+                    SettingsInsetRow {
+                        ConfigurationStatus(store.backendConfigurationMessage(), ready = backendReady)
+                    }
+                    ConnectionTest(testState, enabled = canTest && testState != ConnectionTestState.Testing) {
+                        testConnection()
+                    }
+                    SettingsDisclosureGroup("AI 代理接入说明", showDivider = false) {
+                        SettingsNote(
+                            "代理凭据只加密保存在本机。请填写你自己控制的 HTTPS 代理，" +
+                                "不要直接填写供应商原始 API Key。"
+                        )
+                        SettingsNote(
+                            "代理需接受 text、可选 context、sourceLanguage、targetLanguage、model，" +
+                                "并返回 translatedText 或 translation。"
+                        )
+                    }
                 }
             }
         }
@@ -1275,28 +1529,33 @@ private fun SettingsFieldRow(
     }
 }
 
-/** Whether the service picked can be called, on a tinted card. */
+/**
+ * Whether the service picked can be called: ready reads in jade (the success
+ * colour), missing setup in orange, each on a 12% tint of itself.
+ */
 @Composable
 private fun ConfigurationStatus(message: String, ready: Boolean) {
-    val tint = if (ready) MaterialTheme.colorScheme.primary else aiWarning()
+    val tint = if (ready) jerreaderPalette.jade else aiWarning()
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(11.dp))
-            .background(if (ready) LocalJerreaderColors.current.accentFill else tint.copy(alpha = 0.10f))
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(7.dp)
+            .background(tint.copy(alpha = 0.12f), RoundedCornerShape(JerreaderRadius.small))
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         JerreaderGlyph(
             if (ready) JerreaderIcon.SHIELD else JerreaderIcon.WARNING,
             tint,
-            Modifier.padding(top = 1.dp).size(14.dp)
+            Modifier.size(16.dp)
         )
         Text(message, style = MaterialTheme.typography.labelMedium, color = tint)
     }
 }
 
-/** A bordered 测试连接 button and the line under it. */
+/**
+ * The 测试连接 capsule, as iOS `JerreaderTintedButtonStyle(height: 40)` draws
+ * it (dimmed to 0.45 while it cannot run), and the line under it.
+ */
 @Composable
 private fun ConnectionTest(
     state: ConnectionTestState,
@@ -1304,7 +1563,8 @@ private fun ConnectionTest(
     showDivider: Boolean = true,
     onTest: () -> Unit
 ) {
-    val accent = MaterialTheme.colorScheme.primary
+    val accent = jerreaderPalette.accent
+    val source = remember { MutableInteractionSource() }
     val title = when (state) {
         ConnectionTestState.Idle -> "测试连接"
         ConnectionTestState.Testing -> "正在测试…"
@@ -1320,26 +1580,26 @@ private fun ConnectionTest(
     SettingsInsetRow(showDivider = showDivider) {
         Row(
             Modifier
-                .clip(RoundedCornerShape(11.dp))
-                .background(accent.copy(alpha = if (enabled) 0.12f else 0.06f))
-                .clickable(enabled = enabled, role = Role.Button, onClick = onTest)
                 .heightIn(min = 40.dp)
-                .padding(horizontal = 14.dp),
+                .jerreaderPressScale(source)
+                .alpha(if (enabled) 1f else 0.45f)
+                .background(accent.copy(alpha = 0.12f), CircleShape)
+                .clickable(interactionSource = source, indication = null, enabled = enabled, role = Role.Button, onClick = onTest)
+                .padding(horizontal = 18.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(9.dp)
         ) {
-            val tint = if (enabled || state == ConnectionTestState.Testing) accent else aiTertiary()
             when (state) {
                 ConnectionTestState.Testing -> CircularProgressIndicator(Modifier.size(16.dp), color = accent, strokeWidth = 2.dp)
-                ConnectionTestState.Success -> AIGlyphIcon(AIGlyph.CHECK_CIRCLE_FILLED, tint, Modifier.size(17.dp))
-                is ConnectionTestState.Failure -> JerreaderGlyph(JerreaderIcon.RESTORE, tint, Modifier.size(17.dp))
-                ConnectionTestState.Idle -> JerreaderGlyph(JerreaderIcon.SWAP, tint, Modifier.size(17.dp))
+                ConnectionTestState.Success -> AIGlyphIcon(AIGlyph.CHECK_CIRCLE_FILLED, accent, Modifier.size(16.dp))
+                is ConnectionTestState.Failure -> JerreaderGlyph(JerreaderIcon.RESTORE, accent, Modifier.size(16.dp))
+                ConnectionTestState.Idle -> JerreaderGlyph(JerreaderIcon.SWAP, accent, Modifier.size(16.dp))
             }
-            Text(title, style = MaterialTheme.typography.bodyLarge, color = tint)
+            Text(title, color = accent, fontSize = 15.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
         }
         Text(
             detail,
-            style = MaterialTheme.typography.bodySmall,
+            style = MaterialTheme.typography.labelMedium,
             color = if (state is ConnectionTestState.Failure) aiRed() else MaterialTheme.colorScheme.onSurfaceVariant
         )
     }

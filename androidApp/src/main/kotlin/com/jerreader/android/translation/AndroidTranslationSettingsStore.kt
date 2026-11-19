@@ -9,6 +9,16 @@ import com.jerreader.shared.translation.TranslationProviderMode
 import com.jerreader.shared.translation.TranslationFallbackMode
 import com.jerreader.shared.translation.TranslationDisplayMode
 import com.jerreader.shared.translation.TranslationSourceChoice
+import com.jerreader.android.translation.chatgptplan.ChatGPTPlan
+import com.jerreader.android.translation.chatgptplan.ChatGPTPlanAccount
+import com.jerreader.android.translation.chatgptplan.ChatGPTPlanEntries
+import com.jerreader.android.translation.chatgptplan.ChatGPTPlanHttpClient
+import com.jerreader.android.translation.chatgptplan.ChatGPTPlanModel
+import com.jerreader.android.translation.chatgptplan.ChatGPTPlanSession
+import com.jerreader.android.translation.chatgptplan.KeystoreChatGPTPlanCredentialStore
+import com.jerreader.android.translation.chatgptplan.UrlConnectionChatGPTPlanHttpClient
+import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -43,7 +53,9 @@ class AndroidTranslationSettingsStore(
     context: Context,
     private val credentials: TranslationCredentialStore = AndroidKeystoreCredentialStore(context),
     /** Tests keep their settings apart from the app's. */
-    preferencesName: String = PREFERENCES_NAME
+    preferencesName: String = PREFERENCES_NAME,
+    /** Sends the ChatGPT plan's sign-in and model requests; tests pass a fake. */
+    planClient: ChatGPTPlanHttpClient = UrlConnectionChatGPTPlanHttpClient()
 ) {
     private val storage = context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
     private val mutablePreferences = MutableStateFlow(load())
@@ -63,6 +75,24 @@ class AndroidTranslationSettingsStore(
 
     /** Set when a key could not be saved to or read from the keystore. */
     val credentialError: StateFlow<String?> = mutableCredentialError.asStateFlow()
+
+    /**
+     * The signed-in ChatGPT plan. Its credential is kept in [credentials]
+     * under its own account, beside the API keys.
+     */
+    val chatGPTPlanSession = ChatGPTPlanSession(
+        store = KeystoreChatGPTPlanCredentialStore(credentials),
+        client = planClient,
+        onChange = { credential -> chatGPTPlanSessionChanged(credential?.account) }
+    )
+    private val mutableChatGPTPlanAccount = MutableStateFlow(chatGPTPlanSession.current()?.account)
+
+    /** The ChatGPT account the plan is signed in with, or `null`. */
+    val chatGPTPlanAccount: StateFlow<ChatGPTPlanAccount?> = mutableChatGPTPlanAccount.asStateFlow()
+    private val mutableChatGPTPlanModelNames = MutableStateFlow(restoredPlanModelNames())
+
+    /** The names the signed-in account gives its models, by slug. */
+    val chatGPTPlanModelNames: StateFlow<Map<String, String>> = mutableChatGPTPlanModelNames.asStateFlow()
 
     init {
         readKeys(mutableProviders.value)
@@ -157,7 +187,11 @@ class AndroidTranslationSettingsStore(
 
     // MARK: AI providers
 
-    fun apiKey(id: String): String = apiKeys[id].orEmpty()
+    /** A provider's key; for the ChatGPT plan, a stand-in while it is signed in. */
+    fun apiKey(id: String): String {
+        if (id == CHATGPT_PLAN_ID) return if (mutableChatGPTPlanAccount.value == null) "" else PLAN_KEY_PLACEHOLDER
+        return apiKeys[id].orEmpty()
+    }
 
     /**
      * A request configuration for one model of a provider, which need not be
@@ -165,6 +199,22 @@ class AndroidTranslationSettingsStore(
      */
     fun configuration(entry: AIProviderEntry, model: AIModelEntry, key: String): DirectAIConfiguration {
         val modelID = model.id.trim()
+        if (entry.kind.usesAccountSignIn) {
+            // The signed-in session stands in for a key; the request asks it for a token.
+            if (mutableChatGPTPlanAccount.value == null) {
+                throw AIProviderSettingsError.SignInRequired(entry.displayName)
+            }
+            if (modelID.isEmpty()) throw AIProviderSettingsError.MissingModel()
+            return DirectAIConfiguration(
+                kind = entry.kind,
+                displayName = entry.displayName,
+                endpoint = ChatGPTPlan.RESPONSES_URL,
+                model = modelID,
+                apiKey = PLAN_KEY_PLACEHOLDER,
+                style = AIAPIStyle.RESPONSES,
+                reasoning = model.reasoning
+            )
+        }
         val apiKey = key.trim()
         if (apiKey.isEmpty()) throw AIProviderSettingsError.MissingKey(entry.displayName)
         if (modelID.isEmpty()) throw AIProviderSettingsError.MissingModel()
@@ -270,8 +320,118 @@ class AndroidTranslationSettingsStore(
     /** Removes a provider and its key. The provider in use cannot be removed. */
     fun removeProvider(id: String) {
         if (id == aiProviders.value.activeID) throw AIProviderSettingsError.RemovingActiveProvider()
-        saveKey("", id)
+        if (id == CHATGPT_PLAN_ID) {
+            // Forgets the account here; OpenAI is asked to end the sign-in in the background.
+            chatGPTPlanSession.signOutInBackground()
+            chatGPTPlanSignedOut()
+        } else {
+            saveKey("", id)
+        }
         changeProviders { it.removing(id) }
+    }
+
+    // MARK: ChatGPT plan
+
+    /**
+     * Records a finished sign-in with the account's models. The plan is added
+     * as a provider, or refreshed, and put in use: signing in is how the user
+     * chooses it.
+     */
+    @Synchronized
+    fun chatGPTPlanSignedIn(account: ChatGPTPlanAccount, models: List<ChatGPTPlanModel>) {
+        mutableChatGPTPlanAccount.value = account
+        mutableKeyedProviderIDs.value = mutableKeyedProviderIDs.value + CHATGPT_PLAN_ID
+        val entry = mergedPlanEntry(models)
+        // Without a model the plan cannot translate yet, so the provider in
+        // use stays until the models are refreshed.
+        val usable = entry.model.isNotEmpty()
+        changeProviders { providers -> providers.adding(entry, activeHasKey = !usable).first }
+    }
+
+    /** Mirrors the session's account: `null` when the session ended by itself. */
+    @Synchronized
+    fun chatGPTPlanSessionChanged(account: ChatGPTPlanAccount?) {
+        if (account == mutableChatGPTPlanAccount.value) return
+        if (account != null) {
+            mutableChatGPTPlanAccount.value = account
+            mutableKeyedProviderIDs.value = mutableKeyedProviderIDs.value + CHATGPT_PLAN_ID
+        } else {
+            chatGPTPlanSignedOut()
+        }
+    }
+
+    /** Takes the account's current models; the reasoning chosen for a model still offered is kept. */
+    @Synchronized
+    fun chatGPTPlanModelsRefreshed(models: List<ChatGPTPlanModel>) {
+        if (aiProviders.value.entry(CHATGPT_PLAN_ID) == null) return
+        val entry = mergedPlanEntry(models)
+        changeProviders { providers -> providers.updating(CHATGPT_PLAN_ID) { _ -> entry } }
+    }
+
+    /** The account is gone from this device; the provider stays, signed out. */
+    @Synchronized
+    fun chatGPTPlanSignedOut() {
+        mutableChatGPTPlanAccount.value = null
+        mutableKeyedProviderIDs.value = mutableKeyedProviderIDs.value - CHATGPT_PLAN_ID
+    }
+
+    /** The name the account gives a model, or its slug. */
+    fun chatGPTPlanModelName(slug: String): String = mutableChatGPTPlanModelNames.value[slug] ?: slug
+
+    /** The name shown for a model: a plan model by the name its account gives it, any other by its id. */
+    fun modelTitle(id: String, entry: AIProviderEntry?): String =
+        if (entry?.kind?.usesAccountSignIn == true) chatGPTPlanModelName(id) else id
+
+    /** This install's host id for Sign in with ChatGPT: made once, not a secret, never backed up. */
+    fun chatGPTPlanHostID(): String {
+        val saved = storage.getString(KEY_PLAN_HOST_ID, null)
+        if (saved != null && saved.startsWith("urn:uuid:")) return saved
+        val made = "urn:uuid:" + UUID.randomUUID().toString().lowercase(Locale.ROOT)
+        storage.edit { putString(KEY_PLAN_HOST_ID, made) }
+        return made
+    }
+
+    /** The client id OpenAI issued at this install's first sign-in, if there was one. */
+    fun chatGPTPlanClientID(): String? = storage.getString(KEY_PLAN_CLIENT_ID, null)?.takeIf { it.isNotEmpty() }
+
+    fun saveChatGPTPlanClientID(id: String) {
+        storage.edit { putString(KEY_PLAN_CLIENT_ID, id) }
+    }
+
+    /** Whether the page shown after the first sign-in was closed. */
+    var chatGPTPlanWelcomeShown: Boolean
+        get() = storage.getBoolean(KEY_PLAN_WELCOME_SHOWN, false)
+        set(value) {
+            storage.edit { putBoolean(KEY_PLAN_WELCOME_SHOWN, value) }
+        }
+
+    private fun mergedPlanEntry(models: List<ChatGPTPlanModel>): AIProviderEntry {
+        if (models.isNotEmpty()) {
+            val names = LinkedHashMap(mutableChatGPTPlanModelNames.value)
+            for (model in models) names[model.slug] = model.displayName
+            mutableChatGPTPlanModelNames.value = names
+            val json = JSONObject()
+            for ((slug, name) in names) json.put(slug, name)
+            storage.edit { putString(KEY_PLAN_MODEL_NAMES, json.toString()) }
+        }
+        return ChatGPTPlanEntries.merged(aiProviders.value.entry(CHATGPT_PLAN_ID), models)
+    }
+
+    private fun restoredPlanModelNames(): Map<String, String> {
+        val text = storage.getString(KEY_PLAN_MODEL_NAMES, null) ?: return emptyMap()
+        val json = try {
+            JSONObject(text)
+        } catch (_: Exception) {
+            return emptyMap()
+        }
+        val names = LinkedHashMap<String, String>()
+        val slugs = json.keys()
+        while (slugs.hasNext()) {
+            val slug = slugs.next()
+            val name = json.opt(slug) as? String
+            if (name != null) names[slug] = name
+        }
+        return names
     }
 
     /**
@@ -604,6 +764,8 @@ class AndroidTranslationSettingsStore(
                 keyed += entry.id
             }
         }
+        // The plan has no key: it counts as set up while it is signed in.
+        if (mutableChatGPTPlanAccount.value != null) keyed += CHATGPT_PLAN_ID
         mutableKeyedProviderIDs.value = keyed
     }
 
@@ -638,6 +800,16 @@ class AndroidTranslationSettingsStore(
 
     companion object {
         const val PREFERENCES_NAME = "jerreader_translation_settings"
+
+        /** The provider entry of the ChatGPT plan. */
+        const val CHATGPT_PLAN_ID = ChatGPTPlan.PROVIDER_ID
+
+        /** Stands in for a key in the plan's configuration; requests ask the session for the real token. */
+        const val PLAN_KEY_PLACEHOLDER = "chatgpt-plan-session"
+        private const val KEY_PLAN_HOST_ID = "translation.chatgptPlan.hostID"
+        private const val KEY_PLAN_CLIENT_ID = "translation.chatgptPlan.clientID"
+        private const val KEY_PLAN_WELCOME_SHOWN = "translation.chatgptPlan.welcomeShown"
+        private const val KEY_PLAN_MODEL_NAMES = "translation.chatgptPlan.modelNames"
         private const val KEY_PROVIDER_MODE = "provider.mode"
         private const val KEY_AI_PROVIDERS = "translation.aiProviders.v1"
         private const val KEY_LEGACY_DIRECT_PROVIDER = "direct.provider"

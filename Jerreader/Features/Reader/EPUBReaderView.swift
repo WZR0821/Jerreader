@@ -27,7 +27,13 @@ struct EPUBReaderScreen: View {
     /// Measured, so the page sits exactly between the bars in the standard
     /// layout whatever the text size or the progress-row setting.
     @State private var topChromeHeight: CGFloat = 44
+    /// The 2.0 bar with its progress rows (6 + 18 + 26 + 48), so the first
+    /// layout already matches the measured height.
     @State private var bottomChromeHeight: CGFloat = 78
+    /// Bumped by the bookmark button only, so the bounce and the haptic
+    /// follow a tap rather than every page that happens to be bookmarked.
+    @State private var bookmarkAddedCount = 0
+    @State private var bookmarkRemovedCount = 0
 
     init(
         book: BookRecord,
@@ -55,15 +61,11 @@ struct EPUBReaderScreen: View {
                 .padding(.top, reservesChromeSpace ? topChromeHeight : 0)
                 .padding(.bottom, reservesChromeSpace ? bottomChromeHeight : 0)
 
+            // Each bar fades and slides on its own (see `readerChrome`); the
+            // pair stops taking touches and leaves VoiceOver as one.
             readerChrome
-                .opacity(model.isChromeVisible ? 1 : 0)
-                .scaleEffect(model.isChromeVisible ? 1 : 0.985)
                 .allowsHitTesting(model.isChromeVisible)
                 .accessibilityHidden(!model.isChromeVisible)
-                .animation(
-                    reduceMotion ? nil : JerreaderMotion.stateChange,
-                    value: model.isChromeVisible
-                )
                 .zIndex(1)
 
             if model.layoutMode == .immersive, !model.isChromeVisible {
@@ -93,7 +95,7 @@ struct EPUBReaderScreen: View {
                     topChromeHeight: topChromeHeight,
                     bottomChromeHeight: bottomChromeHeight
                 )
-                .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                .transition(translationLayerTransition)
                 .zIndex(2)
             }
 
@@ -116,10 +118,8 @@ struct EPUBReaderScreen: View {
         // keeps the separate status-bar choice.
         .statusBarHidden(immersiveReading || model.layoutMode == .immersive)
         .preferredColorScheme(prefersDarkReaderChrome ? .dark : .light)
-        .sensoryFeedback(
-            .impact(weight: .light),
-            trigger: model.isCurrentLocationBookmarked
-        )
+        // The bookmark haptic now belongs to the bookmark button, so turning
+        // onto a bookmarked page no longer buzzes.
         .sensoryFeedback(
             .selection,
             trigger: model.isQuickSentenceTranslationEnabled
@@ -226,13 +226,8 @@ struct EPUBReaderScreen: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            .padding(26)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24))
-            .overlay {
-                RoundedRectangle(cornerRadius: 24)
-                    .stroke(JerreaderTheme.line, lineWidth: 0.75)
-            }
-            .shadow(color: JerreaderTheme.shadow, radius: 16, y: 7)
+            .multilineTextAlignment(.center)
+            .jerreaderPaperCard(padding: 26, radius: JerreaderRadius.hero, hasShadow: true)
             .padding(28)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .ready:
@@ -252,18 +247,24 @@ struct EPUBReaderScreen: View {
         model.layoutMode == .standard
     }
 
-    /// Hairlines only where the bars float over text. In the standard layout
-    /// the bars are page-coloured margins and a rule would cut them off.
-    private var showsChromeDividers: Bool {
-        model.layoutMode == .immersive
+    /// The translation layer makes its own entrance (`jerreaderReveal` in
+    /// ReaderTranslationOverlay), so only its removal is a transition.
+    private var translationLayerTransition: AnyTransition {
+        .asymmetric(
+            insertion: .identity,
+            removal: reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.98))
+        )
     }
 
     private var readerChrome: some View {
         VStack(spacing: 0) {
+            // Heights are measured before the show/hide offset, which never
+            // moves the layout frame, so the page keeps its place.
             topChromeBar
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
                     if abs(height - topChromeHeight) > 0.5 { topChromeHeight = height }
                 }
+                .readerChromeBar(isVisible: model.isChromeVisible, edge: .top)
 
             Spacer(minLength: 0)
 
@@ -271,6 +272,7 @@ struct EPUBReaderScreen: View {
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
                     if abs(height - bottomChromeHeight) > 0.5 { bottomChromeHeight = height }
                 }
+                .readerChromeBar(isVisible: model.isChromeVisible, edge: .bottom)
         }
     }
 
@@ -310,8 +312,10 @@ struct EPUBReaderScreen: View {
         .accessibilityIdentifier(identifier)
     }
 
+    /// Close, the book and chapter, then 目录, 书签, AI and Aa. 44pt tall: the
+    /// title block is capped at xxxLarge so the bar does not crowd the page.
     private var topChromeBar: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 0) {
             chromeButton(systemImage: "xmark") {
                 model.flushProgress()
                 dismiss()
@@ -319,19 +323,21 @@ struct EPUBReaderScreen: View {
             .accessibilityLabel("关闭阅读器")
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(model.chapterTitle)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
                 Text(model.book.title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(model.chapterTitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
             .padding(.leading, 4)
 
             Spacer(minLength: 4)
 
-            chromeButton(systemImage: "list.bullet.rectangle") {
+            chromeButton(systemImage: "list.bullet") {
                 navigationSection = .contents
                 isShowingNavigation = true
             }
@@ -340,14 +346,27 @@ struct EPUBReaderScreen: View {
             // Bookmarking is a one-tap, frequently repeated action and its
             // state is worth showing continuously; burying it in a menu
             // hid both the action and whether the page was already saved.
-            chromeButton(
-                systemImage: model.isCurrentLocationBookmarked
-                    ? "bookmark.fill"
-                    : "bookmark",
-                isActive: model.isCurrentLocationBookmarked
-            ) {
+            // Adding one bounces the glyph with a success haptic; removing
+            // one gives a light tap.
+            Button {
+                model.noteChromeInteraction()
+                let wasBookmarked = model.isCurrentLocationBookmarked
                 model.toggleBookmark()
+                if model.isCurrentLocationBookmarked != wasBookmarked {
+                    if model.isCurrentLocationBookmarked {
+                        bookmarkAddedCount += 1
+                    } else {
+                        bookmarkRemovedCount += 1
+                    }
+                }
+            } label: {
+                JerreaderSymbol(
+                    name: model.isCurrentLocationBookmarked ? "bookmark.fill" : "bookmark",
+                    size: ReaderChromeMetrics.iconSize
+                )
+                .jerreaderBounce(trigger: bookmarkAddedCount)
             }
+            .buttonStyle(ReaderBarIconButtonStyle(isOn: model.isCurrentLocationBookmarked))
             .accessibilityLabel(
                 model.isCurrentLocationBookmarked
                     ? "移除当前书签"
@@ -356,8 +375,10 @@ struct EPUBReaderScreen: View {
             .accessibilityAddTraits(
                 model.isCurrentLocationBookmarked ? .isSelected : []
             )
+            .sensoryFeedback(.success, trigger: bookmarkAddedCount)
+            .sensoryFeedback(.impact(weight: .light), trigger: bookmarkRemovedCount)
 
-            ReaderCompanionChromeButton(companion: model.companion) {
+            ReaderCompanionChromeButton(companion: model.companion, ringColor: readerBackground) {
                 model.noteChromeInteraction()
                 model.presentReadingCompanion()
             }
@@ -370,23 +391,24 @@ struct EPUBReaderScreen: View {
         .padding(.horizontal, 6)
         .frame(maxWidth: 780)
         .frame(maxWidth: .infinity)
-        .background(readerBackground.opacity(ReaderInterfaceDefaults.backgroundOpacity(topBarTransparency)))
-        .overlay(alignment: .bottom) {
-            if showsChromeDividers {
-                Rectangle()
-                    .fill(JerreaderTheme.line)
-                    .frame(height: 0.5)
-            }
+        .background {
+            ReaderBarSurface(
+                pageColor: readerBackground,
+                opacity: ReaderInterfaceDefaults.backgroundOpacity(topBarTransparency),
+                edge: .top
+            )
         }
     }
 
-    /// One slim row for the position and one for the page buttons, which are
-    /// bare glyphs on the page colour rather than filled tiles.
+    /// Three rows: the chapter and the percentage, the progress slider, then
+    /// the page buttons around the filled 轻点翻译 circle.
     private var bottomChromeBar: some View {
         VStack(spacing: 0) {
             if showsReadingProgress {
-                // While dragging, the chapter the thumb is over matters far
-                // more than the raw percentage, so it takes the accent colour.
+                // One compact row, as in 1.7.0: the bars stay small so the page
+                // keeps its height. While dragging, the chapter the thumb is
+                // over matters far more than the raw percentage, so it takes
+                // the accent colour.
                 HStack(spacing: 10) {
                     Text(scrubbedProgress == nil ? currentChapterLabel : scrubTargetLabel)
                         .font(.caption.weight(.semibold))
@@ -398,17 +420,15 @@ struct EPUBReaderScreen: View {
                         .frame(maxWidth: 104, alignment: .leading)
                         .animation(nil, value: scrubbedProgress)
 
-                    Slider(
+                    ReaderProgressSlider(
                         value: readerProgressBinding,
-                        in: 0 ... 1,
-                        onEditingChanged: handleProgressEditing
-                    )
-                    .tint(JerreaderTheme.accent)
-                    .accessibilityLabel("快速调整阅读进度")
-                    .accessibilityValue(
-                        scrubbedProgress == nil
+                        accessibilityLabelText: "快速调整阅读进度",
+                        accessibilityValueText: scrubbedProgress == nil
                             ? "\(currentChapterLabel)，\(progressLabel)"
-                            : "\(scrubTargetLabel)，\(progressLabel)"
+                            : "\(scrubTargetLabel)，\(progressLabel)",
+                        onEditingChanged: { isEditing in
+                            handleProgressEditing(isEditing)
+                        }
                     )
 
                     Text(progressLabel)
@@ -417,13 +437,14 @@ struct EPUBReaderScreen: View {
                         .contentTransition(.numericText())
                         .frame(minWidth: 34, alignment: .trailing)
                 }
+                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
                 .padding(.horizontal, 6)
                 .frame(minHeight: 32)
             }
 
             HStack(spacing: 0) {
                 if model.canGoToAdjacentChapter {
-                    pageButton(systemImage: "chevron.left.2") {
+                    pageButton(systemImage: "chevron.backward.2") {
                         model.goToPreviousChapter()
                     }
                     .accessibilityLabel("上一章")
@@ -435,16 +456,23 @@ struct EPUBReaderScreen: View {
                 .accessibilityLabel("上一页")
 
                 if model.supportsQuickSentenceTranslation {
-                    pageButton(
-                        systemImage: model.isQuickSentenceTranslationEnabled
-                            ? "character.bubble.fill"
-                            : "character.bubble",
-                        isActive: model.isQuickSentenceTranslationEnabled
-                    ) {
+                    Button {
+                        model.noteChromeInteraction()
                         model.setQuickSentenceTranslationEnabled(
                             !model.isQuickSentenceTranslationEnabled
                         )
+                    } label: {
+                        JerreaderSymbol(
+                            name: model.isQuickSentenceTranslationEnabled
+                                ? "character.bubble.fill"
+                                : "character.bubble",
+                            size: ReaderChromeMetrics.iconSize
+                        )
+                        .jerreaderBounce(trigger: model.isQuickSentenceTranslationEnabled)
                     }
+                    .buttonStyle(
+                        ReaderTranslateToggleButtonStyle(isOn: model.isQuickSentenceTranslationEnabled)
+                    )
                     .accessibilityLabel(
                         model.isQuickSentenceTranslationEnabled
                             ? "关闭轻点翻译"
@@ -463,86 +491,65 @@ struct EPUBReaderScreen: View {
                 .accessibilityLabel("下一页")
 
                 if model.canGoToAdjacentChapter {
-                    pageButton(systemImage: "chevron.right.2") {
+                    pageButton(systemImage: "chevron.forward.2") {
                         model.goToNextChapter()
                     }
                     .accessibilityLabel("下一章")
                 }
             }
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 12)
         .padding(.top, 2)
         .frame(maxWidth: 660)
         .frame(maxWidth: .infinity)
-        .background(readerBackground.opacity(ReaderInterfaceDefaults.backgroundOpacity(bottomBarTransparency)))
-        .overlay(alignment: .top) {
-            if showsChromeDividers {
-                Rectangle()
-                    .fill(JerreaderTheme.line)
-                    .frame(height: 0.5)
-            }
+        .background {
+            ReaderBarSurface(
+                pageColor: readerBackground,
+                opacity: ReaderInterfaceDefaults.backgroundOpacity(bottomBarTransparency),
+                edge: .bottom
+            )
         }
     }
 
+    /// A top-bar icon (22pt drawn glyph in a 36pt circle, 44pt hit frame).
     private func chromeButton(
         systemImage: String,
-        isActive: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button {
             model.noteChromeInteraction()
             action()
         } label: {
-            Group {
-                if systemImage == "textformat" {
-                    Text("格式").font(.body.weight(.semibold))
-                } else {
-                    Image(uiImage: JerreaderIconImage.image(systemImage == "list.bullet.rectangle" ? "TABLE_OF_CONTENTS" : systemImage))
-                        .resizable().scaledToFit().frame(width: 20, height: 20)
-                }
-            }
-                .foregroundStyle(isActive ? JerreaderTheme.onPrimaryAction : Color.primary)
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
-                .background(
-                    isActive ? JerreaderTheme.accent : Color.clear,
-                    in: Circle()
-                )
+            JerreaderSymbol(name: systemImage, size: ReaderChromeMetrics.iconSize)
         }
-        .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.90))
+        .buttonStyle(ReaderBarIconButtonStyle())
     }
 
-    /// A bare glyph in the page's own colours; only the active translation
-    /// toggle gets a filled capsule, so its state still reads at a glance.
+    /// A bare page-turn glyph in the page's own colours.
     private func pageButton(
         systemImage: String,
-        isActive: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button {
             model.noteChromeInteraction()
             action()
         } label: {
-            Image(uiImage: JerreaderIconImage.image(systemImage))
-                .resizable().scaledToFit().frame(width: 22, height: 22)
-                .foregroundStyle(isActive ? JerreaderTheme.onPrimaryAction : Color.primary.opacity(0.62))
-                .frame(width: 52, height: 32)
-                .background {
-                    if isActive {
-                        Capsule().fill(JerreaderTheme.accent)
-                    }
-                }
-                .frame(maxWidth: .infinity, minHeight: 44)
-                .contentShape(Rectangle())
+            JerreaderSymbol(name: systemImage, size: ReaderChromeMetrics.iconSize)
         }
-        .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.92))
+        .buttonStyle(ReaderPageButtonStyle())
     }
 
     private func readerFailure(_ message: String) -> some View {
         VStack(spacing: 18) {
             Image(systemName: "exclamationmark.book.closed.fill")
-                .font(.system(size: 42))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 30, weight: .medium))
+                .foregroundStyle(JerreaderTheme.vermilion)
+                .frame(width: 68, height: 68)
+                .background(
+                    JerreaderTheme.vermilion.opacity(0.12),
+                    in: RoundedRectangle(cornerRadius: JerreaderRadius.card, style: .continuous)
+                )
+                .accessibilityHidden(true)
             Text("无法打开这本书")
                 .font(.title2.weight(.bold))
             Text(message)
@@ -552,15 +559,14 @@ struct EPUBReaderScreen: View {
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 12) {
                 Button("返回书架") { dismiss() }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(JerreaderTintedButtonStyle())
 
                 Button {
                     Task { await model.load() }
                 } label: {
-                    Label("重新打开", systemImage: "arrow.clockwise")
+                    JerreaderLabel(title: "重新打开", icon: "arrow.clockwise", size: 16)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(JerreaderTheme.accent)
+                .buttonStyle(JerreaderPrimaryButtonStyle(height: 44, fullWidth: false))
             }
         }
         .padding(32)
@@ -634,15 +640,15 @@ struct EPUBReaderScreen: View {
             Button {
                 model.showReaderControls()
             } label: {
-                Image(systemName: "character.bubble.fill")
-                    .font(.subheadline.weight(.semibold))
+                JerreaderSymbol(name: "character.bubble.fill", size: 18)
                     .foregroundStyle(JerreaderTheme.accent)
                     .frame(width: 44, height: 44)
-                    .background(.regularMaterial, in: Capsule())
+                    .background(JerreaderTheme.paper, in: Circle())
                     .overlay {
-                        Capsule()
-                            .stroke(JerreaderTheme.accent.opacity(0.28), lineWidth: 1)
+                        Circle()
+                            .strokeBorder(JerreaderTheme.accent.opacity(0.28), lineWidth: 1)
                     }
+                    .jerreaderElevation(.card, cornerRadius: 22)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(
@@ -672,14 +678,14 @@ struct EPUBReaderScreen: View {
                 Text(message)
                     .font(.caption.weight(.semibold))
             }
-            .padding(.horizontal, 15)
+            .padding(.horizontal, 16)
             .frame(minHeight: 42)
-            .background(.regularMaterial, in: Capsule())
+            .background(JerreaderTheme.paper, in: Capsule())
             .overlay {
                 Capsule()
-                    .stroke(JerreaderTheme.accent.opacity(0.24), lineWidth: 0.8)
+                    .strokeBorder(JerreaderTheme.line, lineWidth: 0.75)
             }
-            .shadow(color: Color.black.opacity(0.1), radius: 8, y: 3)
+            .jerreaderElevation(.raised, cornerRadius: 21)
 
             Spacer()
         }
@@ -1111,40 +1117,51 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
     @AppStorage(ReaderInterfaceDefaults.japaneseFuriganaKey)
     private var japaneseFuriganaEnabled = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
     let model: EPUBReaderViewModel
     let maximumCardHeight: CGFloat
     let usesCompactHeader: Bool
     let isDragging: Bool
     let handleGesture: HandleGesture
     @State private var translatedContentHeight: CGFloat = 54
+    /// Bumped by the star button only: its bounce and success haptic.
+    @State private var favoriteAddedCount = 0
+
+    /// Header and action row heights, reserved around the scrolling text.
+    private static var headerHeight: CGFloat { 44 }
+    private static var actionRowHeight: CGFloat { 44 }
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: JerreaderRadius.card, style: .continuous)
         VStack(spacing: 0) {
             overlayHeader
 
-            Rectangle()
-                .fill(JerreaderTheme.line)
-                .frame(height: 0.5)
-
             translationBody
 
-            // A small breathing room keeps the last line and actions from
-            // visually sitting on the rounded bottom edge without turning the
-            // compact overlay into a large sheet.
-            Color.clear
-                .frame(height: 12)
+            if showsActionRow {
+                actionRow
+            } else {
+                // A small breathing room keeps the last line from visually
+                // sitting on the rounded bottom edge.
+                Color.clear
+                    .frame(height: 12)
+            }
         }
         .frame(minHeight: 108, alignment: .top)
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(JerreaderTheme.paper, in: shape)
+        .clipShape(shape)
         .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(JerreaderTheme.line, lineWidth: 0.8)
+            shape
+                .strokeBorder(JerreaderTheme.line, lineWidth: 0.75)
+                .allowsHitTesting(false)
         }
+        // e3 on light paper; none on dark paper or while the card moves.
         .shadow(
-            color: JerreaderTheme.deepShadow.opacity(isDragging ? 0 : 0.58),
-            radius: isDragging ? 0 : 12,
-            y: isDragging ? 0 : 5
+            color: showsShadow
+                ? JerreaderTheme.shadowTint.opacity(JerreaderElevation.floating.opacity)
+                : .clear,
+            radius: showsShadow ? JerreaderElevation.floating.radius : 0,
+            y: showsShadow ? JerreaderElevation.floating.y : 0
         )
         .animation(
             reduceMotion || isDragging ? nil : JerreaderMotion.stateChange,
@@ -1161,133 +1178,110 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
         .onChange(of: translationPhaseIdentity) {
             translatedContentHeight = 54
         }
+        .jerreaderReveal(order: 0)
         .accessibilityElement(children: .contain)
     }
 
-    @ViewBuilder
+    private var showsShadow: Bool {
+        colorScheme != .dark && !isDragging
+    }
+
+    /// Every state with a request has the action row (the 更多 menu works
+    /// while a translation loads or after it fails, as before).
+    private var showsActionRow: Bool {
+        model.translationState.request != nil
+    }
+
+    /// The language eyebrow over a drag zone that fills the header, with the
+    /// close button on top. The eyebrow lets touches through and the drag
+    /// zone sits underneath, so the two hit targets cannot overlap whatever
+    /// the card's width (the compact card can be 144pt wide). A 32×4 grabber
+    /// at the top centre shows the card can be moved.
     private var overlayHeader: some View {
-        if usesCompactHeader {
-            // The compact card can be as narrow as 144pt for vertical books.
-            // Keep the menu, drag handle, and close control in three explicit
-            // slots so their hit targets never overlap.
-            HStack(spacing: 0) {
-                if model.translationState.request != nil {
-                    translationActionsMenu
-                } else {
-                    Color.clear.frame(width: 44, height: 44)
-                }
-                dragHandle
+        ZStack(alignment: .leading) {
+            dragHandle
+
+            HStack(spacing: 8) {
+                eyebrow
+                    .allowsHitTesting(false)
+                Spacer(minLength: 0)
                 closeButton
             }
-            .frame(maxWidth: .infinity, alignment: .center)
-            .frame(height: 48)
-            .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.90))
-            .background(Color.primary.opacity(0.035))
-        } else {
-            // The drag handle used to be laid over this row in a ZStack, and
-            // being last it won every hit test it overlapped. Its 78pt target
-            // is centred, while the trailing buttons grow leftwards from the
-            // edge — so on a horizontal card only a little wider than the
-            // compact threshold the handle sat squarely on top of the actions
-            // menu and the "..." could not be tapped at all.
-            //
-            // Three explicit slots, the same shape the compact header already
-            // uses, so the targets cannot overlap whatever the card's width.
-            HStack(spacing: 7) {
-                HStack(spacing: 7) {
-                    Image(systemName: headerSymbol)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(JerreaderTheme.accent)
-                        .frame(width: 25, height: 25)
-                        .background(
-                            JerreaderTheme.accent.opacity(0.10),
-                            in: Circle()
-                        )
-
-                    Text(headerTitle)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                .layoutPriority(0)
-
-                Spacer(minLength: 0)
-
-                dragHandle
-                    .layoutPriority(1)
-
-                Spacer(minLength: 0)
-
-                HStack(spacing: 6) {
-                    if SpeechFeatureAvailability.isEnabled,
-                       model.translationState.request?.sourceLanguage != nil
-                    {
-                        speechButton
-                    }
-
-                    if model.translationState.request != nil {
-                        translationActionsMenu
-                    }
-
-                    if case .success = model.translationState {
-                        favoriteButton
-                    }
-
-                    closeButton
-                }
-                .layoutPriority(1)
-                .fixedSize(horizontal: true, vertical: false)
-            }
-            .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.90))
-            .frame(height: 48)
-            .padding(.horizontal, 10)
-            .background(Color.primary.opacity(0.035))
+            .padding(.leading, JerreaderSpacing.md)
+            .padding(.trailing, 2)
+        }
+        .frame(height: Self.headerHeight)
+        .overlay(alignment: .top) {
+            Capsule(style: .continuous)
+                .fill(Color.primary.opacity(0.16))
+                .frame(width: 32, height: 4)
+                .padding(.top, 6)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
         }
     }
 
     private var dragHandle: some View {
-        Capsule(style: .continuous)
-            .fill(JerreaderTheme.accent.opacity(0.38))
-            .frame(width: 34, height: 4)
-            // The visible grabber is 34pt; the rest is hit area. It no longer
-            // needs the old 78pt because it sits in its own slot now instead of
-            // reaching across the row, and a narrower slot leaves the header
-            // title more room before it truncates.
-            .frame(width: usesCompactHeader ? 44 : 56, height: 48)
+        Color.clear
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
             .gesture(handleGesture)
+            .accessibilityElement()
             .accessibilityLabel("移动翻译浮窗")
             .accessibilityHint("拖动到屏幕中的其他位置")
+    }
+
+    private var eyebrow: some View {
+        JerreaderEyebrow(
+            text: eyebrowText,
+            tint: isFailure ? JerreaderTheme.vermilion : JerreaderTheme.accent
+        )
+        .lineLimit(1)
+        .truncationMode(.tail)
+        .accessibilityLabel(eyebrowAccessibilityLabel)
+    }
+
+    /// Favourite and (when speech is on) read aloud on the left, 更多 on the
+    /// right, under a hairline.
+    private var actionRow: some View {
+        HStack(spacing: 0) {
+            if case .success = model.translationState {
+                favoriteButton
+            }
+
+            if SpeechFeatureAvailability.isEnabled,
+               model.translationState.request?.sourceLanguage != nil
+            {
+                speechButton
+            }
+
+            Spacer(minLength: 0)
+
+            translationActionsMenu
+        }
+        .padding(.horizontal, 6)
+        .frame(height: Self.actionRowHeight)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(JerreaderTheme.line)
+                .frame(height: 0.5)
+                .padding(.horizontal, JerreaderSpacing.md)
+                .accessibilityHidden(true)
+        }
     }
 
     private var speechButton: some View {
         Button {
             model.toggleTranslationSpeech()
         } label: {
-            ZStack {
-                Image(
-                    systemName: model.isSpeakingTranslationSource
-                        ? "stop.fill"
-                        : "speaker.wave.2.fill"
-                )
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(
-                    model.isSpeakingTranslationSource
-                        ? JerreaderTheme.onPrimaryAction
-                        : JerreaderTheme.accent
-                )
-                .frame(width: 30, height: 30)
-                .background(
-                    model.isSpeakingTranslationSource
-                        ? JerreaderTheme.accent
-                        : JerreaderTheme.accentFill,
-                    in: Circle()
-                )
-            }
-            .frame(width: 44, height: 44)
-            .contentShape(Circle())
+            Image(
+                systemName: model.isSpeakingTranslationSource
+                    ? "stop.fill"
+                    : "speaker.wave.2.fill"
+            )
+            .font(.footnote.weight(.semibold))
         }
+        .buttonStyle(ReaderCardIconButtonStyle(isOn: model.isSpeakingTranslationSource))
         .accessibilityLabel(
             model.isSpeakingTranslationSource ? "停止朗读" : "朗读当前句段"
         )
@@ -1295,44 +1289,32 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
 
     private var favoriteButton: some View {
         Button {
+            let wasFavorite = model.isCurrentTranslationFavorite
             model.toggleTranslationFavorite()
-        } label: {
-            ZStack {
-                Image(
-                    systemName: model.isCurrentTranslationFavorite
-                        ? "star.fill"
-                        : "star"
-                )
-                .foregroundStyle(
-                    model.isCurrentTranslationFavorite
-                        ? JerreaderTheme.accent
-                        : Color.secondary
-                )
-                .frame(width: 30, height: 30)
-                .background(Color.primary.opacity(0.055), in: Circle())
+            if !wasFavorite, model.isCurrentTranslationFavorite {
+                favoriteAddedCount += 1
             }
-            .frame(width: 44, height: 44)
-            .contentShape(Circle())
+        } label: {
+            JerreaderSymbol(
+                name: model.isCurrentTranslationFavorite ? "star.fill" : "star",
+                size: 18
+            )
+            .jerreaderBounce(trigger: favoriteAddedCount)
         }
+        .buttonStyle(ReaderCardIconButtonStyle(isOn: model.isCurrentTranslationFavorite))
         .accessibilityLabel(
             model.isCurrentTranslationFavorite ? "取消收藏译文" : "收藏译文"
         )
+        .sensoryFeedback(.success, trigger: favoriteAddedCount)
     }
 
     private var closeButton: some View {
         Button {
             model.dismissTranslation()
         } label: {
-            ZStack {
-                Image(systemName: "xmark")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 30, height: 30)
-                    .background(Color.primary.opacity(0.055), in: Circle())
-            }
-            .frame(width: 44, height: 44)
-            .contentShape(Circle())
+            JerreaderSymbol(name: "xmark", size: 15)
         }
+        .buttonStyle(ReaderCardIconButtonStyle(circle: 28))
         .accessibilityLabel("关闭翻译")
     }
 
@@ -1442,40 +1424,73 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
             }
             .disabled(!model.canRetryTranslation)
         } label: {
-            ZStack {
-                Image(systemName: "ellipsis")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(Color.secondary)
-                    .frame(width: 30, height: 30)
-                    .background(Color.primary.opacity(0.055), in: Circle())
-            }
-            .frame(width: 44, height: 44)
-            .contentShape(Circle())
+            ReaderCardIconLabel(systemImage: "ellipsis")
         }
         .accessibilityLabel("更多翻译操作")
     }
 
-    private var headerTitle: String {
+    private var isFailure: Bool {
+        if case .failure = model.translationState { return true }
+        return false
+    }
+
+    /// The language direction, as the result reports it once it is in.
+    private var eyebrowText: String {
         switch model.translationState {
-        case .idle, .success: return "译文"
-        case .loading: return "翻译中"
-        case .failure: return "未完成"
+        case .idle:
+            return "译文"
+        case let .loading(request):
+            return directionText(from: request.sourceLanguage, to: request.targetLanguage)
+        case let .success(_, result, _):
+            return directionText(from: result.sourceLanguage, to: result.targetLanguage)
+        case .failure:
+            return "翻译未完成"
         }
     }
 
-    private var headerSymbol: String {
+    private var eyebrowAccessibilityLabel: String {
         switch model.translationState {
-        case .idle, .loading: return "character.bubble"
-        case .success: return "character.bubble.fill"
-        case .failure: return "exclamationmark"
+        case let .loading(request):
+            return spokenDirection(from: request.sourceLanguage, to: request.targetLanguage)
+        case let .success(_, result, _):
+            return spokenDirection(from: result.sourceLanguage, to: result.targetLanguage)
+        case .idle, .failure:
+            return eyebrowText
+        }
+    }
+
+    private func directionText(from source: LanguageCode?, to target: LanguageCode) -> String {
+        let from: String
+        if let source {
+            from = languageName(source)
+        } else {
+            from = "自动识别"
+        }
+        return "\(from) → \(languageName(target))"
+    }
+
+    private func spokenDirection(from source: LanguageCode?, to target: LanguageCode) -> String {
+        guard let source else { return "自动识别语言，译为\(target.displayName)" }
+        return "\(source.displayName)译为\(target.displayName)"
+    }
+
+    /// One character on the compact card, which can be 144pt wide.
+    private func languageName(_ language: LanguageCode) -> String {
+        guard usesCompactHeader else { return language.displayName }
+        switch language {
+        case .japanese: return "日"
+        case .english: return "英"
+        case .simplifiedChinese: return "中"
         }
     }
 
     private var maximumContentHeight: CGFloat {
-        // Header (48), divider, and bottom breathing room are outside the
-        // ScrollView. Reserve all of them so the last translated line never
-        // lands under the rounded bottom edge.
-        max(maximumCardHeight - 61, 54)
+        // The header (44) and the action row (44), or 12pt of breathing room
+        // without one, are outside the ScrollView. Reserve both so the last
+        // translated line never lands under them; a long card then fills
+        // `maximumCardHeight` exactly.
+        let reserved = Self.headerHeight + (showsActionRow ? Self.actionRowHeight : 12)
+        return max(maximumCardHeight - reserved, 54)
     }
 
     @ViewBuilder
@@ -1561,8 +1576,9 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)
-        .padding(.top, 15)
-        .padding(.bottom, 20)
+        // The eyebrow above already gives the text its top margin.
+        .padding(.top, 2)
+        .padding(.bottom, 14)
         .accessibilityLabel("译文：\(text)")
     }
 
@@ -1573,22 +1589,23 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
             Button {
                 model.retryTranslation()
             } label: {
-                Label("重新翻译", systemImage: "arrow.clockwise")
-                    .font(.caption.weight(.semibold))
+                JerreaderLabel(title: "重新翻译", icon: "arrow.clockwise", size: 14)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(JerreaderTintedButtonStyle(height: 36))
             .disabled(!model.canRetryTranslation)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .padding(.top, 4)
+        .padding(.bottom, 14)
     }
 
     private var statusContent: some View {
         translationContent
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
-            .padding(.vertical, 14)
+            .padding(.top, 4)
+            .padding(.bottom, 14)
             .fixedSize(horizontal: false, vertical: true)
     }
 
@@ -1626,11 +1643,9 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
                     Button {
                         model.retryTranslation()
                     } label: {
-                        Label("重新翻译", systemImage: "arrow.clockwise")
-                            .font(.caption.weight(.semibold))
+                        JerreaderLabel(title: "重新翻译", icon: "arrow.clockwise", size: 14)
                     }
-                    .buttonStyle(.bordered)
-                    .tint(JerreaderTheme.accent)
+                    .buttonStyle(JerreaderTintedButtonStyle(height: 36))
                     .disabled(!model.canRetryTranslation)
                     .accessibilityHint(
                         model.isTranslationRetryCoolingDown
@@ -1840,7 +1855,7 @@ private struct ReaderContextExplanationSheet: View {
         _ request: ReaderContextExplanationRequest
     ) -> some View {
         VStack(spacing: 20) {
-            JerreaderLoadingGlyph(systemImage: "sparkles", size: 72)
+            JerreaderLoadingGlyph(systemImage: "SPARKLES", size: 72)
 
             VStack(spacing: 6) {
                 Text(request.lens.map { "正在生成“\($0.mode.title)”…" } ?? "正在分析句子结构与语法…")
@@ -1854,7 +1869,7 @@ private struct ReaderContextExplanationSheet: View {
         }
         .frame(maxWidth: 560)
         .padding(28)
-        .jerreaderPaperCard(padding: 0, radius: 16, hasShadow: true)
+        .jerreaderPaperCard(padding: 0, radius: JerreaderRadius.card, hasShadow: true)
         .padding(24)
     }
 
@@ -1872,13 +1887,12 @@ private struct ReaderContextExplanationSheet: View {
 
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 11) {
-                        Image(systemName: "sparkles")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.white)
+                        JerreaderSymbol(name: "SPARKLES", size: 18)
+                            .foregroundStyle(JerreaderTheme.onPrimaryAction)
                             .frame(width: 34, height: 34)
                             .background(
                                 JerreaderTheme.primaryAction,
-                                in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                in: RoundedRectangle(cornerRadius: JerreaderRadius.small, style: .continuous)
                             )
 
                         VStack(alignment: .leading, spacing: 2) {
@@ -1903,14 +1917,7 @@ private struct ReaderContextExplanationSheet: View {
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(20)
-                .background(JerreaderTheme.raisedPaper)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(JerreaderTheme.line, lineWidth: 0.75)
-                }
-                .shadow(color: JerreaderTheme.shadow, radius: 8, y: 3)
+                .jerreaderPaperCard(padding: 20, radius: JerreaderRadius.card)
                 .jerreaderReveal(order: 1)
 
                 JerreaderStatusPill(
@@ -1929,11 +1936,13 @@ private struct ReaderContextExplanationSheet: View {
         error: ReaderContextExplanationError
     ) -> some View {
         VStack(spacing: 18) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 34, weight: .medium))
-                .foregroundStyle(.orange)
+            JerreaderSymbol(name: "WARNING", size: 32)
+                .foregroundStyle(JerreaderTheme.vermilion)
                 .frame(width: 72, height: 72)
-                .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 22))
+                .background(
+                    JerreaderTheme.vermilion.opacity(0.12),
+                    in: RoundedRectangle(cornerRadius: JerreaderRadius.card, style: .continuous)
+                )
             Text(request?.lens == nil ? "暂时无法完成语法分析" : "AI 阅读透镜暂不可用")
                 .font(.title3.bold())
             Text(error.message)
@@ -1944,14 +1953,14 @@ private struct ReaderContextExplanationSheet: View {
                 Button {
                     model.retryContextExplanation()
                 } label: {
-                    Label("重新生成", systemImage: "arrow.clockwise")
+                    JerreaderLabel(title: "重新生成", icon: "arrow.clockwise", size: 16)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(JerreaderPrimaryButtonStyle(height: 44, fullWidth: false))
             }
         }
         .padding(28)
         .frame(maxWidth: 520)
-        .jerreaderPaperCard(padding: 0, radius: 24, hasShadow: true)
+        .jerreaderPaperCard(padding: 0, radius: JerreaderRadius.hero, hasShadow: true)
         .padding(24)
     }
 
@@ -2017,16 +2026,21 @@ extension ReaderContextExplanationSheet {
                         model.requestContextExplanation(lensMode: mode)
                     } label: {
                         Text(mode.title)
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .foregroundStyle(isActive ? JerreaderTheme.onPrimaryAction : Color.primary)
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 36)
+                            .foregroundStyle(isActive ? JerreaderTheme.onPrimaryAction : Color.primary.opacity(0.72))
                             .background(
-                                isActive ? JerreaderTheme.primaryAction : JerreaderTheme.raisedPaper,
+                                isActive ? JerreaderTheme.primaryAction : JerreaderTheme.paper,
                                 in: Capsule()
                             )
+                            .overlay {
+                                Capsule()
+                                    .strokeBorder(JerreaderTheme.line, lineWidth: isActive ? 0 : 0.75)
+                            }
+                            .contentShape(Capsule())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(JerreaderPressButtonStyle())
                     .accessibilityHint(mode.detail)
                     .accessibilityAddTraits(isActive ? .isSelected : [])
                     .accessibilityIdentifier("ai_reading_lens_\(mode.rawValue)")
@@ -2050,13 +2064,19 @@ private struct ReaderNavigationSheet: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                Picker("阅读导航", selection: $section) {
-                    ForEach(ReaderNavigationSection.allCases) { section in
-                        Label(section.title, systemImage: section.systemImage)
-                            .tag(section)
-                    }
-                }
-                .pickerStyle(.segmented)
+                // The pill picker ticks its own selection haptic.
+                JerreaderPillPicker(
+                    options: ReaderNavigationSection.allCases.map { item in
+                        JerreaderPillPicker<ReaderNavigationSection>.Option(
+                            value: item,
+                            title: item.title,
+                            systemImage: item.systemImage
+                        )
+                    },
+                    selection: $section
+                )
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("阅读导航")
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
 
@@ -2082,7 +2102,6 @@ private struct ReaderNavigationSheet: View {
             reduceMotion ? nil : JerreaderMotion.stateChange,
             value: section
         )
-        .sensoryFeedback(.selection, trigger: section)
         .onAppear {
             section = initialSection
             query = model.lastSearchQuery

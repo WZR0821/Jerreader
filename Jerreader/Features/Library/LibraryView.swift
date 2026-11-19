@@ -8,8 +8,10 @@ import ImageIO
 struct LibraryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \BookRecord.importedAt, order: .reverse) private var books: [BookRecord]
+    @Namespace private var coverTransition
 
     @Binding private var incomingBookURL: URL?
     @ObservedObject private var translationSettings: TranslationSettingsStore
@@ -26,6 +28,9 @@ struct LibraryView: View {
     @State private var searchText = ""
     @State private var selectedCategory: String?
     @State private var alert: LibraryAlert?
+    /// True only for the shelf's first second on screen: the one time the
+    /// dashboard and the grid rise in one after another.
+    @State private var isShelfRevealOpen = true
 #if DEBUG
     @State private var didStartSelectionUITestImport = false
 #endif
@@ -40,17 +45,41 @@ struct LibraryView: View {
         _translationSettings = ObservedObject(wrappedValue: translationSettings)
     }
 
+    /// Three columns on iPhone, as many 132–180 pt columns as fit on a wide
+    /// screen, and one column of row-style tiles at accessibility text sizes.
     private var columns: [GridItem] {
         if dynamicTypeSize.isAccessibilitySize {
-            return [GridItem(.flexible())]
+            return [GridItem(.flexible(), alignment: .top)]
         }
-        return [
-            GridItem(
-                .adaptive(minimum: 145, maximum: 220),
-                spacing: 26,
-                alignment: .top
-            )
-        ]
+        if horizontalSizeClass == .regular {
+            return [
+                GridItem(
+                    .adaptive(minimum: 132, maximum: 180),
+                    spacing: JerreaderSpacing.md,
+                    alignment: .top
+                )
+            ]
+        }
+        return Array(
+            repeating: GridItem(.flexible(), spacing: JerreaderSpacing.md, alignment: .top),
+            count: 3
+        )
+    }
+
+    private var tileStyle: LibraryBookTile.Style {
+        dynamicTypeSize.isAccessibilitySize ? .row : .grid
+    }
+
+    private var isSearchActive: Bool {
+        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var gridItemTransition: AnyTransition {
+        reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.96, anchor: .top))
+    }
+
+    private var importingOverlayTransition: AnyTransition {
+        reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.985))
     }
 
     private var displayedBooks: [BookRecord] {
@@ -168,13 +197,19 @@ struct LibraryView: View {
             .overlay {
                 if isImporting {
                     importingOverlay
-                        .transition(.opacity.combined(with: .scale(scale: 0.985)))
+                        .transition(importingOverlayTransition)
                 }
             }
             .animation(
-                reduceMotion ? nil : JerreaderMotion.stateChange,
+                JerreaderMotion.choose(JerreaderMotion.stateChange, reduceMotion: reduceMotion),
                 value: isImporting
             )
+            .task {
+                // Only the shelf's first second on screen staggers in; tab
+                // switches and a closed reader show it at once.
+                try? await Task.sleep(for: .seconds(1))
+                isShelfRevealOpen = false
+            }
         }
         .tint(JerreaderTheme.accent)
         .sheet(isPresented: $isShowingImportOptions) {
@@ -201,12 +236,7 @@ struct LibraryView: View {
             }
         }
         .fullScreenCover(item: $readerSession) { session in
-            EPUBReaderScreen(
-                book: session.book,
-                modelContext: modelContext,
-                translationSettings: translationSettings
-            )
-            .id(session.id)
+            readerScreen(for: session)
         }
         .sheet(item: $selectedManagedBook) { book in
             BookManagementView(book: book, existingFolders: categories)
@@ -240,6 +270,9 @@ struct LibraryView: View {
         } message: {
             Text("将同时删除书架记录、本地阅读副本和封面。此操作不会影响“文件”App 中的原文件。")
         }
+        .sensoryFeedback(.warning, trigger: pendingDeletion?.id) { _, newValue in
+            newValue != nil
+        }
         .alert(item: $alert) { item in
             Alert(
                 title: Text(item.title),
@@ -270,138 +303,166 @@ struct LibraryView: View {
     }
 
     private var emptyLibrary: some View {
-        VStack(spacing: 4) {
-            Spacer()
-
-            JerreaderEmptyState(
-                title: "把下一本书放进来",
-                message: "导入 EPUB、PDF、DOCX 或 TXT。书籍只保存在这台设备上。",
-                systemImage: "books.vertical.fill"
-            )
-
-            Button {
-                isShowingImportOptions = true
-            } label: {
-                JerreaderLabel(title: "导入书籍", icon: "square.and.arrow.down")
-                    .font(.headline)
-                    .padding(.horizontal, 8)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(JerreaderTheme.accent)
-            .disabled(isImporting)
-
-            // An empty shelf is what a reinstall looks like, so the restore
-            // path belongs here rather than only three taps deep in settings.
-            Button {
-                isShowingBackupRestore = true
-            } label: {
-                JerreaderLabel(title: "从备份恢复", icon: "RESTORE", size: 16)
-                    .font(.subheadline)
-                    .padding(.horizontal, 8)
-            }
-            .buttonStyle(.bordered)
-            .tint(JerreaderTheme.accent)
-            .disabled(isImporting)
-            .padding(.top, 6)
-            .accessibilityIdentifier("library-restore-backup")
-
-            Text("装过 Jerreader 的话，选择以前的备份文件夹即可恢复书架、进度和备份计划。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.top, 6)
-
-            JerreaderLabel(title: "本机保存，不会上传", icon: "lock.fill", size: 13)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.top, 10)
-
-            Spacer()
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(JerreaderTheme.pagePadding)
+        LibraryEmptyShelfView(
+            isImporting: isImporting,
+            revealsOnAppear: isShelfRevealOpen,
+            onImport: { isShowingImportOptions = true },
+            onRestore: { isShowingBackupRestore = true }
+        )
     }
 
     private var bookGrid: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 26) {
-                if let recentlyViewedBook {
-                    VStack(alignment: .leading, spacing: 12) {
-                        JerreaderSectionTitle(
-                            title: "继续阅读",
-                            detail: "上次打开的书",
-                            systemImage: "clock.arrow.circlepath"
-                        )
+        let shownBooks = displayedBooks
+        let gridAnimation = JerreaderMotion.choose(
+            JerreaderMotion.stateChange,
+            reduceMotion: reduceMotion
+        )
 
-                        RecentlyViewedBookView(book: recentlyViewedBook) {
-                            open(recentlyViewedBook)
-                        }
-                        .frame(maxWidth: 760)
-                    }
-                    .jerreaderReveal(order: 1)
+        return ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                // The dashboard steps aside while searching, so the results
+                // start right under the search field.
+                if !isSearchActive {
+                    shelfDashboard
+                        .transition(.opacity)
                 }
 
+                LibraryShelfSectionHeader(
+                    title: "所有书籍",
+                    detail: "\(shownBooks.count) 本"
+                ) {
+                    sortMenu
+                }
+                .padding(.top, isSearchActive ? JerreaderSpacing.xxs : JerreaderSpacing.xl)
+                .libraryShelfReveal(order: 3, isEnabled: isShelfRevealOpen)
+
                 if !categories.isEmpty {
-                    LibraryFolderSection(
+                    LibraryFolderChips(
                         categories: categories,
                         books: books,
                         selectedCategory: $selectedCategory
                     )
-                    .jerreaderReveal(order: 2)
+                    .padding(.top, JerreaderSpacing.sm)
+                    .libraryShelfReveal(order: 3, isEnabled: isShelfRevealOpen)
                 }
 
-                VStack(alignment: .leading, spacing: 16) {
-                    JerreaderSectionTitle(
-                        title: "所有书籍",
-                        detail: "\(displayedBooks.count) 本 · \(sortOrder.title)",
-                        systemImage: "square.grid.2x2"
-                    )
-
-                    LazyVGrid(columns: columns, alignment: .leading, spacing: 34) {
+                if shownBooks.isEmpty {
+                    LibraryNoMatchView()
+                        .padding(.top, JerreaderSpacing.sm)
+                } else {
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: JerreaderSpacing.xl) {
                         ForEach(
-                            Array(displayedBooks.enumerated()),
+                            Array(shownBooks.enumerated()),
                             id: \.element.id
                         ) { index, book in
-                            BookCardView(
+                            LibraryBookTile(
                                 book: book,
-                                onOpen: { open(book) },
+                                style: tileStyle,
+                                transitionNamespace: coverTransition,
+                                onOpen: {
+                                    open(
+                                        book,
+                                        from: LibraryCoverTransitionID(bookID: book.id, place: .grid)
+                                    )
+                                },
                                 onManage: { selectedManagedBook = book },
                                 onDelete: { pendingDeletion = book }
                             )
-                        .jerreaderReveal(order: min(index + 3, 8))
-                            .transition(
-                                .opacity.combined(
-                                    with: .scale(scale: 0.96, anchor: .top)
-                                )
-                            )
+                            .libraryShelfReveal(order: index + 4, isEnabled: isShelfRevealOpen)
+                            .transition(gridItemTransition)
                         }
                     }
-                    .animation(
-                        reduceMotion ? nil : JerreaderMotion.stateChange,
-                        value: displayedBooks.map(\.id)
-                    )
-
-                    if displayedBooks.isEmpty {
-                        ContentUnavailableView(
-                            "没有匹配的书籍",
-                            systemImage: "books.vertical",
-                            description: Text("请清除搜索文字或切换文件夹。")
-                        )
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 20)
-                    }
+                    .padding(.top, JerreaderSpacing.md)
+                    .animation(gridAnimation, value: shownBooks.map(\.id))
                 }
-                .jerreaderReveal(order: 2)
-
-                LibraryReadingOverview(books: books)
-                    .jerreaderReveal(order: 3)
             }
+            .animation(gridAnimation, value: isSearchActive)
             .frame(maxWidth: 1_120)
             .frame(maxWidth: .infinity)
             .padding(.horizontal, JerreaderTheme.pagePadding)
-            .padding(.top, 14)
+            .padding(.top, JerreaderSpacing.xxs)
             .padding(.bottom, 36)
+        }
+    }
+
+    /// The date line, the 继续阅读 hero and the 阅读统计 card.
+    private var shelfDashboard: some View {
+        VStack(alignment: .leading, spacing: JerreaderSpacing.sm) {
+            LibraryShelfDateLine()
+                .libraryShelfReveal(order: 0, isEnabled: isShelfRevealOpen)
+
+            if let recentlyViewedBook {
+                let source = LibraryCoverTransitionID(
+                    bookID: recentlyViewedBook.id,
+                    place: .continueReading
+                )
+                LibraryContinueReadingCard(
+                    book: recentlyViewedBook,
+                    transitionID: source,
+                    transitionNamespace: coverTransition,
+                    onOpen: { open(recentlyViewedBook, from: source) }
+                )
+                .frame(maxWidth: 760, alignment: .leading)
+                .libraryShelfReveal(order: 1, isEnabled: isShelfRevealOpen)
+            }
+
+            LibraryReadingStatsCard(
+                summary: LibraryReadingStatsSummary(books: books),
+                rollsIn: isShelfRevealOpen
+            )
+            .frame(maxWidth: 760, alignment: .leading)
+            .libraryShelfReveal(order: 2, isEnabled: isShelfRevealOpen)
+        }
+    }
+
+    /// The sort order as a capsule beside 所有书籍; the same binding as the
+    /// 排序方式 picker in the toolbar menu.
+    private var sortMenu: some View {
+        Menu {
+            Picker("排序方式", selection: $sortOrder) {
+                ForEach(LibrarySortOrder.allCases) { order in
+                    Label(order.title, systemImage: order.systemImage)
+                        .tag(order)
+                }
+            }
+        } label: {
+            HStack(spacing: JerreaderSpacing.xxs) {
+                JerreaderSymbol(name: "arrow.up.arrow.down", size: 13)
+                Text(sortOrder.title)
+                    .font(.subheadline.weight(.semibold))
+            }
+            .foregroundStyle(JerreaderTheme.accent)
+            .padding(.horizontal, JerreaderSpacing.sm)
+            .frame(minHeight: 30)
+            .background(JerreaderTheme.accentFill, in: Capsule())
+            // A 44 pt tall target that still only takes 30 pt of the header.
+            .padding(.vertical, 7)
+            .contentShape(Rectangle())
+        }
+        .padding(.vertical, -7)
+        .accessibilityLabel("排序方式")
+        .accessibilityValue(sortOrder.title)
+    }
+
+    @ViewBuilder
+    private func readerScreen(for session: LibraryReaderSession) -> some View {
+        let reader = EPUBReaderScreen(
+            book: session.book,
+            modelContext: modelContext,
+            translationSettings: translationSettings
+        )
+        .id(session.id)
+
+        if let source = session.coverSource {
+            // The reader zooms out of the tapped cover and back into it on
+            // close. A zoom adds a swipe-down dismissal that the full-screen
+            // cover never had; the reader still closes only through its own
+            // close button.
+            reader
+                .navigationTransition(.zoom(sourceID: source, in: coverTransition))
+                .interactiveDismissDisabled()
+        } else {
+            reader
         }
     }
 
@@ -630,7 +691,7 @@ struct LibraryView: View {
 #endif
 
     @MainActor
-    private func open(_ book: BookRecord) {
+    private func open(_ book: BookRecord, from coverSource: LibraryCoverTransitionID? = nil) {
         // A tap only starts a reader session. `lastOpenedAt` is persisted with
         // the first real reading location, so a failed or immediately closed
         // open does not mutate the book record either.
@@ -638,7 +699,7 @@ struct LibraryView: View {
         // the BookRecord ID can resurrect a reader model whose onDisappear()
         // already closed it, leaving its initial `.loading` state unable to
         // start another attempt.
-        readerSession = LibraryReaderSession(book: book)
+        readerSession = LibraryReaderSession(book: book, coverSource: coverSource)
     }
 
     @MainActor
@@ -689,6 +750,9 @@ struct LibraryView: View {
 struct LibraryReaderSession: Identifiable {
     let id = UUID()
     let book: BookRecord
+    /// The cover the reader zooms out of; nil presents the plain full-screen
+    /// cover (imports that open the new book, for one).
+    var coverSource: LibraryCoverTransitionID? = nil
 }
 
 enum LibraryBookMatcher {
@@ -718,344 +782,6 @@ enum LibraryBookDeletion {
         for annotation in try modelContext.fetch(annotationDescriptor) {
             modelContext.delete(annotation)
         }
-    }
-}
-
-private struct RecentlyViewedBookView: View {
-    let book: BookRecord
-    let onOpen: () -> Void
-
-    var body: some View {
-        Button(action: onOpen) {
-            HStack(spacing: 16) {
-                BookCoverView(book: book)
-                    .frame(width: 72, height: 108)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .shadow(color: .black.opacity(0.16), radius: 7, y: 4)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(book.title)
-                        .font(.system(.headline, design: .serif).weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
-
-                    Text(book.author)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-
-                    Label(book.format.displayName, systemImage: book.format.systemImage)
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(JerreaderTheme.accent)
-
-                    if let lastOpenedAt = book.lastOpenedAt {
-                        Label {
-                            JerreaderRelativeTimeText(date: lastOpenedAt)
-                        } icon: {
-                            JerreaderSymbol(name: "CLOCK", size: 12)
-                        }
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 2)
-                    }
-
-                    if book.lastReadProgress > 0 {
-                        ProgressView(value: book.lastReadProgress)
-                            .tint(JerreaderTheme.accent)
-                            .accessibilityLabel("阅读进度")
-                            .accessibilityValue(book.progressText)
-
-                        Text(book.progressText)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Spacer(minLength: 8)
-
-                JerreaderSymbol(name: "chevron.right", size: 13)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.986))
-        .jerreaderPaperCard(padding: 14, radius: 16, hasShadow: true)
-        .accessibilityHint("轻点继续阅读")
-    }
-}
-
-private struct LibraryFolderSection: View {
-    let categories: [String]
-    let books: [BookRecord]
-    @Binding var selectedCategory: String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 13) {
-            JerreaderSectionTitle(
-                title: "文件夹",
-                detail: "\(categories.count) 个",
-                systemImage: "folder.fill"
-            )
-
-            ScrollView(.horizontal) {
-                HStack(spacing: 12) {
-                    folderButton(
-                        title: "全部书籍",
-                        count: books.count,
-                        isSelected: selectedCategory == nil,
-                        systemImage: "square.grid.2x2.fill"
-                    ) {
-                        selectedCategory = nil
-                    }
-
-                    ForEach(categories, id: \.self) { category in
-                        folderButton(
-                            title: category,
-                            count: books.filter { $0.category == category }.count,
-                            isSelected: selectedCategory == category,
-                            systemImage: "folder.fill"
-                        ) {
-                            selectedCategory = category
-                        }
-                    }
-                }
-                .padding(.vertical, 2)
-            }
-            .scrollIndicators(.hidden)
-        }
-    }
-
-    private func folderButton(
-        title: String,
-        count: Int,
-        isSelected: Bool,
-        systemImage: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 11) {
-                JerreaderSymbol(name: systemImage, size: 20)
-                    .font(.title3)
-                    .foregroundStyle(isSelected ? JerreaderTheme.onPrimaryAction : JerreaderTheme.accent)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                    Text("\(count) 本")
-                        .font(.caption2)
-                        .opacity(0.76)
-                }
-            }
-            .foregroundStyle(isSelected ? JerreaderTheme.onPrimaryAction : Color.primary)
-            .frame(minWidth: 132, alignment: .leading)
-            .padding(.horizontal, 14)
-            .frame(height: 64)
-            .background(
-                isSelected ? JerreaderTheme.primaryAction : JerreaderTheme.paper,
-                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-            )
-            .overlay {
-                if !isSelected {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(JerreaderTheme.line, lineWidth: 0.75)
-                }
-            }
-        }
-        .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.97))
-        .accessibilityLabel("\(title)，\(count) 本")
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-    }
-}
-
-private struct BookCardView: View {
-    let book: BookRecord
-    let onOpen: () -> Void
-    let onManage: () -> Void
-    let onDelete: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Button(action: onOpen) {
-                GeometryReader { geometry in
-                    BookCoverView(book: book)
-                        .frame(
-                            width: geometry.size.width,
-                            height: geometry.size.height
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                        .shadow(color: .black.opacity(0.16), radius: 7, y: 4)
-                }
-                .aspectRatio(2 / 3, contentMode: .fit)
-            }
-            .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.972))
-            .frame(maxWidth: .infinity)
-            .accessibilityLabel("\(book.title)，作者 \(book.author)")
-            .accessibilityHint("轻点打开阅读器")
-
-            HStack(alignment: .top, spacing: 6) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(book.title)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
-
-                    Text(book.author)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-
-                    Text(book.format.displayName)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(JerreaderTheme.accent)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(JerreaderTheme.accentFill, in: Capsule())
-
-                    if book.lastReadProgress > 0 {
-                        ProgressView(value: book.lastReadProgress)
-                            .tint(JerreaderTheme.accent)
-                            .accessibilityLabel("阅读进度")
-                            .accessibilityValue(book.progressText)
-                    }
-
-                    if !book.category.isEmpty {
-                        Label(book.category, systemImage: "folder.fill")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-
-                Spacer(minLength: 0)
-
-                Menu {
-                    Button(action: onOpen) {
-                        Label { Text("开始阅读") } icon: { Image(uiImage: JerreaderIconImage.image("BOOKS")) }
-                    }
-
-                    Button(action: onManage) {
-                        Label { Text("编辑书籍信息") } icon: { Image(uiImage: JerreaderIconImage.image("NOTE")) }
-                    }
-
-                    Button(role: .destructive, action: onDelete) {
-                        Label { Text("删除") } icon: { Image(uiImage: JerreaderIconImage.image("TRASH")) }
-                    }
-                } label: {
-                    JerreaderSymbol(name: "ellipsis", size: 18)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .accessibilityLabel("\(book.title)的更多操作")
-            }
-        }
-        .contextMenu {
-            Button(action: onOpen) {
-                Label { Text("开始阅读") } icon: { Image(uiImage: JerreaderIconImage.image("BOOKS")) }
-            }
-
-            Button(action: onManage) {
-                Label { Text("编辑书籍信息") } icon: { Image(uiImage: JerreaderIconImage.image("NOTE")) }
-            }
-
-            Button(role: .destructive, action: onDelete) {
-                Label { Text("删除") } icon: { Image(uiImage: JerreaderIconImage.image("TRASH")) }
-            }
-        }
-        // Flexible grid cells do not automatically constrain a Button's image
-        // ideal size. Explicitly bind the whole card to its cell so oversized
-        // source covers can never draw into a neighboring column.
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-private struct LibraryReadingOverview: View {
-    let books: [BookRecord]
-
-    private var totalSeconds: TimeInterval {
-        books.reduce(0) { $0 + max($1.totalReadingSeconds, 0) }
-    }
-
-    private var startedBooks: [BookRecord] {
-        books.filter { $0.lastReadProgress > 0 }
-    }
-
-    private var averageProgress: Double {
-        guard !startedBooks.isEmpty else { return 0 }
-        return startedBooks.reduce(0) { $0 + $1.lastReadProgress }
-            / Double(startedBooks.count)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Text("阅读统计")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-
-                Spacer(minLength: 8)
-
-                Text(startedBooks.isEmpty ? "从一本喜欢的书开始" : "只记录本机阅读进度")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-            }
-
-            HStack(spacing: 0) {
-                metric(
-                    value: totalSeconds.readerDurationText,
-                    label: "累计阅读",
-                    systemImage: "clock"
-                )
-
-                Divider()
-                    .frame(height: 30)
-
-                metric(
-                    value: "\(startedBooks.count)",
-                    label: "已开始",
-                    systemImage: "BOOKS"
-                )
-
-                Divider()
-                    .frame(height: 30)
-
-                metric(
-                    value: "\(Int((averageProgress * 100).rounded()))%",
-                    label: "平均进度",
-                    systemImage: "TREND"
-                )
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .frame(maxWidth: 820)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(JerreaderTheme.paper, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(JerreaderTheme.line, lineWidth: 0.75)
-        }
-        .accessibilityElement(children: .combine)
-    }
-
-    private func metric(value: String, label: String, systemImage: String) -> some View {
-        VStack(spacing: 5) {
-            HStack(spacing: 4) {
-                JerreaderSymbol(name: systemImage, size: 14)
-                Text(value)
-            }
-                .font(.subheadline.monospacedDigit().weight(.semibold))
-                .foregroundStyle(JerreaderTheme.accent)
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
     }
 }
 
@@ -1193,11 +919,11 @@ private struct BookManagementView: View {
                 .resizable()
                 .scaledToFill()
                 .frame(width: 82, height: 123)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .jerreaderBookCover(cornerRadius: JerreaderRadius.cover, elevated: false)
         } else {
-            BookCoverView(book: book)
+            LibraryBookCoverView(book: book)
                 .frame(width: 82, height: 123)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .jerreaderBookCover(cornerRadius: JerreaderRadius.cover, elevated: false)
         }
     }
 
@@ -1467,24 +1193,26 @@ private enum BookCoverImageProcessor {
 
 private extension BookRecord {
     var progressText: String {
-        "\(Int((min(max(lastReadProgress, 0), 1) * 100).rounded()))%"
+        LibraryShelfFormat.progressText(lastReadProgress)
     }
 }
 
 private extension TimeInterval {
     var readerDurationText: String {
-        let totalMinutes = max(Int(self / 60), 0)
-        if totalMinutes < 1 { return self > 0 ? "<1 分钟" : "0 分钟" }
-        if totalMinutes < 60 { return "\(totalMinutes) 分钟" }
-        let hours = totalMinutes / 60
-        let minutes = totalMinutes % 60
-        return minutes == 0 ? "\(hours) 小时" : "\(hours)小时\(minutes)分"
+        LibraryShelfFormat.durationText(self)
     }
 }
 
-private struct BookCoverView: View {
+/// A shelf book's cover art: the stored cover once it has loaded, otherwise
+/// the generated cover. Callers size and style it, usually with
+/// `jerreaderBookCover`.
+struct LibraryBookCoverView: View {
     let book: BookRecord
-    @State private var cover: BookCoverThumbnail?
+    @State private var cover: BookCoverThumbnail? = nil
+
+    init(book: BookRecord) {
+        self.book = book
+    }
 
     var body: some View {
         Group {
@@ -1494,50 +1222,17 @@ private struct BookCoverView: View {
                     .scaledToFill()
             } else {
                 GeometryReader { geometry in
-                    let scale = min(geometry.size.width / 168, geometry.size.height / 252, 1)
-                    ZStack(alignment: .leading) {
-                        LinearGradient(
-                            colors: fallbackPalette,
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-
-                        Rectangle()
-                            .fill(.white.opacity(0.16))
-                            .frame(width: 6 * scale)
-                            .padding(.vertical, 6 * scale)
-
-                        VStack(spacing: 13 * scale) {
-                            JerreaderSymbol(name: "DICTIONARY", size: 27 * scale)
-                                .foregroundStyle(.white.opacity(0.88))
-
-                            Text(book.title)
-                                .font(.system(size: 17 * scale, weight: .bold, design: .serif))
-                                .multilineTextAlignment(.center)
-                                .lineLimit(4)
-
-                            Rectangle()
-                                .fill(.white.opacity(0.55))
-                                .frame(width: 34 * scale, height: 1)
-
-                            Text(book.author)
-                                .font(.system(size: 12 * scale))
-                                .multilineTextAlignment(.center)
-                                .lineLimit(2)
-                        }
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(18 * scale)
-                    }
+                    JerreaderGeneratedCover(
+                        title: book.title,
+                        author: book.author.nilIfEmpty,
+                        compact: geometry.size.width < 150
+                    )
+                    .frame(width: geometry.size.width, height: geometry.size.height)
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
-        .overlay {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .stroke(.white.opacity(0.18), lineWidth: 0.75)
-        }
         .accessibilityHidden(true)
         .task(id: book.coverFileName) {
             guard let fileName = book.coverFileName else { cover = nil; return }
@@ -1546,18 +1241,6 @@ private struct BookCoverView: View {
             cover = thumbnail
         }
     }
-
-    private var fallbackPalette: [Color] {
-        let palettes: [[Color]] = [
-            [Color(red: 0.08, green: 0.22, blue: 0.32), Color(red: 0.16, green: 0.42, blue: 0.56)],
-            [Color(red: 0.10, green: 0.20, blue: 0.28), Color(red: 0.28, green: 0.47, blue: 0.60)],
-            [Color(red: 0.13, green: 0.19, blue: 0.32), Color(red: 0.28, green: 0.40, blue: 0.62)],
-            [Color(red: 0.15, green: 0.20, blue: 0.30), Color(red: 0.34, green: 0.40, blue: 0.57)]
-        ]
-        let scalarTotal = book.title.unicodeScalars.reduce(0) { $0 + Int($1.value) }
-        return palettes[scalarTotal % palettes.count]
-    }
-
 }
 
 /// The CGImage is fully decoded before publication and remains immutable.

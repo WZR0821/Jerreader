@@ -97,9 +97,15 @@ struct LibraryBackupSettingsView: View {
         Form {
             backupLocationSection
             automaticStatusSection
+            // The page's one primary action, as a full-width capsule on the canvas.
             Section {
                 Button("立即备份") { Task { await saveManualBackupToCurrentFolder() } }
+                    .buttonStyle(JerreaderPrimaryButtonStyle())
                     .disabled(isBusy || manualScopes.isEmpty)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                    .listRowBackground(Color.clear)
+            }
+            Section {
                 DisclosureGroup("更多备份选项", isExpanded: $showsAdvancedOptions) {
                     Text("按需调整备份范围、保留策略或导出单独副本。")
                         .font(.footnote).foregroundStyle(.secondary)
@@ -226,17 +232,22 @@ struct LibraryBackupSettingsView: View {
             }
 
             if let backupLocationError {
-                Label(backupLocationError, systemImage: "exclamationmark.triangle")
-                    .font(.footnote)
-                    .foregroundStyle(.orange)
+                Label {
+                    Text(backupLocationError)
+                } icon: {
+                    JerreaderSymbol(name: "exclamationmark.triangle", size: 16)
+                }
+                .font(.footnote)
+                .foregroundStyle(.orange)
             }
 
             if let suggestedFolder {
                 VStack(alignment: .leading, spacing: 6) {
-                    Label(
-                        "刚恢复的备份来自「\(suggestedFolder.name)」",
-                        systemImage: "arrow.uturn.backward.circle"
-                    )
+                    Label {
+                        Text("刚恢复的备份来自「\(suggestedFolder.name)」")
+                    } icon: {
+                        JerreaderSymbol(name: "arrow.counterclockwise", size: 16)
+                    }
                     .font(.footnote)
                     .foregroundStyle(.secondary)
 
@@ -245,7 +256,7 @@ struct LibraryBackupSettingsView: View {
                         folderAction = .configure
                         isShowingFolderPicker = true
                     } label: {
-                        Label("继续备份到这个文件夹", systemImage: "folder.badge.gearshape")
+                        JerreaderLabel(title: "继续备份到这个文件夹", icon: "folder", size: 20)
                     }
                     .disabled(isBusy)
                 }
@@ -264,12 +275,12 @@ struct LibraryBackupSettingsView: View {
                 Button {
                     useDefaultBackupFolder()
                 } label: {
-                    Label("停止使用此文件夹", systemImage: "folder")
+                    JerreaderLabel(title: "停止使用此文件夹", icon: "folder", size: 20)
                 }
                 .disabled(isBusy)
             }
         } header: {
-            Text("备份位置")
+            Text("备份位置").settingsHeader()
         } footer: {
             Text("选择你自己的文件夹，备份直接保存在那里。重装或重签后点‘从备份文件夹恢复’，选择同一文件夹即可恢复并继续使用。")
         }
@@ -298,22 +309,26 @@ struct LibraryBackupSettingsView: View {
                     .foregroundStyle(.secondary)
                 }
                 if let error = policy.lastAutomaticError {
-                    Label(error, systemImage: "exclamationmark.triangle")
-                        .font(.footnote)
-                        .foregroundStyle(.orange)
+                    Label {
+                        Text(error)
+                    } icon: {
+                        JerreaderSymbol(name: "exclamationmark.triangle", size: 16)
+                    }
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
                 }
 
 
             }
         } header: {
-            Text("自动备份")
+            Text("自动备份").settingsHeader()
         } footer: {
             Text("在 App 运行时检查是否到期并补做；系统不保证 App 未运行时准点执行。")
         }
     }
 
     private var automaticPolicySection: some View {
-        Section("自动策略") {
+        Section {
             Picker("备份间隔", selection: $policy.intervalDays) {
                 ForEach(LibraryBackupPolicyStore.intervalChoices, id: \.self) {
                     Text($0 == 1 ? "每天" : "每 \($0) 天").tag($0)
@@ -341,6 +356,8 @@ struct LibraryBackupSettingsView: View {
                 }
             }
             .accessibilityIdentifier("backup-capacity-picker")
+        } header: {
+            Text("自动策略").settingsHeader()
         }
     }
 
@@ -355,7 +372,7 @@ struct LibraryBackupSettingsView: View {
                 }
             ))
         } header: {
-            Text("自动备份范围")
+            Text("自动备份范围").settingsHeader()
         } footer: {
             Text("包含书籍文件会让备份明显变大，但它也是重装后无需重新找书的完整方案。")
         }
@@ -369,7 +386,7 @@ struct LibraryBackupSettingsView: View {
                 Task { await saveManualBackupToCurrentFolder() }
             } label: {
                 HStack {
-                    Label("保存到当前文件夹", systemImage: "folder.badge.plus")
+                    JerreaderLabel(title: "保存到当前文件夹", icon: "square.and.arrow.down", size: 20)
                     Spacer()
                     if state == .creatingManual {
                         ProgressView()
@@ -382,7 +399,7 @@ struct LibraryBackupSettingsView: View {
                 Task { await exportManualBackup() }
             } label: {
                 HStack {
-                    Label("导出到其他位置", systemImage: "square.and.arrow.up")
+                    JerreaderLabel(title: "导出到其他位置", icon: "square.and.arrow.up", size: 20)
                     Spacer()
                     if state == .exporting {
                         ProgressView()
@@ -391,14 +408,14 @@ struct LibraryBackupSettingsView: View {
             }
             .disabled(isBusy || manualScopes.isEmpty)
         } header: {
-            Text("手动备份")
+            Text("手动备份").settingsHeader()
         } footer: {
             Text("“保存到当前文件夹”会直接生成一份可在下方恢复的备份；“导出到其他位置”适合临时另存一份。")
         }
     }
 
     private var restoreSection: some View {
-        Section("恢复") {
+        Section {
             Button("从备份文件夹恢复") {
                 folderAction = .restore
                 folderPickerStart = try? LibraryBackupDirectoryStore().selectedDirectoryAccess()?.url
@@ -410,6 +427,8 @@ struct LibraryBackupSettingsView: View {
                     restoreImportRequest = BackupImportRequest()
                 }.disabled(isBusy)
             }
+        } header: {
+            Text("恢复").settingsHeader()
         }
     }
 
@@ -435,6 +454,7 @@ struct LibraryBackupSettingsView: View {
         } header: {
             HStack {
                 Text(hasCustomBackupLocation || backups.isEmpty ? "当前文件夹中的备份" : "本机旧备份（可导出）")
+                    .settingsHeader()
                 Spacer()
                 if state == .pruning {
                     ProgressView()
@@ -450,15 +470,14 @@ struct LibraryBackupSettingsView: View {
     }
 
     private var safetySection: some View {
-        Section("重要说明") {
-            Label(
-                "API Key 和代理访问凭据不进入任何备份；重装后需要重新填写。",
-                systemImage: "key"
+        Section {
+            JerreaderLabel(title: "API Key 和代理访问凭据不进入任何备份；重装后需要重新填写。", icon: "lock")
+            JerreaderLabel(
+                title: "App 本地文件夹会随卸载删除；iCloud Drive 等外部文件夹中的备份不会随 App 卸载删除。重装后需要再次选择该文件夹。",
+                icon: "exclamationmark.triangle"
             )
-            Label(
-                "App 本地文件夹会随卸载删除；iCloud Drive 等外部文件夹中的备份不会随 App 卸载删除。重装后需要再次选择该文件夹。",
-                systemImage: "exclamationmark.shield"
-            )
+        } header: {
+            Text("重要说明").settingsHeader()
         }
         .font(.footnote)
     }
@@ -839,9 +858,7 @@ private struct ManagedBackupRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "externaldrive.fill")
-                .font(.title3)
-                .foregroundStyle(JerreaderTheme.accent)
+            JerreaderIconTile(systemImage: "EXTERNAL_DRIVE_FILLED", tint: SettingsTint.backup, size: 36)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(
@@ -872,8 +889,7 @@ private struct ManagedBackupRow: View {
             Spacer(minLength: 8)
 
             Button("恢复", action: onRestore)
-                .font(.caption.weight(.semibold))
-                .buttonStyle(.bordered)
+                .buttonStyle(JerreaderTintedButtonStyle(height: 30))
                 .accessibilityHint("直接恢复当前文件夹中的这份备份")
 
             Menu {

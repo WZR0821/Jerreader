@@ -1,5 +1,9 @@
 package com.jerreader.android.translation
 
+import com.jerreader.android.translation.chatgptplan.ChatGPTPlanCompletion
+import com.jerreader.android.translation.chatgptplan.ChatGPTPlanMessageContext
+import com.jerreader.android.translation.chatgptplan.ChatGPTPlanMessages
+import com.jerreader.android.translation.chatgptplan.ChatGPTPlanServiceFailure
 import com.jerreader.shared.domain.LanguageCode
 import com.jerreader.shared.translation.AIReadingLensPromptPolicy
 import com.jerreader.shared.translation.ContextExplanationRequest
@@ -19,6 +23,7 @@ import java.net.URI
 import java.net.URL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -66,6 +71,9 @@ class ConfiguredTranslationService(
 ) : TranslationService, ContextExplanationService {
     override val identifier: String = "configured-ai"
 
+    /** Requests paid by the ChatGPT plan, through its signed-in session. */
+    private val planCompletion = ChatGPTPlanCompletion(settings.chatGPTPlanSession)
+
     override suspend fun translate(request: TranslationRequest): TranslationResult =
         translate(request, override = null)
 
@@ -92,7 +100,9 @@ class ConfiguredTranslationService(
             if (error is TranslationFailure.EmptyInput ||
                 error is TranslationFailure.TextTooLong ||
                 error is TranslationFailure.UnsupportedLanguage ||
-                error is TranslationFailure.LocalModelsMissing
+                error is TranslationFailure.LocalModelsMissing ||
+                // A ChatGPT plan out of quota or signed out stops; nothing answers in its place.
+                ChatGPTPlanMessages.isStop(error)
             ) {
                 throw error
             }
@@ -114,6 +124,15 @@ class ConfiguredTranslationService(
         validateConfiguration(configuration)
         val source = request.sourceLanguage ?: detectLanguage(request.text)
         val prompt = configuration.preferences.renderedPrompt(source)
+        val plan = configuration.planDirect
+        if (plan != null) {
+            return TranslationResult(
+                translatedText = planText(configuration, plan, prompt, request.text, ChatGPTPlanMessageContext.TRANSLATION),
+                sourceLanguage = source,
+                targetLanguage = request.targetLanguage,
+                providerIdentifier = providerIdentifier(configuration)
+            )
+        }
         val prepared = if (configuration.isProxy) {
             AIProxyProtocol.translation(configuration, request.text, source, request.targetLanguage, prompt)
         } else {
@@ -148,6 +167,16 @@ class ConfiguredTranslationService(
             grammarPrompt +
                 if (request.isWordLookup) "\n本次是语境查词。先给出该词在原句中的简短中文含义，再说明词典形与关键活用。区分推测和确定信息；缺少原句或无法消歧时明确说明，不编造读音、词源或词典依据。" else ""
         }
+        val plan = configuration.planDirect
+        if (plan != null) {
+            val userText = if (lens != null) {
+                lensUserText(focused, request.contextText)
+            } else {
+                grammarUserText(focused, request)
+            }
+            val explanation = planText(configuration, plan, prompt, userText, ChatGPTPlanMessageContext.EXPLANATION)
+            return ContextExplanationResult(explanation, providerIdentifier(configuration))
+        }
         val prepared = if (configuration.isProxy) {
             AIProxyProtocol.explanation(configuration, request, focused, source, prompt)
         } else {
@@ -181,6 +210,11 @@ class ConfiguredTranslationService(
         )
         val prompt = preferences.copy(targetLanguage = LanguageCode.CHINESE_SIMPLIFIED)
             .renderedPrompt(LanguageCode.ENGLISH)
+        if (direct.kind.usesAccountSignIn) {
+            val started = System.nanoTime()
+            planText(configuration, direct, prompt, "Hello.", ChatGPTPlanMessageContext.SETTINGS)
+            return (System.nanoTime() - started) / 1_000_000_000.0
+        }
         val prepared = directRequest(direct, "Hello.", prompt, quick = true)
         val started = System.nanoTime()
         performTextRequest(configuration, prepared, isExplanation = false)
@@ -250,11 +284,45 @@ class ConfiguredTranslationService(
         throw lastFailure ?: TranslationFailure.ServiceUnavailable
     }
 
+    /**
+     * One answer paid by the ChatGPT plan. A usage limit or an ended sign-in
+     * stops at once and is never retried; other failures are retried like any
+     * provider's.
+     */
+    private suspend fun planText(
+        configuration: TranslationServiceConfiguration,
+        direct: DirectAIConfiguration,
+        instructions: String,
+        input: String,
+        context: ChatGPTPlanMessageContext
+    ): String {
+        val attempts = if (configuration.preferences.automaticRetryEnabled) 2 else 1
+        val quick = context != ChatGPTPlanMessageContext.EXPLANATION
+        var failure: ChatGPTPlanServiceFailure = ChatGPTPlanServiceFailure.Temporary()
+        for (attempt in 0 until attempts) {
+            if (attempt > 0) delay(PLAN_RETRY_DELAY_MILLIS)
+            try {
+                return planCompletion.complete(direct, instructions, input, quick)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: ChatGPTPlanServiceFailure) {
+                failure = error
+                if (!error.isTransient) break
+            } catch (_: Exception) {
+                failure = ChatGPTPlanServiceFailure.Temporary()
+            }
+        }
+        throw ChatGPTPlanMessages.translationFailure(failure, context)
+    }
+
     private fun validateConfiguration(configuration: TranslationServiceConfiguration) {
         if (configuration.preferences.providerMode == TranslationProviderMode.DIRECT_API) {
             if (configuration.direct != null) return
             throw when (configuration.directIssue) {
                 is AIProviderSettingsError.InvalidAddress -> TranslationFailure.InvalidConfiguration
+                // The ChatGPT plan is in use but signed out.
+                is AIProviderSettingsError.SignInRequired ->
+                    TranslationFailure.ProviderRejected(ChatGPTPlanMessages.SIGN_IN_TRANSLATION)
                 else -> TranslationFailure.AIModelNotReady
             }
         }
@@ -271,6 +339,10 @@ class ConfiguredTranslationService(
 
     private fun TranslationServiceConfiguration.requireDirect(): DirectAIConfiguration =
         direct ?: throw TranslationFailure.AIModelNotReady
+
+    /** The ChatGPT plan in use, which is called through its signed-in session instead of a key. */
+    private val TranslationServiceConfiguration.planDirect: DirectAIConfiguration?
+        get() = if (isProxy) null else direct?.takeIf { it.kind.usesAccountSignIn }
 
     /** The request of one model in its format, the same body iOS sends. */
     private fun directRequest(
@@ -435,5 +507,10 @@ class ConfiguredTranslationService(
         text.any { it in '\u3040'..'\u30ff' } -> LanguageCode.JAPANESE
         text.any { it in '\u3400'..'\u9fff' } -> LanguageCode.CHINESE_SIMPLIFIED
         else -> LanguageCode.ENGLISH
+    }
+
+    private companion object {
+        /** The pause before the ChatGPT plan's one retry. */
+        const val PLAN_RETRY_DELAY_MILLIS = 450L
     }
 }

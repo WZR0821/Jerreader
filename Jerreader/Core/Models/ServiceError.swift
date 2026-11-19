@@ -11,6 +11,10 @@ enum ServiceError: LocalizedError, Equatable, Sendable {
     case translationUnavailable
     case invalidConfiguration
     case authenticationFailed
+    /// The ChatGPT plan cannot pay for more requests now. Nothing retries it.
+    case planUsageLimitReached
+    /// The ChatGPT sign-in ended; only signing in again helps.
+    case planSignInRequired
 
     var errorDescription: String? {
         switch self {
@@ -34,6 +38,10 @@ enum ServiceError: LocalizedError, Equatable, Sendable {
             return "翻译服务配置无效，请检查 HTTPS 地址、模型和请求格式。"
         case .authenticationFailed:
             return "翻译服务拒绝了访问，请检查钥匙串中的 API Key 或代理凭据。"
+        case .planUsageLimitReached:
+            return "ChatGPT 套餐的额度已用完或暂时不可用，已暂停用它翻译。到 chatgpt.com/settings/usage 查看用量；Plus 的 5 小时额度和 ChatGPT、Codex 等共用。"
+        case .planSignInRequired:
+            return "ChatGPT 登录已失效。请到“设置 → AI 大模型”重新登录。"
         }
     }
 }

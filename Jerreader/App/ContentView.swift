@@ -32,18 +32,21 @@ struct ContentView: View {
                 incomingBookURL: $incomingBookURL,
                 translationSettings: translationSettings
             )
+                .jerreaderTabSurface(themeColor)
                 .tabItem {
                     Label { Text("书架") } icon: { Image(uiImage: JerreaderIconImage.image("books.vertical.fill")) }
                 }
                 .tag(AppTab.library)
 
             LearningHubView(translationSettings: translationSettings)
+                .jerreaderTabSurface(themeColor)
                 .tabItem {
                     Label { Text("学习") } icon: { Image(uiImage: JerreaderIconImage.image("character.book.closed.fill")) }
                 }
                 .tag(AppTab.learning)
 
             AppSettingsView(translationSettings: translationSettings)
+                .jerreaderTabSurface(themeColor)
                 .tabItem {
                     Label { Text("设置") } icon: { Image(uiImage: JerreaderIconImage.image("gearshape.fill")) }
                 }
@@ -51,8 +54,6 @@ struct ContentView: View {
         }
         .tabViewStyle(.sidebarAdaptable)
         .tint(JerreaderTheme.accent(for: themeColor))
-        .toolbarBackground(.ultraThinMaterial, for: .tabBar)
-        .toolbarBackground(.visible, for: .tabBar)
         .background(JerreaderCanvasBackground())
         .sensoryFeedback(.selection, trigger: selectedTab)
         .onOpenURL { url in
@@ -78,6 +79,20 @@ struct ContentView: View {
                 )
             }
         }
+    }
+}
+
+private extension View {
+    /// The same surface on every tab: the canvas behind the page and a
+    /// canvas-coloured tab bar. A tab bar background only takes effect when it
+    /// is set on a tab's content, not on the TabView itself.
+    @MainActor
+    func jerreaderTabSurface(_ themeColor: JerreaderThemeColorChoice) -> some View {
+        background {
+            JerreaderCanvasBackground()
+        }
+        .toolbarBackground(JerreaderTheme.canvas(for: themeColor), for: .tabBar)
+        .toolbarBackground(.visible, for: .tabBar)
     }
 }
 

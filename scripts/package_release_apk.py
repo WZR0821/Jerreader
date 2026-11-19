@@ -66,6 +66,17 @@ def verify_split_pair(delivered, validated):
     if sorted(n.split('/', 2)[2] for n in arm) != sorted(n.split('/', 2)[2] for n in x86 if n.startswith('lib/x86_64/')):
         raise ValueError('The two ABI splits do not carry the same native libraries')
 
+# Since 2.0.0 the emulator smoke counts a book as opened only when the reader
+# shows it, and it checks that ML Kit can start. Device logs from older smoke
+# runs (1.7.0 and 1.7.1 passed with a Release that could not open PDFs) cannot
+# vouch for an APK.
+RELEASE_SMOKE_STEPS = ('opened epub in ReaderActivity', 'opened pdf in ReaderActivity',
+                       'created every ML Kit component registrar')
+
+def verify_release_smoke(smoke):
+    if not all(step in smoke for step in RELEASE_SMOKE_STEPS):
+        raise ValueError('The Release candidate did not open an EPUB and a PDF and start ML Kit on the emulator')
+
 def certificate(apksigner, path):
     result = subprocess.run([str(apksigner), 'verify', '--verbose', '--print-certs', str(path)],
         capture_output=True, text=True, check=True)
@@ -110,9 +121,7 @@ def main():
         raise ValueError('The current reviewed UI set must pass, including large-list navigation')
     if (args.device_log / 'release-apk.sha256').read_text().split()[0] != digest(validated):
         raise ValueError('The APK differs from the installed and launched Release candidate')
-    smoke = (args.device_log / 'release-smoke.txt').read_text()
-    if not all(text in smoke for text in ('opened epub in ReaderActivity', 'opened pdf in ReaderActivity')):
-        raise ValueError('The Release candidate did not open an EPUB and a PDF on the emulator')
+    verify_release_smoke((args.device_log / 'release-smoke.txt').read_text())
     verify_split_pair(source, validated)
     sdk = Path(os.environ['ANDROID_HOME']) / 'build-tools'
     toolset = next(p for p in sorted(sdk.iterdir(), reverse=True) if (p / 'apksigner').is_file() and (p / 'aapt2').is_file())

@@ -1,16 +1,13 @@
 package com.jerreader.android.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -27,12 +24,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
@@ -48,7 +44,10 @@ import com.jerreader.android.translation.AndroidTranslationSettingsStore
 import com.jerreader.shared.translation.TranslationProviderMode
 import com.jerreader.shared.ui.JerreaderGlyph
 import com.jerreader.shared.ui.JerreaderIcon
-import com.jerreader.shared.ui.JerreaderSegmentedPicker
+import com.jerreader.shared.ui.JerreaderIconTile
+import com.jerreader.shared.ui.JerreaderPillOption
+import com.jerreader.shared.ui.JerreaderPillPicker
+import com.jerreader.shared.ui.jerreaderPalette
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -66,6 +65,9 @@ private const val SHEET_ADD = "add"
 private const val SHEET_HELP = "help"
 private const val SHEET_CREDENTIALS = "credentials"
 private const val SHEET_ADD_MODEL = "addModel"
+private const val ADD_MODE_PRESET = "preset"
+private const val ADD_MODE_PLAN = "plan"
+private const val ADD_MODE_CUSTOM = "custom"
 
 /** The name the translation service picker gives each mode. */
 internal fun providerModeTitle(mode: TranslationProviderMode): String = when (mode) {
@@ -117,16 +119,27 @@ internal fun AIModelsScreen(
             )
             page.startsWith("provider:") -> {
                 val entryID = page.removePrefix("provider:")
-                ProviderDetailPage(
-                    store = store,
-                    requests = requests,
-                    providers = providers,
-                    keyed = keyed,
-                    entryID = entryID,
-                    onBack = pop,
-                    bottomBar = bottomBar,
-                    openModel = { model -> push("model:$entryID$FIELD_SEPARATOR$model") }
-                )
+                if (entryID == AndroidTranslationSettingsStore.CHATGPT_PLAN_ID) {
+                    ChatGPTPlanDetailPage(
+                        store = store,
+                        providers = providers,
+                        entryID = entryID,
+                        onBack = pop,
+                        bottomBar = bottomBar,
+                        openModel = { model -> push("model:$entryID$FIELD_SEPARATOR$model") }
+                    )
+                } else {
+                    ProviderDetailPage(
+                        store = store,
+                        requests = requests,
+                        providers = providers,
+                        keyed = keyed,
+                        entryID = entryID,
+                        onBack = pop,
+                        bottomBar = bottomBar,
+                        openModel = { model -> push("model:$entryID$FIELD_SEPARATOR$model") }
+                    )
+                }
             }
             else -> {
                 val parts = page.removePrefix("model:").split(FIELD_SEPARATOR, limit = 2)
@@ -166,7 +179,11 @@ private fun AIModelsRootPage(
     val activeModel = active.model.trim()
     val activeHasKey = providers.activeID in keyed
     val footer = when {
-        !activeHasKey -> "这个供应商还没有填 API Key，填好后才能翻译。"
+        !activeHasKey -> if (active.kind.usesAccountSignIn) {
+            "ChatGPT 套餐还没有登录，登录后才能翻译。"
+        } else {
+            "这个供应商还没有填 API Key，填好后才能翻译。"
+        }
         mode != TranslationProviderMode.DIRECT_API ->
             "翻译服务目前选的是“${providerModeTitle(mode)}”，阅读和学习页暂时不会用这里的模型。"
         else -> null
@@ -176,6 +193,8 @@ private fun AIModelsRootPage(
         error = null
         sheet = null
     }
+    // The plan's session may have ended, or renamed its account, since this page was last shown.
+    LaunchedEffect(Unit) { ChatGPTPlanActions.sync(store) }
     AIPageFrame(
         title = "AI 大模型",
         backTitle = backTitle,
@@ -187,7 +206,18 @@ private fun AIModelsRootPage(
         sheetContent = { which ->
             when (which) {
                 SHEET_SWITCH -> ModelSwitcherSheet(store, providers, keyed, onClose = { sheet = null }, onSwitch = finished)
-                SHEET_ADD -> AddProviderSheet(store, requests, providers, keyed, onClose = { sheet = null }, onAdded = finished)
+                SHEET_ADD -> AddProviderSheet(
+                    store,
+                    requests,
+                    providers,
+                    keyed,
+                    onClose = { sheet = null },
+                    onAdded = finished,
+                    onOpenPlan = {
+                        sheet = null
+                        openProvider(AndroidTranslationSettingsStore.CHATGPT_PLAN_ID)
+                    }
+                )
                 else -> AIHelpSheet(onClose = { sheet = null })
             }
         }
@@ -204,7 +234,7 @@ private fun AIModelsRootPage(
                         active.kind,
                         active.name,
                         caption = "Jerreader 正在用",
-                        title = activeModel.ifEmpty { "还没有选模型" },
+                        title = if (activeModel.isEmpty()) "还没有选模型" else store.modelTitle(activeModel, active),
                         detail = active.displayName
                     )
                 }
@@ -232,7 +262,7 @@ private fun AIModelsRootPage(
                                 kind = entry.kind,
                                 name = entry.name,
                                 title = entry.displayName,
-                                detail = if (hasKey) "$count 个模型" else "$count 个模型 · 未填密钥",
+                                detail = if (hasKey) "$count 个模型" else "$count 个模型 · ${entry.kind.missingCredentialTag}",
                                 modifier = Modifier.weight(1f),
                                 detailColor = if (hasKey) Color.Unspecified else aiWarning(),
                                 tag = if (entry.id == providers.activeID) "正在用" else null
@@ -243,15 +273,7 @@ private fun AIModelsRootPage(
                 }
                 row(divider = AIListMetrics.iconDivider) {
                     AIRow(onClick = { sheet = SHEET_ADD }, spacing = 13.dp) {
-                        Box(
-                            Modifier
-                                .size(34.dp)
-                                .clip(RoundedCornerShape(9.dp))
-                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            JerreaderGlyph(JerreaderIcon.PLUS, MaterialTheme.colorScheme.primary, Modifier.size(18.dp))
-                        }
+                        JerreaderIconTile(JerreaderIcon.PLUS, size = 34.dp)
                         Text("添加供应商", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
                         AIChevron()
                     }
@@ -283,24 +305,31 @@ private fun ModelSwitcherSheet(
                 key(entry.id) {
                     AISection(
                         title = entry.displayName,
-                        footer = if (hasKey) null else "还没有填 API Key，暂时不能选。",
+                        footer = if (hasKey) null else "${entry.kind.missingCredentialText}，暂时不能选。",
                         leading = index == 0
                     ) {
                         entry.models.forEach { model ->
                             row(key = model.id) {
+                                // A plan model goes by the name its account gives it, with its id underneath.
+                                val title = store.modelTitle(model.id, entry)
+                                val detail = if (entry.kind.usesAccountSignIn) {
+                                    model.id.takeIf { it != title }
+                                } else {
+                                    presetDetail(entry.kind, model.id)
+                                }
                                 AIRow(
                                     onClick = {
                                         store.changeProviders { it.activating(entry.id, model.id) }
-                                        onSwitch("已换成 ${entry.displayName} 的 ${model.id}。")
+                                        onSwitch("已换成 ${entry.displayName} 的 $title。")
                                     },
                                     enabled = hasKey
                                 ) {
-                                    ModelLabel(model.id, presetDetail(entry.kind, model.id), Modifier.weight(1f), dimmed = !hasKey)
+                                    ModelLabel(title, detail, Modifier.weight(1f), dimmed = !hasKey)
                                     if (providers.isInUse(model.id, entry.id)) {
-                                        AIGlyphIcon(
-                                            AIGlyph.CHECKMARK,
-                                            MaterialTheme.colorScheme.primary,
-                                            Modifier.size(17.dp).semantics { contentDescription = "正在用" }
+                                        JerreaderGlyph(
+                                            JerreaderIcon.CHECK,
+                                            jerreaderPalette.accent,
+                                            Modifier.size(18.dp).semantics { contentDescription = "正在用" }
                                         )
                                     }
                                 }
@@ -329,6 +358,7 @@ private fun ModelSwitcherSheet(
 private val AI_HELP_ITEMS = listOf(
     "供应商是什么" to "提供大模型接口的服务商，比如 Claude、ChatGPT、DeepSeek。Jerreader 自己不提供模型：你在服务商那里申请 API Key 填到这里，翻译时由 Jerreader 直接向它发请求，费用由服务商按用量收取。",
     "怎么添加" to "点“添加供应商”，选一家，填上 API Key 就可以。列表里没有的服务用“自定义”，填它的 API 地址、接口格式和模型 ID。",
+    "套餐" to "不想按量付 API 费用，可以在“添加供应商 › 套餐”里用订阅额度：ChatGPT 套餐用 ChatGPT 账号登录，翻译用 Plus、Pro 等套餐的额度（实验功能）；Claude 的 Max、Ultra 每月附带 API 额度，领取后用 Console 的 API Key 添加 Claude 即可。编程专用的套餐条款不允许用在这里，所以没有列出。",
     "换模型" to "一个供应商下面可以留几个模型。“Jerreader 正在用”的那一个负责翻译和句子结构分析；点“换模型”可以在所有填了密钥的供应商之间切换。",
     "接口格式和思考强度" to "点开某个模型可以单独设置。接口格式照服务商文档选，测试连接能通就对；思考强度越高，译得越慢、费用越高，日常翻译用“自动”即可。",
     "会发送什么" to "只发送你选中或输入的文字，以及必要的上下文。API Key 只保存在本机安全存储里，不会写进备份。"
@@ -342,8 +372,9 @@ private fun AIHelpSheet(onClose: () -> Unit) {
             AI_HELP_ITEMS.forEach { (title, text) ->
                 AISection {
                     row {
+                        // iOS gives each item 6 points more above and below than a plain row.
                         Column(
-                            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp),
+                            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             Text(title, style = MaterialTheme.typography.titleMedium)
@@ -365,9 +396,10 @@ private fun AddProviderSheet(
     providers: AIProviderSettings,
     keyed: Set<String>,
     onClose: () -> Unit,
-    onAdded: (String) -> Unit
+    onAdded: (String) -> Unit,
+    onOpenPlan: () -> Unit
 ) {
-    var custom by rememberSaveable { mutableStateOf(false) }
+    var mode by rememberSaveable { mutableStateOf(ADD_MODE_PRESET) }
     var setupRaw by rememberSaveable { mutableStateOf<String?>(null) }
     var help by rememberSaveable { mutableStateOf(false) }
     val setupKind = setupRaw?.let { AIProviderKind.fromRaw(it) }
@@ -388,15 +420,22 @@ private fun AddProviderSheet(
             )
         } else {
             val modePicker: @Composable () -> Unit = {
-                JerreaderSegmentedPicker(
-                    options = listOf(false to "预设", true to "自定义"),
-                    selected = custom,
-                    onSelect = { custom = it },
-                    // 26 points under the title and 21 above the list, as iOS places it.
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 1.dp, bottom = 3.dp)
+                // The 2.0 pill control: the chosen way sits on the theme colour.
+                JerreaderPillPicker(
+                    options = listOf(
+                        JerreaderPillOption(ADD_MODE_PRESET, "预设"),
+                        JerreaderPillOption(ADD_MODE_PLAN, "套餐"),
+                        JerreaderPillOption(ADD_MODE_CUSTOM, "自定义")
+                    ),
+                    selected = mode,
+                    onSelect = { mode = it },
+                    modifier = Modifier
+                        .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 10.dp)
+                        .semantics { contentDescription = "添加方式" }
+                        .testTag("addProviderMode")
                 )
             }
-            if (custom) {
+            if (mode == ADD_MODE_CUSTOM) {
                 ProviderSetupForm(
                     kind = AIProviderKind.OPENAI_COMPATIBLE,
                     store = store,
@@ -404,6 +443,20 @@ private fun AddProviderSheet(
                     onAdded = onAdded,
                     leading = AIBarAction("取消", onClick = onClose),
                     header = modePicker
+                )
+            } else if (mode == ADD_MODE_PLAN) {
+                PlanOptionsList(
+                    store = store,
+                    providers = providers,
+                    keyed = keyed,
+                    header = {
+                        AISheetBar("添加供应商", leading = AIBarAction("取消", onClick = onClose))
+                        modePicker()
+                    },
+                    // Claude's form is pushed inside the sheet, like a preset's.
+                    onAddClaude = { setupRaw = AIProviderKind.ANTHROPIC.raw },
+                    onOpenAccount = onOpenPlan,
+                    finish = onAdded
                 )
             } else {
                 Column(Modifier.fillMaxSize()) {
@@ -414,7 +467,7 @@ private fun AddProviderSheet(
                     )
                     modePicker()
                     AIListContent(sheet = true, rowHeight = AIListMetrics.iconRowHeight) {
-                        AISection(footer = "选一家，填上它的 API Key。没有列出的服务，用上面的“自定义”添加。") {
+                        AISection(footer = "选一家，填上它的 API Key。想用 ChatGPT 或 Claude 的订阅额度，看“套餐”；没有列出的服务，用“自定义”添加。") {
                             AIProviderKind.presets.forEach { kind ->
                                 row(divider = AIListMetrics.iconDivider, key = kind.raw) {
                                     val added = providers.hasSetUp(kind, keyed)
@@ -720,7 +773,7 @@ private fun ProviderDetailPage(
             AISection(title = "模型", footer = "点开模型可改接口格式、思考强度，或设为正在用。") {
                 entry.models.forEach { model ->
                     row(key = model.id) {
-                        AIRow(onClick = { openModel(model.id) }) {
+                        AIRow(modifier = Modifier.testTag("model-" + model.id), onClick = { openModel(model.id) }) {
                             ModelLabel(
                                 model.id,
                                 modelDetail(kind, model),
@@ -742,7 +795,14 @@ private fun ProviderDetailPage(
                 }
             }
             AISection(footer = if (isActive) "正在用的供应商不能删除。先用“换模型”换到别的供应商。" else null) {
-                row { AIActionRow("删除这个供应商", enabled = !isActive, destructive = true) { confirmDelete = true } }
+                row {
+                    AIActionRow(
+                        "删除这个供应商",
+                        enabled = !isActive,
+                        destructive = true,
+                        modifier = Modifier.testTag("deleteProviderButton")
+                    ) { confirmDelete = true }
+                }
             }
         }
     }
@@ -966,6 +1026,9 @@ private fun ModelDetailPage(
     val kind = entry.kind
     val inUse = providers.isInUse(modelID, entryID)
     val hasKey = entryID in keyed
+    // A ChatGPT plan model: named by its account, signed in instead of keyed, Responses only.
+    val isPlan = kind.usesAccountSignIn
+    val shownTitle = store.modelTitle(modelID, entry)
 
     // Saves a change to this model at once; an earlier test result no longer applies.
     fun update(changed: AIModelEntry) {
@@ -1013,13 +1076,21 @@ private fun ModelDetailPage(
         ) {
             AISection {
                 row(divider = 0.dp) {
-                    ProviderHeader(kind, entry.name, caption = null, title = modelID, detail = providers.displayName(entryID))
+                    ProviderHeader(
+                        kind,
+                        entry.name,
+                        caption = null,
+                        title = shownTitle,
+                        detail = if (isPlan && shownTitle != modelID) modelID else providers.displayName(entryID)
+                    )
                 }
             }
-            AISection(title = "接口格式", footer = "照服务商文档里写的格式选；测试连接通了就对。") {
-                row {
-                    // Gemini's own format is offered only to a model that already uses it.
-                    AIMenuRow("接口格式", styleOptions(model.style), model.style, { update(model.copy(style = it)) })
+            if (!isPlan) {
+                AISection(title = "接口格式", footer = "照服务商文档里写的格式选；测试连接通了就对。") {
+                    row {
+                        // Gemini's own format is offered only to a model that already uses it.
+                        AIMenuRow("接口格式", styleOptions(model.style), model.style, { update(model.copy(style = it)) })
+                    }
                 }
             }
             if (model.style.supportsReasoning) {
@@ -1040,7 +1111,13 @@ private fun ModelDetailPage(
                     }
                 }
             }
-            AISection(footer = "发送一句“Hello.”看这个模型能不能用，可能产生少量 API 费用。") {
+            AISection(
+                footer = if (isPlan) {
+                    "发送一句“Hello.”看这个模型能不能用，会用掉一点套餐额度。"
+                } else {
+                    "发送一句“Hello.”看这个模型能不能用，可能产生少量 API 费用。"
+                }
+            ) {
                 row {
                     AIRow(onClick = { test() }, enabled = !testing) {
                         Text(
@@ -1056,16 +1133,16 @@ private fun ModelDetailPage(
                     AIRow {
                         when (val result = outcome) {
                             is ModelTestOutcome.Passed -> {
-                                AIGlyphIcon(AIGlyph.CHECK_CIRCLE_FILLED, MaterialTheme.colorScheme.primary, Modifier.size(17.dp))
+                                JerreaderGlyph(JerreaderIcon.CHECK_CIRCLE, jerreaderPalette.jade, Modifier.size(18.dp))
                                 Text(
                                     "连接正常，用时 ${AIProviderRequests.seconds(result.seconds)} 秒",
                                     modifier = Modifier.weight(1f),
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.primary
+                                    color = jerreaderPalette.jade
                                 )
                             }
                             is ModelTestOutcome.Failed -> {
-                                AIGlyphIcon(AIGlyph.WARNING_FILLED, aiRed(), Modifier.size(17.dp))
+                                JerreaderGlyph(JerreaderIcon.WARNING, jerreaderPalette.vermilion, Modifier.size(18.dp))
                                 Text(
                                     result.message,
                                     modifier = Modifier.weight(1f),
@@ -1086,6 +1163,7 @@ private fun ModelDetailPage(
                 // The fresh default is in use without a key; it then needs the key to translate.
                 footer = when {
                     hasKey -> null
+                    isPlan -> if (inUse) "还没有登录 ChatGPT，登录后才能翻译。" else "还没有登录 ChatGPT，登录后才能设为正在用。"
                     inUse -> "这个供应商还没有填 API Key，填好后才能翻译。"
                     else -> "这个供应商还没有填 API Key，填好后才能设为正在用。"
                 }
@@ -1104,7 +1182,7 @@ private fun ModelDetailPage(
                             style = MaterialTheme.typography.bodyLarge,
                             color = if (!inUse && hasKey) MaterialTheme.colorScheme.primary else aiTertiary()
                         )
-                        if (inUse) AIGlyphIcon(AIGlyph.CHECKMARK, MaterialTheme.colorScheme.primary, Modifier.size(17.dp))
+                        if (inUse) JerreaderGlyph(JerreaderIcon.CHECK, jerreaderPalette.accent, Modifier.size(18.dp))
                     }
                 }
             }
@@ -1116,7 +1194,7 @@ private fun ModelDetailPage(
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
-            title = { Text("删除 $modelID？") },
+            title = { Text("删除 $shownTitle？") },
             text = { Text("只是从这个供应商的列表里移除，以后可以再添加。") },
             confirmButton = {
                 TextButton(onClick = {

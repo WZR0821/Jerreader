@@ -2,12 +2,14 @@ package com.jerreader.android.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -31,6 +33,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
@@ -55,21 +58,28 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -85,7 +95,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.jerreader.android.translation.AIAPIStyle
 import com.jerreader.android.translation.AIModelCatalogConfiguration
 import com.jerreader.android.translation.AIModelCatalogException
@@ -95,14 +104,21 @@ import com.jerreader.android.translation.AIProviderSettingsError
 import com.jerreader.android.translation.ConfiguredTranslationService
 import com.jerreader.android.translation.DirectAIConfiguration
 import com.jerreader.android.translation.RemoteAIModelCatalogService
+import com.jerreader.android.translation.chatgptplan.ChatGPTPlanError
+import com.jerreader.android.translation.chatgptplan.ChatGPTPlanServiceFailure
 import com.jerreader.shared.translation.TranslationFailure
+import com.jerreader.shared.ui.JerreaderEyebrow
 import com.jerreader.shared.ui.JerreaderGlyph
+import com.jerreader.shared.ui.JerreaderMotion
+import com.jerreader.shared.ui.JerreaderRadius
 import com.jerreader.shared.ui.PageSheetShape
 import com.jerreader.shared.ui.JerreaderIcon
-import com.jerreader.shared.ui.JerreaderRowChevron
 import com.jerreader.shared.ui.JerreaderRowSeparator
 import com.jerreader.shared.ui.JerreaderUpDownChevron
 import com.jerreader.shared.ui.JerreaderNavigationBar
+import com.jerreader.shared.ui.jerreaderCanvasBackground
+import com.jerreader.shared.ui.jerreaderPalette
+import com.jerreader.shared.ui.settingsHeaderStyle
 import java.util.Locale
 
 /*
@@ -134,6 +150,37 @@ internal fun aiRed(): Color = if (aiIsDark()) Color(0xFFFF453A) else Color(0xFFF
 @Composable
 internal fun aiPageMargin(): Dp = if (LocalConfiguration.current.screenWidthDp >= 400) 20.dp else 16.dp
 
+/**
+ * Tile colours of the settings rows, iOS `SettingsTint`: as in the system
+ * Settings app each kind of page keeps its own colour, and only 界面主题
+ * follows the theme.
+ */
+internal object SettingsTint {
+    /** 默认阅读排版 and the reading pages of the guide. */
+    val reading: Color
+        @Composable get() = jerreaderPalette.vermilion
+
+    /** 翻译与 AI. */
+    val translation: Color
+        @Composable get() = if (jerreaderPalette.isDark) Color(0xFF6FC3D1) else Color(0xFF227C8C)
+
+    /** AI 大模型 and AI 套餐. */
+    val models: Color
+        @Composable get() = if (jerreaderPalette.isDark) Color(0xFFB5A3F5) else Color(0xFF6D55C4)
+
+    /** 备份与恢复. */
+    val backup: Color
+        @Composable get() = jerreaderPalette.gold
+
+    /** 数据与隐私. */
+    val privacy: Color
+        @Composable get() = jerreaderPalette.jade
+
+    /** 操作指南 and other neutral rows. */
+    val guide: Color
+        @Composable get() = if (jerreaderPalette.isDark) Color(0xFFA4AEBB) else Color(0xFF5F6B7A)
+}
+
 /** The least height of a row; lists whose rows carry a provider mark are taller. */
 internal val LocalAIRowHeight = compositionLocalOf { 52.dp }
 
@@ -148,12 +195,15 @@ internal object AIListMetrics {
 
 // MARK: Glyphs the shared icon set does not have
 
-internal enum class AIGlyph { SPARKLE, SERVER, EYE, EYE_SLASH, ARROW_UP_RIGHT, EXCLAMATION_CIRCLE, CHECK_CIRCLE_FILLED, CIRCLE, WARNING_FILLED, CHECKMARK }
+internal enum class AIGlyph { SPARKLE, SERVER, EYE, EYE_SLASH, ARROW_UP_RIGHT, EXCLAMATION_CIRCLE, CHECK_CIRCLE_FILLED, CIRCLE, WARNING_FILLED, CHECKMARK, PERSON_CHECK }
 
 /** SF Symbols the AI pages use, drawn on the same 24-point grid as `JerreaderGlyph`. */
 @Composable
 internal fun AIGlyphIcon(glyph: AIGlyph, tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
+    // The filled symbols cut their mark out of the fill, as SF Symbols do, so
+    // a white one on a hero card still shows its check.
+    val cutOut = glyph == AIGlyph.CHECK_CIRCLE_FILLED || glyph == AIGlyph.WARNING_FILLED || glyph == AIGlyph.PERSON_CHECK
+    Canvas(if (cutOut) modifier.graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen } else modifier) {
         val unit = size.minDimension / 24f
         val dx = (size.width - size.minDimension) / 2f
         val dy = (size.height - size.minDimension) / 2f
@@ -196,13 +246,39 @@ internal fun AIGlyphIcon(glyph: AIGlyph, tint: Color, modifier: Modifier = Modif
             }
             AIGlyph.CHECK_CIRCLE_FILLED -> {
                 drawCircle(tint, radius = 10.2f * unit, center = p(12f, 12f))
-                drawPath(Path().apply {
-                    moveTo(dx + 7.4f * unit, dy + 12.3f * unit)
-                    lineTo(dx + 10.6f * unit, dy + 15.4f * unit)
-                    lineTo(dx + 16.6f * unit, dy + 9f * unit)
-                }, Color.White, style = Stroke(width = 2f * unit, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                drawPath(
+                    Path().apply {
+                        moveTo(dx + 7.4f * unit, dy + 12.3f * unit)
+                        lineTo(dx + 10.6f * unit, dy + 15.4f * unit)
+                        lineTo(dx + 16.6f * unit, dy + 9f * unit)
+                    },
+                    Color.Black,
+                    style = Stroke(width = 2f * unit, cap = StrokeCap.Round, join = StrokeJoin.Round),
+                    blendMode = BlendMode.Clear
+                )
             }
             AIGlyph.CIRCLE -> drawCircle(tint, radius = 9.8f * unit, center = p(12f, 12f), style = Stroke(width = 1.5f * unit))
+            // `person.crop.circle.badge.checkmark`: a person cropped by a ring,
+            // and a filled check badge on the lower right, set off by a gap.
+            AIGlyph.PERSON_CHECK -> {
+                val ring = Path().apply { addOval(Rect(p(1.6f, 2.1f), Size(17.8f * unit, 17.8f * unit))) }
+                drawPath(ring, tint, style = line)
+                drawCircle(tint, radius = 3.3f * unit, center = p(10.5f, 8.7f))
+                val body = Path().apply { addOval(Rect(p(4.1f, 13.6f), Size(12.8f * unit, 9.6f * unit))) }
+                drawPath(Path().apply { op(ring, body, PathOperation.Intersect) }, tint)
+                drawCircle(Color.Black, radius = 6.3f * unit, center = p(18f, 17.6f), blendMode = BlendMode.Clear)
+                drawCircle(tint, radius = 4.9f * unit, center = p(18f, 17.6f))
+                drawPath(
+                    Path().apply {
+                        moveTo(dx + 15.8f * unit, dy + 17.7f * unit)
+                        lineTo(dx + 17.4f * unit, dy + 19.3f * unit)
+                        lineTo(dx + 20.3f * unit, dy + 16.1f * unit)
+                    },
+                    Color.Black,
+                    style = Stroke(width = 1.7f * unit, cap = StrokeCap.Round, join = StrokeJoin.Round),
+                    blendMode = BlendMode.Clear
+                )
+            }
             // `checkmark` at semibold, measured off the iOS list: at 17 points
             // its ink is 15 wide and 14.7 tall, 2 short of the right edge, with
             // a stroke of about 2.2.
@@ -220,8 +296,15 @@ internal fun AIGlyphIcon(glyph: AIGlyph, tint: Color, modifier: Modifier = Modif
                 }
                 drawPath(triangle, tint)
                 drawPath(triangle, tint, style = Stroke(width = 2f * unit, join = StrokeJoin.Round))
-                drawLine(Color.White, p(12f, 9.2f), p(12f, 13.8f), strokeWidth = 1.9f * unit, cap = StrokeCap.Round)
-                drawCircle(Color.White, radius = 1.1f * unit, center = p(12f, 16.9f))
+                drawLine(
+                    Color.Black,
+                    p(12f, 9.2f),
+                    p(12f, 13.8f),
+                    strokeWidth = 1.9f * unit,
+                    cap = StrokeCap.Round,
+                    blendMode = BlendMode.Clear
+                )
+                drawCircle(Color.Black, radius = 1.1f * unit, center = p(12f, 16.9f), blendMode = BlendMode.Clear)
             }
         }
     }
@@ -278,7 +361,8 @@ internal fun AISection(
                     .then(if (leading) Modifier.offset(y = -AIListMetrics.topMargin) else Modifier)
                     .padding(start = 20.dp, end = 20.dp, top = 1.3.dp, bottom = 6.4.dp)
                     .semantics { heading() },
-                style = MaterialTheme.typography.bodySmall,
+                // 2.0: every settings page titles its groups in `settingsHeader()`.
+                style = settingsHeaderStyle,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
@@ -305,7 +389,8 @@ private fun AISectionFooter(text: String, warn: Boolean) {
         Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 5.3.dp, bottom = 12.3.dp),
         horizontalArrangement = Arrangement.spacedBy(7.6.dp)
     ) {
-        if (warn) AIGlyphIcon(AIGlyph.EXCLAMATION_CIRCLE, color, Modifier.padding(top = 1.2.dp).size(15.6.dp))
+        // 2.0: the missing-key hint leads with a 15-point triangle.
+        if (warn) JerreaderGlyph(JerreaderIcon.WARNING, color, Modifier.padding(top = 1.dp).size(15.dp))
         Text(text, style = MaterialTheme.typography.bodySmall, color = color)
     }
 }
@@ -335,8 +420,14 @@ internal fun AIRow(
 
 /** A plain list `Button`: accent text, red when destructive, grey when disabled. */
 @Composable
-internal fun AIActionRow(title: String, enabled: Boolean = true, destructive: Boolean = false, onClick: () -> Unit) {
-    AIRow(onClick = onClick, enabled = enabled) {
+internal fun AIActionRow(
+    title: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    destructive: Boolean = false,
+    onClick: () -> Unit
+) {
+    AIRow(modifier = modifier, onClick = onClick, enabled = enabled) {
         Text(
             title,
             style = MaterialTheme.typography.bodyLarge,
@@ -349,21 +440,36 @@ internal fun AIActionRow(title: String, enabled: Boolean = true, destructive: Bo
     }
 }
 
+/** 2.0 row chevron: `chevron.right` at 16 points in tertiaryLabel. */
 @Composable
 internal fun AIChevron() {
-    JerreaderRowChevron(aiTertiary())
+    JerreaderGlyph(JerreaderIcon.CHEVRON_RIGHT, aiTertiary(), Modifier.size(16.dp))
 }
 
-/** A provider's mark: its colour with a letter, or a symbol for Gemini and a custom service. */
+/**
+ * A provider's mark: its colour with a letter, or a symbol for Gemini and a
+ * custom service. [edge] is the hairline around it; null gives white 10% in
+ * dark mode and none in light mode, as iOS draws a mark without a logo.
+ */
 @Composable
-internal fun ProviderIcon(kind: AIProviderKind, name: String?, size: Dp) {
+internal fun ProviderIcon(
+    kind: AIProviderKind,
+    name: String?,
+    size: Dp,
+    modifier: Modifier = Modifier,
+    edge: Color? = null
+) {
     val tint = Color(0xFF000000L or kind.tint)
     val letter = if (kind.isCustom) name?.trim()?.firstOrNull()?.uppercase() else kind.monogram
+    val dark = jerreaderPalette.isDark
+    val shape = RoundedCornerShape(size * 0.28f)
+    val edgeColor = edge ?: if (dark) Color.White.copy(alpha = 0.10f) else Color.Transparent
     Box(
-        Modifier
+        modifier
             .size(size)
-            .clip(RoundedCornerShape(size * 0.27f))
+            .clip(shape)
             .background(Brush.verticalGradient(listOf(lerp(tint, Color.White, 0.16f), tint)))
+            .then(if (edgeColor.alpha > 0f) Modifier.border(if (dark) 1.dp else 0.75.dp, edgeColor, shape) else Modifier)
             .clearAndSetSemantics {},
         contentAlignment = Alignment.Center
     ) {
@@ -381,19 +487,18 @@ internal fun ProviderIcon(kind: AIProviderKind, name: String?, size: Dp) {
     }
 }
 
-/** 正在用 / 推荐: a small accent capsule after a title. */
+/** 正在用 / 推荐: a small capsule after a title, in the accent unless [tint] says otherwise (white on a hero card). */
 @Composable
-internal fun AITagLabel(text: String) {
-    val accent = MaterialTheme.colorScheme.primary
+internal fun AITagLabel(text: String, modifier: Modifier = Modifier, tint: Color = jerreaderPalette.accent) {
     Text(
         text,
-        modifier = Modifier
+        modifier = modifier
             .clip(RoundedCornerShape(50))
-            .background(accent.copy(alpha = 0.14f))
+            .background(tint.copy(alpha = 0.14f))
             .padding(horizontal = 7.dp, vertical = 2.5.dp),
         style = MaterialTheme.typography.labelSmall,
         fontWeight = FontWeight.SemiBold,
-        color = accent,
+        color = tint,
         maxLines = 1
     )
 }
@@ -486,20 +591,16 @@ internal fun RowScope.AIValueRowContent(title: String, value: String, warn: Bool
 /** A row that folds the rows after it, without indenting them. */
 @Composable
 internal fun AIDisclosureRow(title: String, expanded: Boolean, onToggle: () -> Unit, enabled: Boolean = true) {
+    // iOS turns the chevron with the stateChange spring.
+    val turn by animateFloatAsState(if (expanded) 0f else -90f, JerreaderMotion.stateChange(), label = "disclosure")
     AIRow(
         modifier = Modifier.semantics { stateDescription = if (expanded) "已展开" else "已收起" },
         onClick = onToggle,
         enabled = enabled
     ) {
         Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-        // `chevron.down`, turned to point right while folded, centred 27.6
-        // points in from the card's edge as on iOS.
-        JerreaderRowChevron(
-            aiTertiary(),
-            Modifier.size(width = 15.3.dp, height = 13.dp),
-            rotation = if (expanded) 90f else 0f,
-            alignEnd = false
-        )
+        // 2.0: `chevron.down` at 16 points, turned to point right while folded.
+        JerreaderGlyph(JerreaderIcon.CHEVRON_DOWN, aiTertiary(), Modifier.size(16.dp).rotate(turn))
     }
 }
 
@@ -530,14 +631,8 @@ internal fun ProviderHeader(kind: AIProviderKind, name: String?, caption: String
     ) {
         ProviderIcon(kind, name, 48.dp)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            if (caption != null) {
-                Text(
-                    caption,
-                    style = MaterialTheme.typography.bodySmall.copy(lineHeight = 15.5.sp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
-                )
-            }
+            // 2.0: the caption is an accent eyebrow.
+            if (caption != null) JerreaderEyebrow(caption)
             Text(
                 title,
                 style = MaterialTheme.typography.titleLarge,
@@ -569,10 +664,43 @@ internal fun AICheckRow(id: String, detail: String?, checked: Boolean, enabled: 
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         ModelLabel(id, detail, Modifier.weight(1f))
-        AIGlyphIcon(
-            if (checked) AIGlyph.CHECK_CIRCLE_FILLED else AIGlyph.CIRCLE,
-            if (checked) MaterialTheme.colorScheme.primary else aiTertiary(),
-            Modifier.size(23.dp)
+        SettingsCheckMark(checked)
+    }
+}
+
+/**
+ * The round check of a multiple choice, iOS `SettingsCheckMark`: an empty
+ * ring when off; when on, an accent disc grows from 60% with a check on it.
+ * It springs between the two with stateChange. Hidden from accessibility: the
+ * row says whether it is checked.
+ */
+@Composable
+internal fun SettingsCheckMark(isOn: Boolean, modifier: Modifier = Modifier) {
+    val colors = jerreaderPalette
+    val ring = aiTertiary()
+    val progress by animateFloatAsState(if (isOn) 1f else 0f, JerreaderMotion.stateChange(), label = "check")
+    Box(modifier.size(24.dp).clearAndSetSemantics {}, contentAlignment = Alignment.Center) {
+        Box(
+            Modifier
+                .matchParentSize()
+                .graphicsLayer { alpha = (1f - progress).coerceIn(0f, 1f) }
+                .border(1.5.dp, ring, CircleShape)
+        )
+        Box(
+            Modifier
+                .matchParentSize()
+                .graphicsLayer {
+                    val scale = 0.6f + 0.4f * progress
+                    scaleX = scale
+                    scaleY = scale
+                    alpha = progress.coerceIn(0f, 1f)
+                }
+                .background(colors.accent, CircleShape)
+        )
+        JerreaderGlyph(
+            JerreaderIcon.CHECK,
+            colors.onAccent,
+            Modifier.size(14.dp).graphicsLayer { alpha = progress.coerceIn(0f, 1f) }
         )
     }
 }
@@ -581,17 +709,19 @@ internal fun AICheckRow(id: String, detail: String?, checked: Boolean, enabled: 
 
 @Composable
 internal fun AIErrorBanner(message: String) {
-    // Red marks the state; the message stays in the primary colour so a long
-    // provider message remains easy to read.
+    // 2.0: vermilion marks the state; the message stays in the primary colour
+    // so a long provider message remains easy to read.
+    val vermilion = jerreaderPalette.vermilion
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(aiRed().copy(alpha = 0.10f))
-            .padding(horizontal = 14.dp, vertical = 12.dp),
+            .clip(RoundedCornerShape(JerreaderRadius.control))
+            .background(vermilion.copy(alpha = 0.10f))
+            .padding(horizontal = 14.dp, vertical = 12.dp)
+            .testTag("errorBanner"),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        AIGlyphIcon(AIGlyph.WARNING_FILLED, aiRed(), Modifier.padding(top = 1.dp).size(17.dp))
+        JerreaderGlyph(JerreaderIcon.WARNING, vermilion, Modifier.padding(top = 1.dp).size(18.dp))
         Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
     }
 }
@@ -605,16 +735,24 @@ internal fun AIFeedback(error: String?, notice: String?) {
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         if (error != null) AIErrorBanner(error)
-        if (notice != null) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                AIGlyphIcon(AIGlyph.CHECK_CIRCLE_FILLED, MaterialTheme.colorScheme.primary, Modifier.size(17.dp))
-                Text(notice, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
-            }
-        }
+        if (notice != null) AINoticeRow(notice)
+    }
+}
+
+/**
+ * 2.0: a done notice is jade, with an 18-point check-circle level with its
+ * first line, as a SwiftUI `Label` sets it. The backup centre shows its
+ * results the same way.
+ */
+@Composable
+internal fun AINoticeRow(notice: String, modifier: Modifier = Modifier) {
+    val jade = jerreaderPalette.jade
+    Row(
+        modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp).testTag("settingsNotice"),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        JerreaderGlyph(JerreaderIcon.CHECK_CIRCLE, jade, Modifier.size(18.dp))
+        Text(notice, style = MaterialTheme.typography.bodyMedium, color = jade)
     }
 }
 
@@ -948,7 +1086,7 @@ internal fun <T : Any> AISheetHost(value: T?, onDismiss: () -> Unit, content: @C
                         Modifier
                             .fillMaxSize()
                             .clip(PageSheetShape)
-                            .background(MaterialTheme.colorScheme.background)
+                            .jerreaderCanvasBackground()
                     ) {
                         // Composed before the content, so a back handler inside
                         // the sheet (a pushed page) is asked first.
@@ -992,8 +1130,12 @@ internal fun AIPageFrame(
 ) {
     Box(Modifier.fillMaxSize()) {
         Scaffold(
-            modifier = if (sheet != null) Modifier.clearAndSetSemantics {} else Modifier,
-            containerColor = MaterialTheme.colorScheme.background,
+            // The 2.0 canvas with its accent wash, as iOS `settingsListStyle()` draws it.
+            modifier = Modifier
+                .jerreaderCanvasBackground()
+                .then(if (sheet != null) Modifier.clearAndSetSemantics {} else Modifier),
+            containerColor = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.onBackground,
             topBar = { JerreaderNavigationBar(title, backTitle, onBack, trailing) },
             bottomBar = bottomBar,
             content = content
@@ -1040,7 +1182,7 @@ internal fun AIFetchedModelPicker(
                 Text(
                     "账户返回的模型",
                     modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 2.dp, bottom = 6.dp).semantics { heading() },
-                    style = MaterialTheme.typography.bodySmall,
+                    style = settingsHeaderStyle,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
@@ -1116,7 +1258,8 @@ internal class AIProviderRequests(
 
         /** What to show for a failed request: the provider's or the settings' own words. */
         fun message(error: Throwable): String = when (error) {
-            is TranslationFailure, is AIModelCatalogException, is AIProviderSettingsError ->
+            is TranslationFailure, is AIModelCatalogException, is AIProviderSettingsError,
+            is ChatGPTPlanError, is ChatGPTPlanServiceFailure ->
                 error.message?.takeIf { it.isNotBlank() } ?: FALLBACK
             else -> FALLBACK
         }

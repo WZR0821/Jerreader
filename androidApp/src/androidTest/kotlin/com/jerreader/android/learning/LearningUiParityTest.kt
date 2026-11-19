@@ -293,6 +293,15 @@ class LearningUiParityTest {
             waitFor("Jerreader 正在用"); waitFor("这个供应商还没有填 API Key，填好后才能翻译。")
             capture("android-ai-models")
             tap("添加供应商"); waitFor("推荐"); capture("android-ai-add-provider")
+            // 套餐: the ChatGPT plan card and Claude's API credits. Nothing here
+            // signs in or opens a page, so the test stays offline.
+            tap("套餐"); waitFor("Continue with ChatGPT"); waitFor("Claude 套餐额度")
+            check(find("账号与模型") == null) { "Signed out, there is no account row" }
+            capture("android-ai-add-provider-plan")
+            reveal("Coding Plan、Token Plan 这类编程套餐的条款只允许在编程工具里使用，阅读翻译不在其列，所以这里不提供。")
+            waitFor("Claude Max / Ultra 的 API 额度")
+            capture("android-ai-add-provider-plan-claude")
+            tap("预设"); waitFor("推荐")
             tap("Claude"); waitFor("claude-sonnet-5-5")
             tap("显示密钥"); setInput("sk-ui-fixture")
             reveal("测试连接"); tap("测试连接"); waitFor("连接正常，用时 0.4 秒。点“添加”保存。")

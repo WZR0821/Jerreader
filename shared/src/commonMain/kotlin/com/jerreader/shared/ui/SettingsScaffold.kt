@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -36,12 +35,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.Surface
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -62,11 +57,13 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 
@@ -86,7 +83,10 @@ fun SettingsPage(
     // A pushed page is a plain iOS `Form`, spaced as measured there.
     val form = onBack != null
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
+        // The 2.0 canvas, with its faint accent wash, as iOS draws behind every settings list.
+        modifier = Modifier.jerreaderCanvasBackground(),
+        containerColor = Color.Transparent,
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             if (onBack == null) {
                 Column(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 16.dp)) {
@@ -106,11 +106,27 @@ fun SettingsPage(
                 .padding(top = if (form) 16.dp else 20.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(if (form) PlainFormGroupSpacing else 22.dp)
         ) {
-            if (form) CompositionLocalProvider(LocalGroupedFormSpacing provides PlainFormSpacing) { content() } else content()
+            CompositionLocalProvider(LocalSettingsHeader provides true) {
+                if (form) CompositionLocalProvider(LocalGroupedFormSpacing provides PlainFormSpacing) { content() } else content()
+            }
         }
         }
     }
 }
+
+/**
+ * The 2.0 group title of every settings page, iOS `settingsHeader()`:
+ * footnote semibold with 0.6 tracking, in the secondary colour.
+ */
+val settingsHeaderStyle: TextStyle
+    @Composable get() = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.6.sp)
+
+/**
+ * True on the pages of 设置 redesigned for 2.0 (and on 翻译与 AI wherever it
+ * opens): [SettingsGroup] titles there use [settingsHeaderStyle]. The reader
+ * and library panels that share [SettingsGroup] keep their own titles.
+ */
+val LocalSettingsHeader = staticCompositionLocalOf { false }
 
 /**
  * How the groups of an iOS `Form` sit apart beyond the list's own spacing:
@@ -150,11 +166,29 @@ fun SettingsGroup(
     footer: String? = null,
     compact: Boolean = false,
     accentedHeader: Boolean = false,
+    headerDetail: String? = null,
     content: @Composable () -> Unit
 ) {
     val formSpacing = if (compact) null else LocalGroupedFormSpacing.current
+    val header2 = !compact && LocalSettingsHeader.current
     Column(modifier = modifier.fillMaxWidth()) {
-        if (title.isNotEmpty()) Row(
+        if (title.isNotEmpty() && header2) Row(
+            // 2.0 `settingsHeader()`; an accented title (`SettingsSectionHeader`)
+            // leads with its 15-point icon in the same grey. A [headerDetail]
+            // sits at the far end in `.caption`, as the backup list's count does.
+            modifier = Modifier
+                .then(if (headerDetail != null) Modifier.fillMaxWidth().padding(end = 20.dp) else Modifier)
+                .padding(start = 20.dp, bottom = 5.5.dp)
+                .semantics { heading() },
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            if (accentedHeader) JerreaderGlyph(icon, MaterialTheme.colorScheme.onSurfaceVariant, Modifier.size(15.dp))
+            Text(title, style = settingsHeaderStyle, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (headerDetail != null) {
+                Spacer(Modifier.weight(1f))
+                Text(headerDetail, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else if (title.isNotEmpty()) Row(
             // iOS sets an accented title 8 points above its card, a plain one 9.
             modifier = Modifier.padding(
                 start = if (compact) 5.dp else 20.dp,
@@ -568,10 +602,11 @@ fun SettingsWarningNote(
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            // 2.0: a 15-point triangle.
             JerreaderGlyph(
                 icon = JerreaderIcon.WARNING,
                 tint = warning,
-                modifier = Modifier.padding(top = 2.dp).size(14.dp)
+                modifier = Modifier.padding(top = 1.5.dp).size(15.dp)
             )
             Text(
                 text,

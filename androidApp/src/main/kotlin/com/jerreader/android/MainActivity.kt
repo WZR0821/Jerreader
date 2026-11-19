@@ -50,6 +50,7 @@ import androidx.core.net.toUri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     private val graph: AppGraph
@@ -135,7 +136,11 @@ class MainActivity : ComponentActivity() {
                     AndroidAppTab.LIBRARY -> JerreaderLibraryApp(
                         state = state,
                         onImport = { mimeTypes -> choosePublication.launch(mimeTypes.toTypedArray()) },
-                        onOpenBook = ::openBook,
+                        onOpenBook = { openBook(it) },
+                        // Opens the reader by scaling up from the tapped cover.
+                        onOpenBookAt = { bookId, cover -> openBook(bookId, cover) },
+                        // The shelf's date line ("11月19日 星期四") in local time.
+                        utcOffsetMillisAt = { java.util.TimeZone.getDefault().getOffset(it) },
                         onDeleteBook = viewModel::deleteBook,
                         onRestoreBackup = {
                             settingsRoute = SettingsRoute.BACKUP_IMPORT
@@ -247,13 +252,28 @@ class MainActivity : ComponentActivity() {
         source?.let(viewModel::importPublication)
     }
 
-    private fun openBook(bookId: String) {
+    /**
+     * Opens the reader. With [cover] (the tapped cover in window pixels) the
+     * reader scales up from it, the Android counterpart of the iOS zoom
+     * transition; without it the system's default activity animation runs.
+     */
+    private fun openBook(bookId: String, cover: androidx.compose.ui.geometry.Rect? = null) {
         lifecycleScope.launch {
             val book = graph.repository.book(bookId)
+            val options = cover?.takeIf { it.width >= 1f && it.height >= 1f }?.let {
+                androidx.core.app.ActivityOptionsCompat.makeScaleUpAnimation(
+                    window.decorView,
+                    it.left.roundToInt(),
+                    it.top.roundToInt(),
+                    it.width.roundToInt(),
+                    it.height.roundToInt()
+                ).toBundle()
+            }
             startActivity(
                 Intent(this@MainActivity, ReaderActivity::class.java)
                     .putExtra(ReaderActivity.EXTRA_BOOK_ID, bookId)
-                    .putExtra(ReaderActivity.EXTRA_SOURCE_FORMAT, book?.sourceFormat)
+                    .putExtra(ReaderActivity.EXTRA_SOURCE_FORMAT, book?.sourceFormat),
+                options
             )
         }
     }

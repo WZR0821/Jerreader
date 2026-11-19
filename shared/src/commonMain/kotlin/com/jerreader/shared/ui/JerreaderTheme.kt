@@ -3,6 +3,7 @@ package com.jerreader.shared.ui
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
@@ -23,13 +24,12 @@ import androidx.compose.ui.unit.Density
 
 /**
  * Compose port of the iOS `JerreaderTheme` tokens, kept in step with
- * `Jerreader/App/JerreaderTheme.swift` so both platforms render the same cool,
- * paper-like hierarchy instead of the stock Material palette.
+ * `Jerreader/App/JerreaderTheme.swift` so both platforms render the same
+ * hierarchy instead of the stock Material palette.
  *
- * From 1.1.0 the canvas and paper tones are fixed cool blue-greys rather than
- * being tinted by the chosen accent. Deriving them from the accent made the
- * amber and berry themes read warm and washed out; the accent now only shows in
- * controls, outlines and marks, and every theme sits on the same cool page.
+ * 2.0「纸墨」: every theme sits on the same warm paper (dark: ink) and the
+ * chosen accent only shows in controls, marks and hero cards. The values are
+ * written as hex in docs/DESIGN_2.0.md and must match the Swift ones.
  */
 enum class JerreaderAccent(val title: String, val detail: String) {
     OCEAN("海蓝", "沉静的蓝灰色系"),
@@ -38,12 +38,22 @@ enum class JerreaderAccent(val title: String, val detail: String) {
     AMBER("琥珀", "温暖的黄金与棕色系"),
     BERRY("莓红", "清晰的玫红色系");
 
-    internal fun rgb(dark: Boolean): Triple<Float, Float, Float> = when (this) {
-        OCEAN -> if (dark) Triple(0.46f, 0.72f, 0.88f) else Triple(0.18f, 0.41f, 0.60f)
-        FOREST -> if (dark) Triple(0.42f, 0.76f, 0.62f) else Triple(0.16f, 0.43f, 0.34f)
-        WISTERIA -> if (dark) Triple(0.68f, 0.61f, 0.91f) else Triple(0.39f, 0.31f, 0.61f)
-        AMBER -> if (dark) Triple(0.91f, 0.68f, 0.34f) else Triple(0.55f, 0.35f, 0.10f)
-        BERRY -> if (dark) Triple(0.90f, 0.52f, 0.68f) else Triple(0.58f, 0.22f, 0.38f)
+    /** `0xRRGGBB` of the accent in light or dark mode. */
+    internal fun hex(dark: Boolean): Long = when (this) {
+        OCEAN -> if (dark) 0x8DBCE8 else 0x2C5D8F
+        FOREST -> if (dark) 0x7FC8A6 else 0x2E6B53
+        WISTERIA -> if (dark) 0xB7A9F0 else 0x5B4C9C
+        AMBER -> if (dark) 0xEBB56A else 0x94601C
+        BERRY -> if (dark) 0xEE91B6 else 0x9A3A62
+    }
+
+    internal fun rgb(dark: Boolean): Triple<Float, Float, Float> {
+        val value = hex(dark)
+        return Triple(
+            ((value shr 16) and 0xFF) / 255f,
+            ((value shr 8) and 0xFF) / 255f,
+            (value and 0xFF) / 255f
+        )
     }
 }
 
@@ -57,21 +67,31 @@ data class JerreaderColors(
     val mutedSurface: Color,
     val line: Color,
     val onAccent: Color,
-    val secondaryText: Color
+    val secondaryText: Color,
+    /** The light-mode accent in both modes: the deep end of a hero gradient. */
+    val accentDeep: Color = accent,
+    /** 朱: due reviews and reminders. */
+    val vermilion: Color = Color(0xFFC8513A),
+    /** 金: streaks and achievements. */
+    val gold: Color = Color(0xFFB07F28),
+    /** 青: mastered, done. */
+    val jade: Color = Color(0xFF3C8A66),
+    /** 墨: the dark end of a hero gradient. */
+    val ink: Color = Color(0xFF1B2433),
+    val isDark: Boolean = false
 )
+
+/** `0xRRGGBB` as an opaque colour. */
+internal fun jerreaderHex(value: Long, alpha: Float = 1f): Color =
+    Color(0xFF000000 or value).copy(alpha = alpha)
 
 val LocalJerreaderColors = staticCompositionLocalOf {
     jerreaderColors(JerreaderAccent.OCEAN, dark = false)
 }
 
 fun jerreaderColors(accent: JerreaderAccent, dark: Boolean): JerreaderColors {
-    val (red, green, blue) = accent.rgb(dark)
-    val accentColor = Color(red, green, blue)
-    val canvas = if (dark) {
-        Color(0.040f, 0.065f, 0.090f)
-    } else {
-        Color(0.941f, 0.961f, 0.975f)
-    }
+    val accentColor = jerreaderHex(accent.hex(dark))
+    val canvas = jerreaderHex(if (dark) 0x101215 else 0xF4F1EA)
     return JerreaderColors(
         accent = accentColor,
         // Keep alpha, as SwiftUI does: the same token is drawn on canvas, paper, or a card.
@@ -80,24 +100,30 @@ fun jerreaderColors(accent: JerreaderAccent, dark: Boolean): JerreaderColors {
         paper = surface(dark, level = 0),
         raisedPaper = surface(dark, level = 1),
         mutedSurface = surface(dark, level = -1),
-        line = accentColor.copy(alpha = if (dark) 0.28f else 0.18f),
-        onAccent = if (dark) Color(0.025f, 0.04f, 0.05f) else Color.White,
+        line = jerreaderHex(if (dark) 0x2B3038 else 0xE3DCCD),
+        onAccent = if (dark) jerreaderHex(0x0B0F14) else Color.White,
         secondaryText = (if (dark) Color(0.922f, 0.922f, 0.961f) else Color(0.235f, 0.235f, 0.263f))
-            .copy(alpha = 0.60f)
+            .copy(alpha = 0.60f),
+        accentDeep = jerreaderHex(accent.hex(dark = false)),
+        vermilion = jerreaderHex(if (dark) 0xF08A6E else 0xC8513A),
+        gold = jerreaderHex(if (dark) 0xE5BC62 else 0xB07F28),
+        jade = jerreaderHex(if (dark) 0x72CC9E else 0x3C8A66),
+        ink = jerreaderHex(if (dark) 0x0B0E13 else 0x1B2433),
+        isDark = dark
     )
 }
 
 private fun surface(dark: Boolean, level: Int): Color = if (dark) {
     when {
-        level > 0 -> Color(0.095f, 0.145f, 0.185f)
-        level < 0 -> Color(0.028f, 0.055f, 0.080f)
-        else -> Color(0.060f, 0.100f, 0.135f)
+        level > 0 -> jerreaderHex(0x20242A)
+        level < 0 -> jerreaderHex(0x0B0D10)
+        else -> jerreaderHex(0x181B20)
     }
 } else {
     when {
-        level > 0 -> Color(0.985f, 0.993f, 0.998f)
-        level < 0 -> Color(0.885f, 0.925f, 0.953f)
-        else -> Color(0.965f, 0.978f, 0.989f)
+        level > 0 -> jerreaderHex(0xFFFFFF)
+        level < 0 -> jerreaderHex(0xEBE6DB)
+        else -> jerreaderHex(0xFFFDF8)
     }
 }
 
@@ -244,12 +270,20 @@ fun JerreaderTheme(
     val systemDensity = LocalDensity.current
     val interfaceDensity = Density(systemDensity.density,
         systemDensity.fontScale.coerceIn(0.5f, 19f / 17f))
+    val scheme = jerreaderColorScheme(accent, dark)
     CompositionLocalProvider(LocalJerreaderColors provides colors, LocalDensity provides interfaceDensity) {
         MaterialTheme(
-            colorScheme = jerreaderColorScheme(accent, dark),
+            colorScheme = scheme,
             shapes = jerreaderShapes,
-            typography = jerreaderTypography,
-            content = content
-        )
+            typography = jerreaderTypography
+        ) {
+            // Text with no colour of its own takes LocalContentColor, which is
+            // black until a Surface sets it. The 2.0 pages paint their own
+            // canvas behind transparent scaffolds (contentColorFor(Transparent)
+            // falls back to LocalContentColor), so start from the theme's
+            // foreground, as iOS `.primary` does; otherwise titles stay black
+            // on the dark canvas.
+            CompositionLocalProvider(LocalContentColor provides scheme.onBackground, content = content)
+        }
     }
 }

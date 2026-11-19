@@ -406,6 +406,8 @@ struct TranslateToolView: View {
     @State private var wordLookupErrorMessage: String?
     @State private var referenceDictionaryTerm: ReferenceDictionaryTerm?
     @State private var learningAlert: LearningAlert?
+    /// How far the swap arrows have turned, in degrees.
+    @State private var swapTurn: Double = 0
     @FocusState private var isInputFocused: Bool
 
     private let lexicalLookupService: any LexicalLookupService
@@ -454,7 +456,7 @@ struct TranslateToolView: View {
             FillStack {
                 modeAndProviderBar
                 translatorCard
-                    .padding(.top, 14)
+                    .padding(.top, 12)
                     .stretch(.infinity)
                     .squeezes()
                 if let errorMessage {
@@ -466,7 +468,8 @@ struct TranslateToolView: View {
                     .shrinks()
             }
             .padding(.horizontal, JerreaderTheme.pagePadding)
-            .padding(.vertical, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 16)
             .frame(maxWidth: 720)
             .frame(maxWidth: .infinity)
         }
@@ -536,14 +539,13 @@ struct TranslateToolView: View {
                     JerreaderSymbol(name: "chevron.down", size: 13)
                         .foregroundStyle(.secondary)
                 }
-                .padding(.horizontal, 4)
+                .padding(.horizontal, 16)
                 .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                .contentShape(Rectangle())
-                .overlay(alignment: .bottom) {
-                    Rectangle()
-                        .fill(JerreaderTheme.line)
-                        .frame(height: 0.5)
-                }
+                .background(
+                    JerreaderTheme.mutedSurface,
+                    in: RoundedRectangle(cornerRadius: JerreaderRadius.control, style: .continuous)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: JerreaderRadius.control, style: .continuous))
             }
             .buttonStyle(.plain)
             .accessibilityLabel("翻译服务：\(provider.title)")
@@ -551,33 +553,24 @@ struct TranslateToolView: View {
         }
     }
 
-    /// Spare height goes mostly to the result: the input grows a little, the
-    /// output takes the rest. When height is short, the output gives way.
+    /// The language bar, the input and the result are three paper cards, 8
+    /// points apart. Spare height goes mostly to the result: the input grows
+    /// a little, the output takes the rest. When height is short, the output
+    /// gives way.
     private var translatorCard: some View {
         FillStack {
             languageBar
 
-            Divider()
-
             sourceInput
+                .jerreaderPaperCard(padding: 0, radius: JerreaderRadius.card)
+                .padding(.top, 8)
                 .stretch(30)
 
-            Divider()
-                .padding(.horizontal, 14)
-
             translationOutput
+                .jerreaderPaperCard(padding: 0, radius: JerreaderRadius.card)
+                .padding(.top, 8)
                 .stretch(.infinity)
                 .squeezes()
-        }
-        .background(
-            JerreaderTheme.paper,
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-        )
-        // The language bar's tint follows the card's rounded corners.
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(JerreaderTheme.line, lineWidth: 0.8)
         }
     }
 
@@ -671,14 +664,26 @@ struct TranslateToolView: View {
                 }
             }
 
-            Button(action: swapLanguages) {
+            Button {
+                // Half a turn per swap; with Reduce Motion the arrows stay put.
+                if !reduceMotion {
+                    withAnimation(JerreaderMotion.stateChange) {
+                        swapTurn += 180
+                    }
+                }
+                swapLanguages()
+            } label: {
                 JerreaderSymbol(name: "arrow.left.arrow.right", size: 18)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(
                         canSwapLanguages ? JerreaderTheme.accent : Color.secondary
                     )
+                    .rotationEffect(.degrees(swapTurn))
                     .frame(width: 44, height: 44)
-                    .background(JerreaderTheme.accentFill.opacity(0.70), in: Circle())
+                    .background(
+                        canSwapLanguages ? JerreaderTheme.accentFill : JerreaderTheme.mutedSurface,
+                        in: Circle()
+                    )
             }
             .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.9))
             .disabled(!canSwapLanguages)
@@ -701,9 +706,9 @@ struct TranslateToolView: View {
                 }
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(JerreaderTheme.mutedSurface.opacity(0.72))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .jerreaderPaperCard(padding: 0, radius: JerreaderRadius.card)
     }
 
     private func languageMenu<Content: View>(
@@ -771,23 +776,8 @@ struct TranslateToolView: View {
 
     private var translationOutput: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                JerreaderLabel(title: targetLanguage.displayName, icon: "text.bubble", size: 15)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(JerreaderTheme.accent)
-                Spacer()
-                if result?.sourceLanguage == .japanese || targetLanguage == .japanese {
-                    Toggle("日语注音", isOn: $japaneseFuriganaEnabled)
-                        .toggleStyle(.button).font(.caption)
-                        .accessibilityIdentifier("japanese-furigana-toggle")
-                }
-                if result?.isFromCache == true {
-                    Text("缓存")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .padding(.horizontal, 16)
+            outputHeader
+                .padding(.horizontal, 16)
 
             // A long result or dictionary entry scrolls here; the page stays
             // put. The scroll area spans the card's width so the dictionary
@@ -808,7 +798,8 @@ struct TranslateToolView: View {
                     .padding(.horizontal, 16)
             }
         }
-        .padding(.vertical, 16)
+        .padding(.top, 12)
+        .padding(.bottom, 16)
         .frame(
             maxWidth: .infinity,
             minHeight: mode == .word ? 104 : 126,
@@ -819,6 +810,66 @@ struct TranslateToolView: View {
             reduceMotion ? nil : JerreaderMotion.stateChange,
             value: result?.translatedText
         )
+    }
+
+    /// The result's header: its language, the ChatGPT plan indicator while
+    /// that plan translates, and the furigana toggle. It keeps one height
+    /// whichever of them show, so nothing under it moves; only when the
+    /// indicator and the toggle cannot share the line with the language
+    /// (a narrow phone, large text) does the indicator take a line of its own.
+    private var outputHeader: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                outputLanguageLabel
+                Spacer(minLength: 8)
+                planIndicator
+                furiganaToggle
+            }
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+                planIndicator
+                furiganaToggle
+            }
+            VStack(alignment: .trailing, spacing: 6) {
+                HStack(spacing: 8) {
+                    outputLanguageLabel
+                    Spacer(minLength: 8)
+                    furiganaToggle
+                }
+                planIndicator
+            }
+        }
+        .frame(minHeight: 28)
+    }
+
+    private var outputLanguageLabel: some View {
+        JerreaderLabel(title: targetLanguage.displayName, icon: "text.bubble", size: 13)
+            .font(.caption.weight(.semibold))
+            .tracking(0.6)
+            .foregroundStyle(JerreaderTheme.accent)
+            .lineLimit(1)
+    }
+
+    /// Only while the active AI provider is the ChatGPT plan.
+    @ViewBuilder
+    private var planIndicator: some View {
+        if provider == .directAPI,
+           translationSettings.aiProviders.active.kind.usesAccountSignIn
+        {
+            ChatGPTPlanIndicator()
+        }
+    }
+
+    @ViewBuilder
+    private var furiganaToggle: some View {
+        if result?.sourceLanguage == .japanese || targetLanguage == .japanese {
+            Toggle("日语注音", isOn: $japaneseFuriganaEnabled)
+                .toggleStyle(.button)
+                .buttonBorderShape(.capsule)
+                .controlSize(.small)
+                .font(.caption)
+                .accessibilityIdentifier("japanese-furigana-toggle")
+        }
     }
 
     @ViewBuilder
@@ -892,22 +943,10 @@ struct TranslateToolView: View {
                             .tint(JerreaderTheme.onPrimaryAction)
                     }
                     Text(isTranslating ? "翻译中" : "翻译")
-                        .font(.subheadline.weight(.semibold))
                 }
-                .foregroundStyle(JerreaderTheme.onPrimaryAction)
-                .padding(.horizontal, 18)
-                .frame(minHeight: 44)
-                .background(
-                    canTranslate
-                        ? AnyShapeStyle(JerreaderTheme.primaryAction)
-                        : AnyShapeStyle(Color.gray.opacity(0.55)),
-                    in: RoundedRectangle(
-                        cornerRadius: 12,
-                        style: .continuous
-                    )
-                )
             }
-            .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.96))
+            // The screen's one filled accent action.
+            .buttonStyle(JerreaderPrimaryButtonStyle(height: 44, fullWidth: false))
             .disabled(!canTranslate)
             .accessibilityIdentifier("standalone-translate-button")
         }
@@ -918,30 +957,49 @@ struct TranslateToolView: View {
         let layout = dynamicTypeSize.isAccessibilitySize
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
             : AnyLayout(HStackLayout(spacing: 18))
-        return layout {
-            Button {
-                UIPasteboard.general.string = result.translatedText
-                didCopy = true
-            } label: {
-                Label(
-                    didCopy ? "已复制" : "复制",
-                    systemImage: didCopy ? "checkmark" : "doc.on.doc"
-                )
-                .font(.subheadline)
-                .frame(minHeight: 44)
+        return HStack(spacing: 8) {
+            layout {
+                Button {
+                    UIPasteboard.general.string = result.translatedText
+                    didCopy = true
+                } label: {
+                    Label(
+                        didCopy ? "已复制" : "复制",
+                        systemImage: didCopy ? "checkmark" : "doc.on.doc"
+                    )
+                    .font(.subheadline.weight(.semibold))
+                    .contentTransition(.opacity)
+                    .frame(minHeight: 44)
+                }
+
+                Button {
+                    saveToFavorites(result)
+                } label: {
+                    Label {
+                        Text(didSaveFavorite ? "已收藏" : "收藏")
+                    } icon: {
+                        Image(systemName: didSaveFavorite ? "star.fill" : "star")
+                            .jerreaderBounce(trigger: didSaveFavorite)
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .frame(minHeight: 44)
+                }
+                .sensoryFeedback(trigger: didSaveFavorite) { old, new in
+                    !old && new ? SensoryFeedback.success : nil
+                }
             }
 
-            Button {
-                saveToFavorites(result)
-            } label: {
-                Label(
-                    didSaveFavorite ? "已收藏" : "收藏",
-                    systemImage: didSaveFavorite ? "star.fill" : "star"
-                )
-                .font(.subheadline)
-                .frame(minHeight: 44)
-            }
+            Spacer(minLength: 0)
 
+            // Moved here from the header, which now keeps one height.
+            if result.isFromCache {
+                Text("缓存")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(JerreaderTheme.mutedSurface, in: Capsule())
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .buttonStyle(.plain)
@@ -960,12 +1018,12 @@ struct TranslateToolView: View {
     private func errorCard(_ message: String) -> some View {
         Label(message, systemImage: "exclamationmark.triangle")
             .font(.subheadline)
-            .foregroundStyle(.orange)
+            .foregroundStyle(JerreaderTheme.vermilion)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
             .background(
-                Color.orange.opacity(0.10),
-                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                JerreaderTheme.vermilion.opacity(0.10),
+                in: RoundedRectangle(cornerRadius: JerreaderRadius.control, style: .continuous)
             )
     }
 

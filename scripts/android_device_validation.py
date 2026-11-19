@@ -189,6 +189,19 @@ def verify_release_launch(start, hierarchy, pid):
     if not all(value in hierarchy for value in ("com.jerreader.android", "书架", "导入电子书")):
         raise RuntimeError("Release APK did not render its initial library")
 
+def verify_release_reader(hierarchy, label):
+    """ReaderActivity alone is not proof: a book that fails to open still lands
+    there and shows ReaderFailureView (1.7.0–1.7.1 Release PDFs did)."""
+    if PACKAGE not in hierarchy or "无法打开这本书" in hierarchy:
+        raise RuntimeError("Release reader could not open the smoke " + label)
+
+def verify_release_components(logcat):
+    """ML Kit (OCR, on-device translation) finds its parts through Firebase
+    component registrars created by reflection. If R8 strips their
+    constructors the app still launches, but every ML Kit call fails later."""
+    if "InvalidRegistrarException" in logcat or "Invalid component registrar" in logcat:
+        raise RuntimeError("Release APK could not create an ML Kit component registrar")
+
 
 def main():
     destination, output_arg, scope = sys.argv[1:]
@@ -368,6 +381,8 @@ def main():
                             raise RuntimeError("Release APK did not reach " + name + " for " + label)
                         time.sleep(2)
                 def dump(label):
+                    # Remove the last dump first so a failed one cannot pass stale UI.
+                    command(["shell", "rm", "-f", "/data/local/tmp/jerreader-release-ui.xml"])
                     command(["shell", "uiautomator", "dump", "/data/local/tmp/jerreader-release-ui.xml"], timeout=60)
                     text = command(["shell", "cat", "/data/local/tmp/jerreader-release-ui.xml"])
                     (output / ("release-" + label + "-ui.xml")).write_text(text)
@@ -385,10 +400,15 @@ def main():
                     time.sleep(8)  # let the navigator render its first page
                     still_healthy()
                     screenshot("reader-" + label)
+                    verify_release_reader(dump("reader-" + label), label)
                     command(["shell", "input", "keyevent", "4"])
                     wait_for_activity(".MainActivity", label + "-back")
                     still_healthy()
                     smoke.append("opened " + label + " in ReaderActivity and returned to the library")
+                release_log = command(["logcat", "-d", "--pid=" + pid.strip()], timeout=60)
+                (output / "release-process-logcat.txt").write_text(release_log)
+                verify_release_components(release_log)
+                smoke.append("created every ML Kit component registrar")
                 for index, tab in enumerate(("学习", "设置", "书架"), 1):
                     x, y = node_center(dump("before-" + tab), tab)
                     command(["shell", "input", "tap", str(x), str(y)])

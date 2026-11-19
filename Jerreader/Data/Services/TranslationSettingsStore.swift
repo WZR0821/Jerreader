@@ -96,8 +96,15 @@ final class TranslationSettingsStore: ObservableObject {
     /// Every AI provider that was set up, and the one in use.
     @Published private(set) var aiProviders: AIProviderSettings
 
-    /// The providers whose API key is in the keychain.
+    /// The providers whose API key is in the keychain, and the ChatGPT plan
+    /// while an account is signed in.
     @Published private(set) var keyedProviderIDs: Set<String>
+
+    /// The ChatGPT account signed in for the 套餐 provider.
+    @Published private(set) var chatGPTPlanAccount: ChatGPTPlanAccount?
+
+    /// The names the account gave its models, by slug.
+    @Published private(set) var chatGPTPlanModelNames: [String: String]
 
     @Published var backendEndpoint: String {
         didSet { defaults.set(backendEndpoint, forKey: Keys.backendEndpoint) }
@@ -206,7 +213,13 @@ final class TranslationSettingsStore: ObservableObject {
         ) ?? .none
         aiProviders = restoredProviders
         apiKeys = restoredKeys.keys
-        keyedProviderIDs = Set(restoredKeys.keys.filter { !$0.value.isEmpty }.keys)
+        var keyed = Set(restoredKeys.keys.filter { !$0.value.isEmpty }.keys)
+        let planAccount = Self.restoredPlanAccount(credentialStore: resolvedCredentialStore)
+        if planAccount != nil { keyed.insert(Self.chatGPTPlanID) }
+        keyedProviderIDs = keyed
+        chatGPTPlanAccount = planAccount
+        chatGPTPlanModelNames = defaults.dictionary(forKey: ChatGPTPlanRegistration.modelNamesKey)
+            as? [String: String] ?? [:]
         backendEndpoint = defaults.string(forKey: Keys.backendEndpoint) ?? ""
         backendModel = defaults.string(forKey: Keys.backendModel) ?? ""
         backendAccessToken = restoredBackendToken
@@ -272,7 +285,8 @@ final class TranslationSettingsStore: ObservableObject {
     }
 
     func apiKey(for id: String) -> String {
-        apiKeys[id] ?? ""
+        if id == Self.chatGPTPlanID { return chatGPTPlanAccount == nil ? "" : Self.planKeyPlaceholder }
+        return apiKeys[id] ?? ""
     }
 
     /// A request configuration for one model of a provider, which need not be
@@ -283,6 +297,22 @@ final class TranslationSettingsStore: ObservableObject {
         key: String
     ) throws -> DirectAITranslationConfiguration {
         let modelID = model.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        if entry.kind.usesAccountSignIn {
+            // The plan signs in instead of holding a key, and only ever talks
+            // to OpenAI's Responses API, whatever address the entry carries.
+            guard chatGPTPlanAccount != nil else { throw AIProviderSettingsError.signInRequired(entry.displayName) }
+            guard !modelID.isEmpty else { throw AIProviderSettingsError.missingModel }
+            return DirectAITranslationConfiguration(
+                provider: .chatGPTPlan,
+                endpoint: ChatGPTPlan.responsesURL,
+                model: modelID,
+                apiKey: Self.planKeyPlaceholder,
+                style: .responses,
+                reasoning: model.reasoning,
+                translationPromptTemplate: translationPromptTemplate,
+                grammarAnalysisPromptTemplate: grammarAnalysisPromptTemplate
+            )
+        }
         let apiKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !apiKey.isEmpty else { throw AIProviderSettingsError.missingKey(entry.displayName) }
         guard !modelID.isEmpty else { throw AIProviderSettingsError.missingModel }
@@ -363,10 +393,97 @@ final class TranslationSettingsStore: ObservableObject {
         }
     }
 
+    // MARK: ChatGPT plan
+
+    static let chatGPTPlanID = DirectAIProviderChoice.chatGPTPlan.rawValue
+    /// Stands in for a key in a plan's configuration; the request asks the
+    /// signed-in session for the real token.
+    static let planKeyPlaceholder = "chatgpt-plan-session"
+
+    /// Records a finished sign-in with the account's models. The plan is
+    /// added as a provider, or refreshed, and put in use: signing in is how
+    /// the user chooses it.
+    func chatGPTPlanSignedIn(_ account: ChatGPTPlanAccount, models: [ChatGPTPlanModel]) {
+        chatGPTPlanAccount = account
+        keyedProviderIDs.insert(Self.chatGPTPlanID)
+        let entry = mergedPlanEntry(models)
+        // Without a model the plan cannot translate yet, so the provider in
+        // use stays until the models are refreshed.
+        let usable = !entry.model.isEmpty
+        changeProviders { providers in
+            providers.add(entry, activeHasKey: !usable)
+        }
+    }
+
+    /// Mirrors the session's account: nil when the session ended by itself.
+    func chatGPTPlanSessionChanged(_ account: ChatGPTPlanAccount?) {
+        guard account != chatGPTPlanAccount else { return }
+        if let account {
+            chatGPTPlanAccount = account
+            keyedProviderIDs.insert(Self.chatGPTPlanID)
+        } else {
+            chatGPTPlanSignedOut()
+        }
+    }
+
+    /// Takes the account's current list of models; the reasoning chosen for a
+    /// model that is still offered is kept.
+    func chatGPTPlanModelsRefreshed(_ models: [ChatGPTPlanModel]) {
+        guard aiProviders.entry(Self.chatGPTPlanID) != nil else { return }
+        let entry = mergedPlanEntry(models)
+        changeProviders { providers in
+            providers.update(Self.chatGPTPlanID) { $0 = entry }
+        }
+    }
+
+    /// The account is gone from this device; the provider stays, signed out.
+    func chatGPTPlanSignedOut() {
+        chatGPTPlanAccount = nil
+        keyedProviderIDs.remove(Self.chatGPTPlanID)
+    }
+
+    /// The name the account gives a model, or its slug.
+    func chatGPTPlanModelName(_ slug: String) -> String {
+        chatGPTPlanModelNames[slug] ?? slug
+    }
+
+    private func mergedPlanEntry(_ models: [ChatGPTPlanModel]) -> AIProviderEntry {
+        var names = chatGPTPlanModelNames
+        for model in models { names[model.slug] = model.displayName }
+        chatGPTPlanModelNames = names
+        defaults.set(names, forKey: ChatGPTPlanRegistration.modelNamesKey)
+
+        var entry = aiProviders.entry(Self.chatGPTPlanID) ?? AIProviderEntry(
+            id: Self.chatGPTPlanID, kind: .chatGPTPlan, name: nil,
+            baseURL: DirectAIProviderChoice.chatGPTPlan.defaultBaseURL, model: "", models: []
+        )
+        let kept = Dictionary(entry.models.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        if !models.isEmpty {
+            entry.models = models.map { kept[$0.slug] ?? AIModelEntry(id: $0.slug, style: .responses) }
+        }
+        if !entry.models.contains(where: { $0.id == entry.model }) {
+            entry.model = entry.models.first?.id ?? ""
+        }
+        return entry
+    }
+
+    private static func restoredPlanAccount(
+        credentialStore: any TranslationCredentialStoring
+    ) -> ChatGPTPlanAccount? {
+        guard let text = try? credentialStore.readSecret(account: ChatGPTPlan.credentialAccount),
+              let credential = try? JSONDecoder().decode(ChatGPTPlanCredential.self, from: Data(text.utf8))
+        else { return nil }
+        return credential.account
+    }
+
     /// Removes a provider and its key. The provider in use cannot be removed.
     func removeProvider(_ id: String) throws {
         guard id != aiProviders.activeID else { throw AIProviderSettingsError.removingActiveProvider }
-        try saveKey("", for: id)
+        if id == Self.chatGPTPlanID {
+            chatGPTPlanSignedOut()
+        } else {
+            try saveKey("", for: id)
+        }
         try changeProviders { try $0.remove(id) }
     }
 

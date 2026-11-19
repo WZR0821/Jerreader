@@ -2,6 +2,8 @@
 
 > 这里是开发过程中的维护记录和开发说明，2026-11-18 从 README 原样移到本文件，按日期记的条目保留原样。其中指向 `dist/` 的安装包和验收页链接只在维护者本机有效（`dist/` 不进仓库），公开的安装包请到 [Releases](https://github.com/WZR0821/Jerreader/releases) 下载。功能介绍、下载和使用说明见 [项目首页](../README.md)。
 
+2026-11-19：**双端 2.0.0（71）构建、验收与打包完成。** 大版本更新：「设置 → AI 大模型 → 添加供应商」新增「套餐」页（ChatGPT 套餐（实验），用 ChatGPT 账号登录走订阅额度；Claude Max / Ultra 附带 API 额度的用法说明；编程套餐因条款限制不提供）；书架、阅读器、学习和设置按新的「纸墨」[设计规范](DESIGN_2.0.md)重做静态视觉和动效，两端逐页一致；1.7.1 只打了 Android 包、没有单独发布的 [议题 #2](https://github.com/WZR0821/Jerreader/issues/2) 两个修复随本版一起发布。另修了 1.7.0 起 Android 正式包打不开 PDF、本机翻译也用不了的问题（R8 删掉了 ML Kit 组件注册类的构造函数，当时的冒烟只看了阅读页有没有打开），冒烟和打包脚本都补了对应检查。交付 [未签名 IPA](../dist/iOS/Jerreader-2.0.0-build71-20261119-084847-unsigned.ipa) 和 [Release APK](../dist/Android/Jerreader-Android-2.0.0-build71-20261119-124529-release.apk)；改动与验证见 [2.0.0 维护记录](RELEASE_2.0.0_2026-11-19.md)。测试都在模拟器上跑，ChatGPT 套餐没有用真实账号登录过，未真机验证。
+
 2026-11-18：**Android 1.7.1（70）构建、验收与打包完成，只有 Android。** 修复 [议题 #2](https://github.com/WZR0821/Jerreader/issues/2) 的两个问题：滚动阅读时横滑不再切换章节（打开 Readium 自带的 `disablePageTurnsWhileScrolling`，竖排除外）；选区占满页面时译文浮窗保留 108dp 最小高度，位置和拖动都留在上下栏之间。iOS 没有这两个问题，按用户决定不改，仍是 1.7.0（69），所以这一版两端版本号不一致，下次一起发版时 build 从 71 起。交付 [Release APK](../dist/Android/Jerreader-Android-1.7.1-build70-20261118-235658-release.apk)；改动与验证见 [1.7.1 维护记录](RELEASE_1.7.1_2026-11-18.md)。未真机验证；按用户决定暂不发布到 GitHub、暂不回复议题。
 
 2026-11-17：**双端 1.7.0（69）构建、验收与打包完成。** 按用户反馈：书架导入可先选格式、选一句不再翻成整段、阅读界面分「标准」「沉浸」两种布局；安卓界面以 iOS 为准逐页对齐（阅读设置改为与 iOS 相同的「阅读与翻译」弹层），安卓发给 AI 代理的请求改成与 iOS 相同的格式；iOS 删掉了不起作用的「分别设置」边距；iPad 版暂停开发。交付 [未签名 IPA](../dist/iOS/Jerreader-1.7.0-build69-20261117-222644-unsigned.ipa) 和 [Release APK](../dist/Android/Jerreader-Android-1.7.0-build69-20261117-231952-release.apk)；改动与验证见 [1.7.0 维护记录](RELEASE_1.7.0_2026-11-17.md)。未真机验证。
@@ -26,15 +28,15 @@
 
 Jerreader 是一款面向中、英、日阅读与学习的 iOS 和 Android 电子书阅读器。它支持 EPUB、PDF、DOCX 和 TXT，以原文阅读为主，查词和简体中文翻译按需显示，不把译文插入原文。
 
-## 当前源码：iOS 1.7.0（69）/ Android 1.7.1（70）
+## 当前源码：双端 2.0.0（71）
 
 当前版本已经完成导入、书架、实际 EPUB 阅读、阅读内翻译和学习记录主流程：
 
 - iOS 18+ SwiftUI 工程，同时支持 iPhone、iPad 和横屏。
-- 书架、学习、设置和阅读器统一使用冷灰蓝视觉层级、材质卡片与清晰的状态反馈；页面进入、标签切换、按钮按压、导入/翻译加载和成功状态使用克制动效，并自动尊重系统“减少动态效果”设置。
+- 2.0.0 起书架、阅读器、学习和设置统一使用「纸墨」设计规范（[DESIGN_2.0.md](DESIGN_2.0.md)）：暖白纸面、墨色文字，强调色只用在主要操作、选中状态和进度上；底色 → 纸卡 → 浮起元素三级层次（浅色用染色阴影，深色改用描边）；按压、状态切换、选择、首次出现、主卡共用一套弹簧参数，两端数值相同，系统“减弱动态效果”（Android 为“移除动画”）打开时一律换成 0.18 秒交叉淡化。
 - Readium Swift Toolkit 固定到上游提交 `3d8bcdc`（基于 3.8.0，包含切换 CSS 阅读偏好时清理已缓存 HTML 的修复）。
 - `TranslationService`、`LexicalLookupService` 协议，以及暂时保留但不向界面开放的 `SpeechService` 内部边界。
-- Apple Translation 系统翻译、AI 大模型（用自己的 Key 直连 Claude、ChatGPT、DeepSeek、通义千问、豆包、Kimi、智谱、MiniMax、Gemini 或自定义服务）、AI 代理（经自建 HTTPS 后端转发）、翻译缓存、失败重试与备用服务、中文维基词典真实查词和 iOS 系统词典后备。
+- Apple Translation 系统翻译、AI 大模型（用自己的 Key 直连 Claude、ChatGPT、DeepSeek、通义千问、豆包、Kimi、智谱、MiniMax、Gemini 或自定义服务）、AI 套餐（2.0.0 起：用 ChatGPT 账号登录后走订阅额度的“ChatGPT 套餐（实验）”，以及说明 Claude Max / Ultra 附带 API 额度用法的“Claude 套餐额度”；实现见 [架构说明](ARCHITECTURE.md) 的「2.0.0 AI 套餐与「纸墨」界面」一节）、AI 代理（经自建 HTTPS 后端转发）、翻译缓存、失败重试与备用服务、中文维基词典真实查词和 iOS 系统词典后备。
 - “学习 → 翻译”采用独立的翻译工作台：原文可自动识别或手动选择中文、英语、日语，译文可选择中/英/日，支持词语与句子模式，并可在当前页面单独选择 Apple 系统翻译、AI 大模型或 AI 代理；这些选择不会暗中改动阅读器的全局翻译设置。
 - 语音、听书、发音按钮和语速设置仍统一关闭；唯一例外是单词复习卡对日语词提供"朗读单词"和"朗读原句·跟读"（iOS 由 `SpeechFeatureAvailability.learningReviewIsEnabled` 单独打开）。底层实现由功能开关隔离，未删除或改动共用的选区、翻译和学习数据逻辑。
 - 完整的离线回归测试和架构说明。
@@ -107,6 +109,12 @@ PDF 在 iPhone 上使用单页阅读，在 iPad/横屏由 Readium 自动适配�
 5. 每个模型可单独设置接口格式（OpenAI 兼容、OpenAI Responses、Claude 兼容；Gemini 原生只保留给已经在用它的模型）和思考强度（自动、关闭、低、中、高）。
 
 AI 大模型会把本次选中的文字、必要上下文和语言方向直接发送给所选服务商，并可能产生费用。App 不把 API Key 写入工程或安装包，但个人设备上的客户端密钥仍应视为可撤销凭据；建议设置平台用量上限并定期轮换。
+
+**AI 套餐（2.0.0 起）**：“添加供应商”顶部切到“套餐”。
+
+- **ChatGPT 套餐（实验）**：点“Continue with ChatGPT”，在 OpenAI 的页面登录后，翻译和语法解释走该 ChatGPT 账号的订阅额度，“设置 → AI 大模型”里出现“ChatGPT 套餐”一行，可以换模型、刷新模型列表、查看用量或退出登录。额度用完时请求停下并提示去 chatgpt.com 查看用量，不自动重试、不改用别的服务。登录凭据只存本机，不进备份，换设备或从备份恢复后要重新登录。协议细节（授权地址、PKCE、回环回调、刷新与撤销）见 [架构说明](ARCHITECTURE.md) 的「2.0.0 AI 套餐与「纸墨」界面」。测试只用 Mock，没有用真实账号登录过；OpenAI 还没公开说明移动端的这种登录，所以标为实验。
+- **Claude 套餐额度**：只是说明页。Claude Max、Ultra 每月附带的 API 额度要在 Claude 控制台建 API Key，按普通 Claude 供应商添加。
+- 编程套餐（Coding Plan、Token Plan 等）的条款只允许在编程工具里用，不接入，页面底部有一行说明。
 
 ### AI 代理协议
 

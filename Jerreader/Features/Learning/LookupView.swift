@@ -132,7 +132,7 @@ struct LookupView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: JerreaderSpacing.md) {
                 if opensInReader {
                     readerForm
                 } else {
@@ -141,18 +141,35 @@ struct LookupView: View {
                 }
 
                 if !localChoices.isEmpty && result == nil && !isLoading {
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: JerreaderSpacing.sm) {
                         Text("选择词条 / 释义").font(.headline)
                         Text("词典可能包含同音词或多个义项，请结合原句选择。").font(.caption).foregroundStyle(.secondary)
                         ForEach(Array(localChoices.enumerated()), id: \.offset) { _, entry in
                             Button { performLookup(entry: entry) } label: {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(entry.display).font(.body.weight(.semibold))
-                                    Text(entry.definition).font(.subheadline)
-                                }.frame(maxWidth: .infinity, alignment: .leading)
-                            }.buttonStyle(.bordered)
+                                HStack(spacing: JerreaderSpacing.sm) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(entry.display).font(.body.weight(.semibold))
+                                            .foregroundStyle(.primary)
+                                        Text(entry.definition).font(.subheadline)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    JerreaderSymbol(name: "chevron.forward", size: 13)
+                                        .foregroundStyle(.tertiary)
+                                }
+                                .multilineTextAlignment(.leading)
+                                .padding(JerreaderSpacing.sm)
+                                .frame(minHeight: 44)
+                                .background(
+                                    JerreaderTheme.mutedSurface,
+                                    in: RoundedRectangle(cornerRadius: JerreaderRadius.control, style: .continuous)
+                                )
+                                .contentShape(RoundedRectangle(cornerRadius: JerreaderRadius.control, style: .continuous))
+                            }.buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.98))
                         }
-                    }.jerreaderPaperCard()
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .jerreaderPaperCard(padding: JerreaderSpacing.md, radius: JerreaderRadius.card)
                 }
                 Group {
                     if isLoading {
@@ -169,12 +186,16 @@ struct LookupView: View {
                             if opensInReader, let analysis = result.aiAnalysis {
                                 DisclosureGroup("AI 语境建议", isExpanded: $aiExpanded) {
                                     Text(analysis).font(.body).textSelection(.enabled)
-                                }.jerreaderPaperCard(padding: 16, radius: 16)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .padding(.top, JerreaderSpacing.xs)
+                                }
+                                .tint(JerreaderTheme.accent)
+                                .jerreaderPaperCard(padding: JerreaderSpacing.md, radius: JerreaderRadius.card)
                             }
 
                             if result.usageNote?.contains("中文维基词典") == true {
                                 Link(destination: URL(string: "https://zh.wiktionary.org/")!) {
-                                    Label("词典数据：中文维基词典（CC BY-SA）", systemImage: "link")
+                                    JerreaderLabel(title: "词典数据：中文维基词典（CC BY-SA）", icon: "info.circle", size: 13)
                                         .font(.caption)
                                 }
                                 .padding(.horizontal, 4)
@@ -192,26 +213,25 @@ struct LookupView: View {
                     }
                 }
                 .id(lookupContentIdentity)
-                .transition(
-                    .opacity.combined(with: .scale(scale: 0.985, anchor: .top))
-                )
+                .transition(lookupTransition)
                 .jerreaderReveal(order: 2)
             }
             .frame(maxWidth: 720)
             .frame(maxWidth: .infinity)
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
-            .padding(.bottom, 34)
+            .padding(.horizontal, JerreaderTheme.pagePadding)
+            .padding(.top, JerreaderSpacing.md)
+            .padding(.bottom, JerreaderSpacing.xxl)
             .contentShape(Rectangle())
             .onTapGesture {
                 focusedField = nil
             }
         }
-        .background(JerreaderTheme.canvas)
+        .background(JerreaderCanvasBackground())
         .scrollDismissesKeyboard(.interactively)
         .tint(JerreaderTheme.accent)
+        // Scoped to switching between the introduction, 正在查询… and a result.
         .animation(
-            reduceMotion ? nil : JerreaderMotion.stateChange,
+            JerreaderMotion.choose(JerreaderMotion.stateChange, reduceMotion: reduceMotion),
             value: lookupContentIdentity
         )
         .sensoryFeedback(.success, trigger: resultID)
@@ -247,46 +267,76 @@ struct LookupView: View {
     }
 
     private var readerForm: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Picker("查询语言", selection: $selectedLanguage) {
-                Text("日语").tag(LexicalLookupLanguageChoice.japanese)
-                Text("英语").tag(LexicalLookupLanguageChoice.english)
-            }.pickerStyle(.segmented).frame(minHeight: 48)
+        VStack(alignment: .leading, spacing: JerreaderSpacing.sm) {
+            languagePicker([.japanese, .english])
             if !sentenceContext.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("书中语境").font(.subheadline.weight(.semibold))
-                    Text(sentenceContext).font(.body).lineLimit(contextExpanded ? nil : 3).textSelection(.enabled)
+                VStack(alignment: .leading, spacing: JerreaderSpacing.xs) {
+                    JerreaderEyebrow(text: "书中语境")
+                    Text(sentenceContext)
+                        .font(.system(.body, design: .serif))
+                        .lineLimit(contextExpanded ? nil : 3)
+                        .textSelection(.enabled)
+                        .padding(.leading, 12)
+                        .overlay(alignment: .leading) {
+                            Capsule()
+                                .fill(JerreaderTheme.accent.opacity(0.35))
+                                .frame(width: 3)
+                                .accessibilityHidden(true)
+                        }
                     if sentenceContext.count > 80 {
                         Button(contextExpanded ? "收起语境" : "展开语境") { contextExpanded.toggle() }
-                            .font(.subheadline).frame(minHeight: 44)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(JerreaderTheme.accent)
+                            .frame(minHeight: 44)
                     }
-                }.jerreaderPaperCard(padding: 16, radius: 16)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .jerreaderPaperCard(padding: JerreaderSpacing.md, radius: JerreaderRadius.card)
             }
             TextField("词语 / 修改选词", text: $query, axis: .vertical)
                 .font(.body).lineLimit(1...3).textInputAutocapitalization(.never).autocorrectionDisabled()
                 .focused($focusedField, equals: .query).submitLabel(.search).onSubmit { performLookup() }
-                .padding(12).frame(minHeight: 48)
-                .background(JerreaderTheme.paper, in: RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(JerreaderTheme.line, lineWidth: 0.75))
+                .padding(.horizontal, 14).padding(.vertical, 12).frame(minHeight: 48)
+                .background(
+                    JerreaderTheme.mutedSurface,
+                    in: RoundedRectangle(cornerRadius: JerreaderRadius.control, style: .continuous)
+                )
                 .accessibilityIdentifier("contextual-query")
             Text("可粘贴原句中的词语或短语，最多 80 个字符。")
                 .font(.caption).foregroundStyle(.secondary)
             Button("查询") { performLookup() }
-                .buttonStyle(.borderedProminent).frame(minHeight: 44)
+                .buttonStyle(JerreaderPrimaryButtonStyle(height: 48))
                 .disabled(isLoading || !(1...80).contains(query.trimmingCharacters(in: .whitespacesAndNewlines).count))
                 .accessibilityIdentifier("contextual-submit")
         }
     }
 
+    /// The language switcher as the 2.0 pill picker, labelled 查询语言 for
+    /// VoiceOver as the segmented picker was.
+    private func languagePicker(_ choices: [LexicalLookupLanguageChoice]) -> some View {
+        JerreaderPillPicker(
+            options: choices.map { JerreaderPillPicker<LexicalLookupLanguageChoice>.Option(value: $0, title: $0.title) },
+            selection: $selectedLanguage,
+            minHeight: 40
+        )
+        // One row of pills: 自动识别 still fits whole at this size.
+        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("查询语言")
+    }
+
     private func readerResult(_ record: WordLookupRecord) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(record.surfaceForm).font(.title2.weight(.bold)).textSelection(.enabled)
+        VStack(alignment: .leading, spacing: JerreaderSpacing.sm) {
+            Text(record.surfaceForm)
+                .font(.system(.title, design: .serif, weight: .bold))
+                .textSelection(.enabled)
             Text([record.lemma.map { "词典形：" + $0 }, record.reading, record.partOfSpeech]
                 .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
                 .font(.subheadline).foregroundStyle(.secondary)
-            Text("词典释义 · 中文").font(.subheadline.weight(.semibold))
+            JerreaderEyebrow(text: "词典释义 · 中文")
             ForEach(Array(record.definitions.enumerated()), id: \.offset) { _, definition in
-                Text(definition).font(.body).textSelection(.enabled)
+                Text(definition).font(.system(.body, design: .serif)).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if let note = record.inflectionNote { Text("活用说明\n" + note).font(.subheadline) }
             if let note = record.usageNote { Text("来源与用法\n" + note).font(.caption).foregroundStyle(.secondary) }
@@ -295,19 +345,27 @@ struct LookupView: View {
                     let choices = localChoices
                     invalidateInput()
                     localChoices = choices
-                }.buttonStyle(.bordered).frame(minHeight: 44)
+                }.buttonStyle(JerreaderTintedButtonStyle())
             }
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { readerActions(record) }
-                VStack(alignment: .leading, spacing: 8) { readerActions(record) }
+                HStack(spacing: JerreaderSpacing.xs) { readerActions(record) }
+                VStack(alignment: .leading, spacing: JerreaderSpacing.xs) { readerActions(record) }
             }
-        }.frame(maxWidth: .infinity, alignment: .leading).jerreaderPaperCard(padding: 16, radius: 16)
+        }.frame(maxWidth: .infinity, alignment: .leading)
+            .jerreaderPaperCard(padding: JerreaderSpacing.md, radius: JerreaderRadius.card)
     }
 
+    /// 复制词条 as a tinted capsule; 加入生词本 as the filled one, and once the
+    /// word is saved, 取消收藏 as a tinted one.
     @ViewBuilder private func readerActions(_ record: WordLookupRecord) -> some View {
-        Button("复制词条") { copy(record) }.buttonStyle(.bordered).frame(minHeight: 44)
-        Button(record.isFavorite ? "取消收藏" : "加入生词本") { toggleFavorite(record) }
-            .buttonStyle(.borderedProminent).frame(minHeight: 44)
+        Button("复制词条") { copy(record) }.buttonStyle(JerreaderTintedButtonStyle())
+        if record.isFavorite {
+            Button("取消收藏") { toggleFavorite(record) }
+                .buttonStyle(JerreaderTintedButtonStyle())
+        } else {
+            Button("加入生词本") { toggleFavorite(record) }
+                .buttonStyle(JerreaderPrimaryButtonStyle(height: 44, fullWidth: false))
+        }
     }
 
     private func recordStatusText(_ record: WordLookupRecord) -> String {
@@ -315,12 +373,12 @@ struct LookupView: View {
     }
 
     private var lookupHeader: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: JerreaderSpacing.md) {
             Text(selectedLanguage == .english ? "Aa" : "あ")
                 .font(.system(.title2, design: .serif).weight(.semibold))
                 .foregroundStyle(JerreaderTheme.accent)
                 .frame(width: 54, height: 54)
-                .background(JerreaderTheme.accentFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .background(JerreaderTheme.accentFill, in: RoundedRectangle(cornerRadius: JerreaderRadius.control, style: .continuous))
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("读懂一个词，也保留它的语境。")
@@ -331,24 +389,13 @@ struct LookupView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(17)
-        .background(JerreaderTheme.paper)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(JerreaderTheme.line, lineWidth: 0.75)
-        }
+        .jerreaderPaperCard(padding: JerreaderSpacing.md, radius: JerreaderRadius.card)
         .accessibilityElement(children: .combine)
     }
 
     private var lookupForm: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Picker("查询语言", selection: $selectedLanguage) {
-                ForEach(LexicalLookupLanguageChoice.allCases) { choice in
-                    Text(choice.title).tag(choice)
-                }
-            }
-            .pickerStyle(.segmented)
+        VStack(alignment: .leading, spacing: JerreaderSpacing.md) {
+            languagePicker(LexicalLookupLanguageChoice.allCases)
 
             if selectedLanguage == .automatic {
                 Text(
@@ -374,11 +421,7 @@ struct LookupView: View {
                 .submitLabel(.search)
                 .onSubmit { performLookup() }
                 .padding(14)
-                .background(JerreaderTheme.canvas, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 13, style: .continuous)
-                        .stroke(JerreaderTheme.line, lineWidth: 0.75)
-                }
+                .background(JerreaderTheme.mutedSurface, in: RoundedRectangle(cornerRadius: JerreaderRadius.control, style: .continuous))
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -390,11 +433,7 @@ struct LookupView: View {
                     .focused($focusedField, equals: .context)
                     .lineLimit(2...4)
                     .padding(14)
-                    .background(JerreaderTheme.canvas, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 13, style: .continuous)
-                            .stroke(JerreaderTheme.line, lineWidth: 0.75)
-                    }
+                    .background(JerreaderTheme.mutedSurface, in: RoundedRectangle(cornerRadius: JerreaderRadius.control, style: .continuous))
             }
 
             HStack(spacing: 10) {
@@ -425,35 +464,38 @@ struct LookupView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .tint(JerreaderTheme.accent)
 
             Button(action: { performLookup() }) {
-                Label(
-                    addToVocabulary ? "查询并加入生词本" : "查询词语",
-                    systemImage: addToVocabulary ? "bookmark.fill" : "magnifyingglass"
+                JerreaderLabel(
+                    title: addToVocabulary ? "查询并加入生词本" : "查询词语",
+                    icon: addToVocabulary ? "bookmark.fill" : "magnifyingglass",
+                    size: 17
                 )
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .foregroundStyle(JerreaderTheme.onPrimaryAction)
-                    .background(JerreaderTheme.primaryAction, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                // The style keeps one line; at the largest text it shrinks before truncating.
+                .minimumScaleFactor(0.7)
             }
-            .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.985))
+            .buttonStyle(JerreaderPrimaryButtonStyle(height: 50))
             .disabled(isLoading || query.count > 80 || query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .opacity(isLoading || query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.45 : 1)
 
             Button(action: openSystemDictionary) {
-                Label("使用 iOS 系统词典", systemImage: "books.vertical")
-                    .frame(maxWidth: .infinity)
+                JerreaderLabel(title: "使用 iOS 系统词典", icon: "books.vertical", size: 17)
+                    .minimumScaleFactor(0.7)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(JerreaderTintedButtonStyle(height: 44, fullWidth: true))
             .disabled(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
-        .jerreaderPaperCard(padding: 18, hasShadow: true)
+        .jerreaderPaperCard(padding: JerreaderSpacing.lg, radius: JerreaderRadius.card, hasShadow: true)
     }
 
     private var loadingCard: some View {
-        HStack(spacing: 14) {
-            JerreaderLoadingGlyph(systemImage: "text.magnifyingglass", size: 46)
+        HStack(spacing: JerreaderSpacing.md) {
+            // The system spinner, not a decorative pulse.
+            ProgressView()
+                .tint(JerreaderTheme.accent)
+                .frame(width: 46, height: 46)
+                .background(JerreaderTheme.accentFill, in: RoundedRectangle(cornerRadius: JerreaderRadius.control, style: .continuous))
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
                 Text("正在查询…")
                     .font(.headline)
@@ -463,7 +505,15 @@ struct LookupView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .jerreaderPaperCard(padding: 20, radius: 18)
+        .jerreaderPaperCard(padding: JerreaderSpacing.lg, radius: JerreaderRadius.card)
+    }
+
+    /// The introduction, 正在查询… and the result cross-fade, the new one
+    /// settling from 98.5%; with Reduce Motion they only cross-fade.
+    private var lookupTransition: AnyTransition {
+        reduceMotion
+            ? AnyTransition.opacity
+            : AnyTransition.opacity.combined(with: .scale(scale: 0.985, anchor: .top))
     }
 
     private var lookupContentIdentity: String {
@@ -477,42 +527,46 @@ struct LookupView: View {
     }
 
     private var introductionCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("真实词典查询已启用", systemImage: "checkmark.shield")
+        VStack(alignment: .leading, spacing: JerreaderSpacing.sm) {
+            JerreaderLabel(title: "真实词典查询已启用", icon: "checkmark.shield", size: 18)
                 .font(.headline)
                 .foregroundStyle(JerreaderTheme.accent)
 
             Text("优先查询内置中日词典和已安装的英语词库，未命中时联网查询中文维基词典。无网络时，也可使用本机已安装的 iOS 系统词典。")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
-            Label("查询结果会保存在本机，收藏和历史可直接使用", systemImage: "iphone")
+            JerreaderLabel(title: "查询结果会保存在本机，收藏和历史可直接使用", icon: "lock", size: 14)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
-        .background(JerreaderTheme.accentFill, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(JerreaderTheme.line, lineWidth: 0.75)
-        }
+        .padding(JerreaderSpacing.lg)
+        .background(JerreaderTheme.accentFill, in: RoundedRectangle(cornerRadius: JerreaderRadius.card, style: .continuous))
     }
 
     private func aiAnalysisControls(for record: WordLookupRecord) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("AI 语境建议").font(.headline)
-            Text("按需分析本句；建议与词典释义分开保存。").font(.caption).foregroundStyle(.secondary)
-            if isLoadingAIAnalysis { ProgressView("解析中…") }
+        VStack(alignment: .leading, spacing: JerreaderSpacing.sm) {
+            HStack(alignment: .top, spacing: JerreaderSpacing.sm) {
+                JerreaderIconTile(systemImage: "sparkles", tint: JerreaderTheme.gold)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("AI 语境建议").font(.headline)
+                    Text("按需分析本句；建议与词典释义分开保存。").font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if isLoadingAIAnalysis { ProgressView("解析中…").tint(JerreaderTheme.accent) }
             else {
                 Button(record.aiAnalysis == nil ? "开始解析" : "重新解析") { requestAIAnalysis(for: record) }
-                    .buttonStyle(.bordered).frame(minHeight: 44)
+                    .buttonStyle(JerreaderTintedButtonStyle())
                     .disabled(resolvedAIExplanationService == nil || record.modelContext == nil)
             }
             if resolvedAIExplanationService == nil {
                 Text("请先在设置中配置 AI 服务。").font(.caption).foregroundStyle(.secondary)
             }
-        }.frame(maxWidth: .infinity, alignment: .leading).jerreaderPaperCard(padding: 16, radius: 16)
+        }.frame(maxWidth: .infinity, alignment: .leading)
+            .jerreaderPaperCard(padding: JerreaderSpacing.md, radius: JerreaderRadius.card)
     }
 
     private var sampleTerms: [String] {

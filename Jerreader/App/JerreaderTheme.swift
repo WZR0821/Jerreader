@@ -47,6 +47,19 @@ enum JerreaderTheme {
         let green: CGFloat
         let blue: CGFloat
 
+        init(red: CGFloat, green: CGFloat, blue: CGFloat) {
+            self.red = red
+            self.green = green
+            self.blue = blue
+        }
+
+        /// `0xRRGGBB`, as written in docs/DESIGN_2.0.md.
+        init(hex: UInt32) {
+            red = CGFloat((hex >> 16) & 0xFF) / 255
+            green = CGFloat((hex >> 8) & 0xFF) / 255
+            blue = CGFloat(hex & 0xFF) / 255
+        }
+
         func color(alpha: CGFloat = 1) -> UIColor {
             UIColor(red: red, green: green, blue: blue, alpha: alpha)
         }
@@ -57,16 +70,16 @@ enum JerreaderTheme {
         dark: Bool
     ) -> RGB {
         switch (choice, dark) {
-        case (.ocean, false): return RGB(red: 0.18, green: 0.41, blue: 0.60)
-        case (.ocean, true): return RGB(red: 0.46, green: 0.72, blue: 0.88)
-        case (.forest, false): return RGB(red: 0.16, green: 0.43, blue: 0.34)
-        case (.forest, true): return RGB(red: 0.42, green: 0.76, blue: 0.62)
-        case (.wisteria, false): return RGB(red: 0.39, green: 0.31, blue: 0.61)
-        case (.wisteria, true): return RGB(red: 0.68, green: 0.61, blue: 0.91)
-        case (.amber, false): return RGB(red: 0.55, green: 0.35, blue: 0.10)
-        case (.amber, true): return RGB(red: 0.91, green: 0.68, blue: 0.34)
-        case (.berry, false): return RGB(red: 0.58, green: 0.22, blue: 0.38)
-        case (.berry, true): return RGB(red: 0.90, green: 0.52, blue: 0.68)
+        case (.ocean, false): return RGB(hex: 0x2C5D8F)
+        case (.ocean, true): return RGB(hex: 0x8DBCE8)
+        case (.forest, false): return RGB(hex: 0x2E6B53)
+        case (.forest, true): return RGB(hex: 0x7FC8A6)
+        case (.wisteria, false): return RGB(hex: 0x5B4C9C)
+        case (.wisteria, true): return RGB(hex: 0xB7A9F0)
+        case (.amber, false): return RGB(hex: 0x94601C)
+        case (.amber, true): return RGB(hex: 0xEBB56A)
+        case (.berry, false): return RGB(hex: 0x9A3A62)
+        case (.berry, true): return RGB(hex: 0xEE91B6)
         }
     }
 
@@ -96,16 +109,19 @@ enum JerreaderTheme {
         )
     }
 
+    /// The light-mode accent in both appearances: the deep end of a hero
+    /// card's gradient, which stays dark enough for white text.
+    static var accentDeep: Color { accentDeep(for: JerreaderThemePreferences.current()) }
+    static func accentDeep(for choice: JerreaderThemeColorChoice) -> Color {
+        Color(uiColor: accentRGB(for: choice, dark: false).color())
+    }
+
     static var canvas: Color { canvas(for: JerreaderThemePreferences.current()) }
     static func canvas(for choice: JerreaderThemeColorChoice) -> Color {
         color(
             choice: choice,
-            light: { _ in
-                UIColor(red: 0.941, green: 0.961, blue: 0.975, alpha: 1)
-            },
-            dark: { _ in
-                UIColor(red: 0.040, green: 0.065, blue: 0.090, alpha: 1)
-            }
+            light: { _ in RGB(hex: 0xF4F1EA).color() },
+            dark: { _ in RGB(hex: 0x101215).color() }
         )
     }
 
@@ -120,21 +136,21 @@ enum JerreaderTheme {
             light: { _ in
                 switch level {
                 case let value where value > 0:
-                    return UIColor(red: 0.985, green: 0.993, blue: 0.998, alpha: 1)
+                    return RGB(hex: 0xFFFFFF).color()
                 case let value where value < 0:
-                    return UIColor(red: 0.885, green: 0.925, blue: 0.953, alpha: 1)
+                    return RGB(hex: 0xEBE6DB).color()
                 default:
-                    return UIColor(red: 0.965, green: 0.978, blue: 0.989, alpha: 1)
+                    return RGB(hex: 0xFFFDF8).color()
                 }
             },
             dark: { _ in
                 switch level {
                 case let value where value > 0:
-                    return UIColor(red: 0.095, green: 0.145, blue: 0.185, alpha: 1)
+                    return RGB(hex: 0x20242A).color()
                 case let value where value < 0:
-                    return UIColor(red: 0.028, green: 0.055, blue: 0.080, alpha: 1)
+                    return RGB(hex: 0x0B0D10).color()
                 default:
-                    return UIColor(red: 0.060, green: 0.100, blue: 0.135, alpha: 1)
+                    return RGB(hex: 0x181B20).color()
                 }
             }
         )
@@ -143,8 +159,8 @@ enum JerreaderTheme {
     static var line: Color {
         color(
             choice: JerreaderThemePreferences.current(),
-            light: { accent in accent.color(alpha: 0.18) },
-            dark: { accent in accent.color(alpha: 0.28) }
+            light: { _ in RGB(hex: 0xE3DCCD).color() },
+            dark: { _ in RGB(hex: 0x2B3038).color() }
         )
     }
 
@@ -152,7 +168,7 @@ enum JerreaderTheme {
     static var onPrimaryAction: Color {
         Color(uiColor: UIColor { traits in
             traits.userInterfaceStyle == .dark
-                ? UIColor(red: 0.025, green: 0.04, blue: 0.05, alpha: 1)
+                ? RGB(hex: 0x0B0F14).color()
                 : .white
         })
     }
@@ -160,13 +176,13 @@ enum JerreaderTheme {
     static let shadow = Color.black.opacity(0.07)
     static let deepShadow = Color.black.opacity(0.10)
     static let pagePadding: CGFloat = 20
-    static let cardRadius: CGFloat = 16
+    static let cardRadius: CGFloat = 20
 }
 
 enum JerreaderMotion {
     static let quick = Animation.easeOut(duration: 0.16)
-    static let stateChange = Animation.spring(response: 0.34, dampingFraction: 0.88)
-    static let reveal = Animation.spring(response: 0.46, dampingFraction: 0.86)
+    static let stateChange = Animation.spring(duration: 0.32, bounce: 0.12)
+    static let reveal = Animation.spring(duration: 0.50, bounce: 0.14)
 }
 
 /// A quiet ambient background gives the app depth without competing with
@@ -180,9 +196,28 @@ struct JerreaderCanvasBackground: View {
         JerreaderThemeColorChoice(rawValue: themeColorRawValue) ?? .ocean
     }
 
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
-        JerreaderTheme.canvas(for: themeColor)
+        GeometryReader { proxy in
+            ZStack {
+                JerreaderTheme.canvas(for: themeColor)
+                // A faint, static wash of the accent at the top left, so the
+                // paper colour does not read as flat grey.
+                RadialGradient(
+                    colors: [
+                        JerreaderTheme.accent(for: themeColor)
+                            .opacity(colorScheme == .dark ? 0.10 : 0.06),
+                        JerreaderTheme.accent(for: themeColor).opacity(0),
+                    ],
+                    center: UnitPoint(x: 0.2, y: 0),
+                    startRadius: 0,
+                    endRadius: max(proxy.size.width * 1.1, 1)
+                )
+            }
+        }
         .ignoresSafeArea()
+        .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
 }
@@ -192,18 +227,24 @@ private struct JerreaderPaperCardModifier: ViewModifier {
     let radius: CGFloat
     let hasShadow: Bool
 
+    @Environment(\.colorScheme) private var colorScheme
+
     func body(content: Content) -> some View {
+        let dark = colorScheme == .dark
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         content
             .padding(padding)
-            .background(JerreaderTheme.paper, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+            .background(JerreaderTheme.paper, in: shape)
             .overlay {
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .stroke(JerreaderTheme.line, lineWidth: 0.75)
+                shape
+                    .strokeBorder(JerreaderTheme.line.opacity(dark ? 1 : 0.9), lineWidth: 0.75)
+                    .allowsHitTesting(false)
             }
+            // e1 in light mode (e2 when raised); no shadow on dark paper.
             .shadow(
-                color: hasShadow ? JerreaderTheme.shadow : .clear,
-                radius: hasShadow ? 10 : 0,
-                y: hasShadow ? 3 : 0
+                color: dark ? .clear : JerreaderTheme.shadowTint.opacity(hasShadow ? 0.12 : 0.06),
+                radius: dark ? 0 : (hasShadow ? 16 : 8),
+                y: dark ? 0 : (hasShadow ? 8 : 4)
             )
     }
 }
@@ -211,15 +252,16 @@ private struct JerreaderPaperCardModifier: ViewModifier {
 struct JerreaderPressButtonStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    var pressedScale: CGFloat = 0.975
-    var pressedOpacity: Double = 0.92
+    var pressedScale: CGFloat = 0.97
+    var pressedOpacity: Double = 0.94
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed ? pressedScale : 1)
             .opacity(configuration.isPressed ? pressedOpacity : 1)
+            // Quick and flat going down, a little spring coming back up.
             .animation(
-                reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.82),
+                reduceMotion ? nil : (configuration.isPressed ? JerreaderMotion.press : JerreaderMotion.release),
                 value: configuration.isPressed
             )
     }
@@ -236,14 +278,14 @@ private struct JerreaderRevealModifier: ViewModifier {
         content
             .opacity(isVisible || reduceMotion ? 1 : 0)
             .offset(y: isVisible || reduceMotion ? 0 : offset)
-            .scaleEffect(isVisible || reduceMotion ? 1 : 0.985)
+            .scaleEffect(isVisible || reduceMotion ? 1 : 0.98)
             .onAppear {
                 guard !isVisible else { return }
                 if reduceMotion {
                     isVisible = true
                 } else {
                     withAnimation(
-                        JerreaderMotion.reveal.delay(min(Double(order) * 0.045, 0.32))
+                        JerreaderMotion.reveal.delay(JerreaderMotion.revealDelay(order))
                     ) {
                         isVisible = true
                     }

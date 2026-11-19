@@ -25,21 +25,26 @@ struct ReaderSettingsView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                paginationSection
-                interfaceSection
-                interactionSection
-                if model.isReflowableBook {
-                    typographySection
-                    spacingSection
+            ScrollView {
+                VStack(alignment: .leading, spacing: JerreaderSpacing.xl) {
+                    paginationSection
+                    interfaceSection
+                    interactionSection
+                    if model.isReflowableBook {
+                        typographySection
+                        spacingSection
+                    }
+                    backgroundSection
+                    translationSection
                 }
-                backgroundSection
-                translationSection
+                .padding(.horizontal, JerreaderTheme.pagePadding)
+                .padding(.top, JerreaderSpacing.xs)
+                .padding(.bottom, JerreaderSpacing.xxl)
+                .frame(maxWidth: 680)
+                .frame(maxWidth: .infinity)
             }
-            .scrollContentBackground(.hidden)
-            .background(JerreaderCanvasBackground())
-            .listSectionSpacing(18)
             .scrollDismissesKeyboard(.interactively)
+            .background(JerreaderCanvasBackground())
             .navigationTitle("阅读与翻译")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -49,35 +54,62 @@ struct ReaderSettingsView: View {
             }
         }
         .tint(JerreaderTheme.accent)
+        // The swatches are plain buttons; the pill pickers tick their own
+        // selection haptic, so 文字方向 no longer needs one here.
         .sensoryFeedback(.selection, trigger: model.theme)
-        .sensoryFeedback(.selection, trigger: model.textOrientation)
+    }
+
+    /// Rows appear and disappear with the cards' own spring (a cross-fade
+    /// with Reduce Motion), as Form rows used to.
+    private var rowAnimation: Animation {
+        JerreaderMotion.choose(JerreaderMotion.stateChange, reduceMotion: reduceMotion)
+    }
+
+    /// A row title over a control, as on 翻页方式.
+    private func controlTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.primary)
+    }
+
+    private func detailText(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var paginationSection: some View {
-        Section {
+        ReaderSettingsCard(
+            "阅读方式",
+            footer: "这一页的改动只作用于《\(model.book.title)》。要改所有新书的默认值，请到「设置 → 默认阅读排版」。",
+            hasRows: model.book.format == .pdf || model.isReflowableBook
+        ) {
             if model.book.format == .pdf {
-                Text("PDF 按单页显示：点按左右边缘翻页，点正文句子翻译；没有文字层的扫描页会在本机按页 OCR。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                detailText("PDF 按单页显示：点按左右边缘翻页，点正文句子翻译；没有文字层的扫描页会在本机按页 OCR。")
+                    .readerSettingsRow()
 
-                Toggle("论文双栏模式", isOn: pdfPaperModeBinding)
+                ReaderSettingsDivider()
 
-                Text("开启后，轻点识别句子、段落或 OCR 文字时只使用所点的左栏或右栏，避免选区横跨中缝。系统长按手柄仍保持 PDFKit 原生规则。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: JerreaderSpacing.xs) {
+                    Toggle("论文双栏模式", isOn: pdfPaperModeBinding)
+                    detailText("开启后，轻点识别句子、段落或 OCR 文字时只使用所点的左栏或右栏，避免选区横跨中缝。系统长按手柄仍保持 PDFKit 原生规则。")
+                }
+                .readerSettingsRow()
             }
 
             if model.isReflowableBook {
-                Picker("翻页方式", selection: readingModeBinding) {
-                    ForEach(ReaderReadingMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
-                    }
+                VStack(alignment: .leading, spacing: 10) {
+                    controlTitle("翻页方式")
+                    JerreaderPillPicker(
+                        options: ReaderReadingMode.allCases.map { mode in
+                            JerreaderPillPicker<ReaderReadingMode>.Option(value: mode, title: mode.title)
+                        },
+                        selection: readingModeBinding
+                    )
+                    detailText(model.readingMode.detail)
                 }
-                .pickerStyle(.segmented)
-
-                Text(model.readingMode.detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                .readerSettingsRow()
             }
 
             // The override is offered only for books that actually render
@@ -86,52 +118,73 @@ struct ReaderSettingsView: View {
             // anything. `publicationLayout` is the detected truth and already
             // covers books whose dc:language is missing or wrong.
             if model.isReflowableBook, showsTextOrientationPicker {
-                Picker("文字方向", selection: textOrientationBinding) {
-                    ForEach(
-                        [ReaderTextOrientationChoice.publication, .horizontal]
-                    ) { orientation in
-                        Text(orientation.title).tag(orientation)
-                    }
-                }
-                .pickerStyle(.segmented)
+                ReaderSettingsDivider()
 
-                Text(model.textOrientation.detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 10) {
+                    controlTitle("文字方向")
+                    JerreaderPillPicker(
+                        options: [ReaderTextOrientationChoice.publication, .horizontal].map { orientation in
+                            JerreaderPillPicker<ReaderTextOrientationChoice>.Option(
+                                value: orientation,
+                                title: orientation.title
+                            )
+                        },
+                        selection: textOrientationBinding
+                    )
+                    detailText(model.textOrientation.detail)
+                }
+                .readerSettingsRow()
             }
-        } header: {
-            Text("阅读方式")
-        } footer: {
-            Text("这一页的改动只作用于《\(model.book.title)》。要改所有新书的默认值，请到「设置 → 默认阅读排版」。")
         }
     }
 
     private var interfaceSection: some View {
-        Section {
-            Picker("界面布局", selection: layoutModeBinding) {
-                ForEach(ReaderLayoutMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
+        ReaderSettingsCard(
+            "阅读界面",
+            footer: "只调整控制栏背景，按钮保持清晰。日语注音仅显示在翻译卡片中；这些选项对所有书生效。"
+        ) {
+            // A pill picker like the sheet's other choices; the UI tests find
+            // each option by its readerLayout-<mode> identifier.
+            VStack(alignment: .leading, spacing: 10) {
+                controlTitle("界面布局")
+                    .accessibilityHidden(true)
+                JerreaderPillPicker(
+                    options: ReaderLayoutMode.allCases.map { mode in
+                        JerreaderPillPicker<ReaderLayoutMode>.Option(
+                            value: mode,
+                            title: mode.title,
+                            identifier: "readerLayout-\(mode.rawValue)"
+                        )
+                    },
+                    selection: layoutModeBinding
+                )
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("界面布局")
+                detailText(layoutMode.detail)
             }
-            .pickerStyle(.segmented)
-
-            Text(layoutMode.detail)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            .readerSettingsRow()
 
             // The immersive layout always hides the status bar, so the switch
             // only means something in the standard one.
             if layoutMode == .standard {
+                ReaderSettingsDivider()
                 Toggle("隐藏状态栏", isOn: $immersiveReading)
+                    .readerSettingsRow()
             }
+
+            ReaderSettingsDivider()
             transparencySlider("顶部栏透明度", value: $topTransparency)
+                .readerSettingsRow()
+
+            ReaderSettingsDivider()
             transparencySlider("底部栏透明度", value: $bottomTransparency)
+                .readerSettingsRow()
+
+            ReaderSettingsDivider()
             Toggle("日语注音", isOn: $japaneseFuriganaEnabled)
-        } header: {
-            Text("阅读界面")
-        } footer: {
-            Text("只调整控制栏背景，按钮保持清晰。日语注音仅显示在翻译卡片中；这些选项对所有书生效。")
+                .readerSettingsRow()
         }
+        .animation(rowAnimation, value: layoutModeRawValue)
     }
 
     private var layoutMode: ReaderLayoutMode {
@@ -166,31 +219,41 @@ struct ReaderSettingsView: View {
     }
 
     private var interactionSection: some View {
-        Section {
+        ReaderSettingsCard(
+            "阅读交互",
+            footer: interactionDetail,
+            hasRows: model.supportsQuickSentenceTranslation
+        ) {
             if model.supportsQuickSentenceTranslation {
                 Toggle("轻点正文快速翻译", isOn: quickSentenceTranslationBinding)
+                    .readerSettingsRow()
 
-                Picker("翻译范围", selection: quickTranslationUnitBinding) {
-                    ForEach(ReaderQuickTranslationUnit.allCases) { unit in
-                        Text(unit.title).tag(unit)
-                    }
+                ReaderSettingsDivider()
+
+                VStack(alignment: .leading, spacing: 10) {
+                    controlTitle("翻译范围")
+                    JerreaderPillPicker(
+                        options: ReaderQuickTranslationUnit.allCases.map { unit in
+                            JerreaderPillPicker<ReaderQuickTranslationUnit>.Option(value: unit, title: unit.title)
+                        },
+                        selection: quickTranslationUnitBinding
+                    )
                 }
-                .pickerStyle(.segmented)
                 .disabled(!model.isQuickSentenceTranslationEnabled)
+                .opacity(model.isQuickSentenceTranslationEnabled ? 1 : 0.45)
+                .readerSettingsRow()
+
+                ReaderSettingsDivider()
 
                 Toggle(
                     "轻点翻译时禁用点按翻页",
                     isOn: disablesTapPageTurnsDuringQuickTranslationBinding
                 )
                 .disabled(!model.isQuickSentenceTranslationEnabled)
+                .readerSettingsRow()
             }
-
-            Text(interactionDetail)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        } header: {
-            Text("阅读交互")
         }
+        .animation(rowAnimation, value: model.isQuickSentenceTranslationEnabled)
     }
 
     private var interactionDetail: String {
@@ -211,125 +274,158 @@ struct ReaderSettingsView: View {
     }
 
     private var typographySection: some View {
-        Section("字体与字号") {
-            Picker("字体", selection: fontChoiceBinding) {
-                ForEach(ReaderFontChoice.allCases) { font in
-                    Text(font.title).tag(font)
+        ReaderSettingsCard("字体与字号") {
+            HStack(spacing: JerreaderSpacing.sm) {
+                Text("字体")
+                    .accessibilityHidden(true)
+                Spacer(minLength: JerreaderSpacing.sm)
+                Picker("字体", selection: fontChoiceBinding) {
+                    ForEach(ReaderFontChoice.allCases) { font in
+                        Text(font.title).tag(font)
+                    }
                 }
+                .pickerStyle(.menu)
+                .labelsHidden()
             }
+            .readerSettingsRow()
 
-            LabeledContent("字号") {
-                Text(fontPointSizeLabel)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            HStack(spacing: 14) {
-                Image(systemName: "textformat.size.smaller")
-                    .foregroundStyle(.secondary)
-                Slider(
-                    value: fontPointSizeBinding,
-                    in: ReaderFontSizing.pointSizeRange,
-                    step: ReaderFontSizing.pointSizeStep
+            ReaderSettingsDivider()
+
+            // 字号 as "A − value + A", in the slider's old 0.5pt steps.
+            HStack(spacing: JerreaderSpacing.sm) {
+                Text("字号")
+                Spacer(minLength: JerreaderSpacing.sm)
+                ReaderFontSizeStepper(
+                    value: model.fontPointSize,
+                    range: ReaderFontSizing.pointSizeRange,
+                    step: ReaderFontSizing.pointSizeStep,
+                    valueText: fontPointSizeLabel,
+                    onStep: { pointSize in
+                        model.updateFontPointSize(pointSize)
+                    }
                 )
-                Image(systemName: "textformat.size.larger")
-                    .foregroundStyle(.secondary)
             }
+            .readerSettingsRow()
         }
     }
 
     private var spacingSection: some View {
-        Section("版面") {
-            LabeledContent("行间距") {
-                Text(model.lineHeight.formatted(.number.precision(.fractionLength(1))))
+        ReaderSettingsCard("版面") {
+            spacingSlider(
+                "行间距",
+                valueText: model.lineHeight.formatted(.number.precision(.fractionLength(1))),
+                value: lineHeightBinding,
+                range: 1.0 ... 2.2
+            )
+            .readerSettingsRow()
+
+            ReaderSettingsDivider()
+
+            spacingSlider(
+                "段间距",
+                valueText: paragraphSpacingLabel,
+                value: paragraphSpacingBinding,
+                range: 0.0 ... 2.0
+            )
+            .readerSettingsRow()
+
+            ReaderSettingsDivider()
+
+            spacingSlider(
+                "页边距",
+                valueText: pageMarginLabel,
+                value: pageMarginsBinding,
+                range: 0.5 ... 2.0
+            )
+            .readerSettingsRow()
+        }
+    }
+
+    /// The title and value over a 0.1-step slider, as the 版面 rows were.
+    private func spacingSlider(
+        _ title: String,
+        valueText: String,
+        value: Binding<Double>,
+        range: ClosedRange<Double>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(valueText)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
-            Slider(value: lineHeightBinding, in: 1.0 ... 2.2, step: 0.1)
-
-            LabeledContent("段间距") {
-                Text(paragraphSpacingLabel)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            Slider(value: paragraphSpacingBinding, in: 0.0 ... 2.0, step: 0.1)
-
-            LabeledContent("页边距") {
-                Text(pageMarginLabel)
-                    .foregroundStyle(.secondary)
-            }
-            Slider(value: pageMarginsBinding, in: 0.5 ... 2.0, step: 0.1)
+            Slider(value: value, in: range, step: 0.1)
+                .accessibilityLabel(title)
         }
     }
 
     private var backgroundSection: some View {
-        Section("背景") {
-            HStack(spacing: 12) {
+        ReaderSettingsCard("背景") {
+            HStack(spacing: 0) {
                 ForEach(ReaderThemeChoice.allCases) { theme in
+                    let isSelected = model.customBackgroundHex.isEmpty && model.theme == theme
                     Button {
                         withAnimation(reduceMotion ? nil : JerreaderMotion.stateChange) {
                             model.updateCustomBackgroundHex("")
                             model.updateTheme(theme)
                         }
                     } label: {
-                        VStack(spacing: 7) {
-                            Circle()
-                                .fill(theme.swatch)
-                                .frame(width: 38, height: 38)
-                                .overlay {
-                                    Circle()
-                                        .stroke(
-                                            model.customBackgroundHex.isEmpty
-                                                && model.theme == theme
-                                                ? JerreaderTheme.accent
-                                                : Color.secondary.opacity(0.22),
-                                            lineWidth: model.customBackgroundHex.isEmpty
-                                                && model.theme == theme
-                                                ? 3
-                                                : 1
-                                        )
-                                }
-                            Text(theme.title)
-                                .font(.caption2)
-                                .foregroundStyle(.primary)
-                        }
-                        .frame(maxWidth: .infinity)
+                        ReaderThemeSwatch(
+                            color: theme.swatch,
+                            title: theme.title,
+                            isSelected: isSelected,
+                            checkColor: theme == .dark ? Color.white : JerreaderTheme.accent
+                        )
                     }
                     .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.94))
                     .accessibilityLabel("\(theme.title)背景")
-                    .accessibilityAddTraits(
-                        model.customBackgroundHex.isEmpty && model.theme == theme
-                            ? .isSelected
-                            : []
-                    )
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
                 }
             }
-            .padding(.vertical, 4)
+            .padding(.horizontal, JerreaderSpacing.xs)
+            .padding(.vertical, JerreaderSpacing.sm)
+
+            ReaderSettingsDivider()
 
             Toggle("自定义背景颜色", isOn: customBackgroundEnabledBinding)
+                .readerSettingsRow()
 
             if !model.customBackgroundHex.isEmpty {
+                ReaderSettingsDivider()
                 ColorPicker(
                     "选择背景颜色",
                     selection: customBackgroundColorBinding,
                     supportsOpacity: false
                 )
+                .readerSettingsRow()
             }
+
+            ReaderSettingsDivider()
+
             Toggle(
                 "自定义选区颜色",
                 isOn: customSelectionColorEnabledBinding
             )
+            .readerSettingsRow()
+
             if !model.customSelectionColorHex.isEmpty {
+                ReaderSettingsDivider()
                 ColorPicker(
                     "选择选区颜色",
                     selection: customSelectionColorBinding,
                     supportsOpacity: false
                 )
+                .readerSettingsRow()
             }
         }
+        .animation(rowAnimation, value: model.customBackgroundHex.isEmpty)
+        .animation(rowAnimation, value: model.customSelectionColorHex.isEmpty)
     }
 
     private var translationSection: some View {
-        Section {
+        ReaderSettingsCard("翻译", footer: "翻译服务与密钥对所有书籍通用。") {
             NavigationLink {
                 // The interaction toggles now live in this sheet's own
                 // 阅读交互 section, so the detail view is purely about the
@@ -342,22 +438,25 @@ struct ReaderSettingsView: View {
                     showsQuickSentenceToggle: false
                 )
             } label: {
-                Label {
+                HStack(spacing: JerreaderSpacing.sm) {
+                    JerreaderIconTile(systemImage: "character.bubble", size: 32)
+                        .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 3) {
                         Text("翻译与 AI")
+                            .foregroundStyle(.primary)
                         Text("服务商、三语互译与提示词")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                } icon: {
-                    Image(systemName: "character.bubble")
-                        .foregroundStyle(JerreaderTheme.accent)
+                    Spacer(minLength: JerreaderSpacing.xs)
+                    JerreaderSymbol(name: "chevron.forward", size: 14)
+                        .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
                 }
+                .readerSettingsRow()
+                .contentShape(Rectangle())
             }
-        } header: {
-            Text("翻译")
-        } footer: {
-            Text("翻译服务与密钥对所有书籍通用。")
+            .buttonStyle(.plain)
         }
     }
 

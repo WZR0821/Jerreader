@@ -117,9 +117,17 @@
 		EA1200000000000000000001 /* AIModelCatalogService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB1200000000000000000001 /* AIModelCatalogService.swift */; };
 		EA1300000000000000000005 /* AIProviderViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB1300000000000000000005 /* AIProviderViews.swift */; };
 		EA1300000000000000000004 /* AIModelsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB1300000000000000000004 /* AIModelsView.swift */; };
+		EA2000000000000000000001 /* ChatGPTPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB2000000000000000000001 /* ChatGPTPlan.swift */; };
+		EA2000000000000000000002 /* ChatGPTPlanLoopback.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB2000000000000000000002 /* ChatGPTPlanLoopback.swift */; };
+		EA2000000000000000000003 /* ChatGPTPlanSignIn.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB2000000000000000000003 /* ChatGPTPlanSignIn.swift */; };
+		EA2000000000000000000004 /* AIPlanViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB2000000000000000000004 /* AIPlanViews.swift */; };
 		EA1300000000000000000003 /* AISettingsComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB1300000000000000000003 /* AISettingsComponents.swift */; };
 		EA1300000000000000000002 /* OneScreenLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB1300000000000000000002 /* OneScreenLayout.swift */; };
 		EA1300000000000000000001 /* AIProviderSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB1300000000000000000001 /* AIProviderSettings.swift */; };
+		EA2000000000000000000005 /* JerreaderDesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB2000000000000000000005 /* JerreaderDesignSystem.swift */; };
+		EA2000000000000000000006 /* LibraryShelfViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB2000000000000000000006 /* LibraryShelfViews.swift */; };
+		EA2000000000000000000007 /* LearningDesignViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB2000000000000000000007 /* LearningDesignViews.swift */; };
+		EA2000000000000000000008 /* ReaderChromeViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB2000000000000000000008 /* ReaderChromeViews.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -249,9 +257,17 @@
 		EB1200000000000000000001 /* AIModelCatalogService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIModelCatalogService.swift; sourceTree = "<group>"; };
 		EB1300000000000000000005 /* AIProviderViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIProviderViews.swift; sourceTree = "<group>"; };
 		EB1300000000000000000004 /* AIModelsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIModelsView.swift; sourceTree = "<group>"; };
+		EB2000000000000000000001 /* ChatGPTPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGPTPlan.swift; sourceTree = "<group>"; };
+		EB2000000000000000000002 /* ChatGPTPlanLoopback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGPTPlanLoopback.swift; sourceTree = "<group>"; };
+		EB2000000000000000000003 /* ChatGPTPlanSignIn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGPTPlanSignIn.swift; sourceTree = "<group>"; };
+		EB2000000000000000000004 /* AIPlanViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIPlanViews.swift; sourceTree = "<group>"; };
 		EB1300000000000000000003 /* AISettingsComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AISettingsComponents.swift; sourceTree = "<group>"; };
 		EB1300000000000000000002 /* OneScreenLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OneScreenLayout.swift; sourceTree = "<group>"; };
 		EB1300000000000000000001 /* AIProviderSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIProviderSettings.swift; sourceTree = "<group>"; };
+		EB2000000000000000000005 /* JerreaderDesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JerreaderDesignSystem.swift; sourceTree = "<group>"; };
+		EB2000000000000000000006 /* LibraryShelfViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryShelfViews.swift; sourceTree = "<group>"; };
+		EB2000000000000000000007 /* LearningDesignViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LearningDesignViews.swift; sourceTree = "<group>"; };
+		EB2000000000000000000008 /* ReaderChromeViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderChromeViews.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -315,11 +331,14 @@
 				B00000000000000000000035 /* AppSettingsView.swift */,
 				EB1300000000000000000005 /* AIProviderViews.swift */,
 				EB1300000000000000000004 /* AIModelsView.swift */,
+				EB2000000000000000000003 /* ChatGPTPlanSignIn.swift */,
+				EB2000000000000000000004 /* AIPlanViews.swift */,
 				EB1300000000000000000003 /* AISettingsComponents.swift */,
 				EB1300000000000000000002 /* OneScreenLayout.swift */,
 				B000000000000000000000F1 /* LibraryBackupSettingsView.swift */,
 				B00000000000000000000036 /* AppGuideView.swift */,
 				B0000000000000000000001D /* JerreaderTheme.swift */,
+				EB2000000000000000000005 /* JerreaderDesignSystem.swift */,
 				5F395C7755163C0B53DA151F /* JerreaderIcons.swift */,
 			);
 			path = App;
@@ -391,6 +410,8 @@
 				B00000000000000000000022 /* AppleTranslationService.swift */,
 				B0000000000000000000002F /* TranslationSettingsStore.swift */,
 				B00000000000000000000030 /* BackendTranslationService.swift */,
+				EB2000000000000000000001 /* ChatGPTPlan.swift */,
+				EB2000000000000000000002 /* ChatGPTPlanLoopback.swift */,
 				EB1200000000000000000001 /* AIModelCatalogService.swift */,
 				B00000000000000000000031 /* TranslationFavoriteStore.swift */,
 				B0000000000000000000003D /* ReadingBookmarkStore.swift */,
@@ -418,6 +439,7 @@
 			isa = PBXGroup;
 			children = (
 				B00000000000000000000014 /* LibraryView.swift */,
+				EB2000000000000000000006 /* LibraryShelfViews.swift */,
 			);
 			path = Library;
 			sourceTree = "<group>";
@@ -426,6 +448,7 @@
 			isa = PBXGroup;
 			children = (
 				B0000000000000000000002C /* LearningHubView.swift */,
+				EB2000000000000000000007 /* LearningDesignViews.swift */,
 				B00000000000000000000018 /* LookupView.swift */,
 				B000000000000000000000F4 /* TranslateToolView.swift */,
 				B000000000000000000000F8 /* WordReviewState.swift */,
@@ -471,6 +494,7 @@
 				B00000000000000000000026 /* EPUBReaderViewModel.swift */,
 				B00000000000000000000027 /* EPUBReaderView.swift */,
 				B00000000000000000000032 /* ReaderSettingsView.swift */,
+				EB2000000000000000000008 /* ReaderChromeViews.swift */,
 			);
 			path = Reader;
 			sourceTree = "<group>";
@@ -673,12 +697,17 @@
 				A00000000000000000000035 /* AppSettingsView.swift in Sources */,
 				EA1300000000000000000005 /* AIProviderViews.swift in Sources */,
 				EA1300000000000000000004 /* AIModelsView.swift in Sources */,
+				EA2000000000000000000001 /* ChatGPTPlan.swift in Sources */,
+				EA2000000000000000000002 /* ChatGPTPlanLoopback.swift in Sources */,
+				EA2000000000000000000003 /* ChatGPTPlanSignIn.swift in Sources */,
+				EA2000000000000000000004 /* AIPlanViews.swift in Sources */,
 				EA1300000000000000000003 /* AISettingsComponents.swift in Sources */,
 				EA1300000000000000000002 /* OneScreenLayout.swift in Sources */,
 				EA1300000000000000000001 /* AIProviderSettings.swift in Sources */,
 				A000000000000000000000F1 /* LibraryBackupSettingsView.swift in Sources */,
 				A00000000000000000000036 /* AppGuideView.swift in Sources */,
 				A0000000000000000000001E /* JerreaderTheme.swift in Sources */,
+				EA2000000000000000000005 /* JerreaderDesignSystem.swift in Sources */,
 				0E883C0993847176F61B7F97 /* JerreaderIcons.swift in Sources */,
 				A00000000000000000000012 /* BookRecord.swift in Sources */,
 				A00000000000000000000037 /* BookFormat.swift in Sources */,
@@ -720,6 +749,7 @@
 				A00000000000000000000040 /* LearningExportService.swift in Sources */,
 				A0000000000000000000002A /* WiktionaryLexicalLookupService.swift in Sources */,
 				A00000000000000000000015 /* LibraryView.swift in Sources */,
+				EA2000000000000000000006 /* LibraryShelfViews.swift in Sources */,
 				A00000000000000000000024 /* ReaderModels.swift in Sources */,
 				EC1200000000000000000001 /* ReaderAppearanceModels.swift in Sources */,
 				EC1200000000000000000002 /* ReaderNavigationModels.swift in Sources */,
@@ -740,6 +770,7 @@
 				A00000000000000000000026 /* EPUBReaderViewModel.swift in Sources */,
 				A00000000000000000000027 /* EPUBReaderView.swift in Sources */,
 				A00000000000000000000032 /* ReaderSettingsView.swift in Sources */,
+				EA2000000000000000000008 /* ReaderChromeViews.swift in Sources */,
 				A00000000000000000000019 /* LookupView.swift in Sources */,
 				A000000000000000000000F4 /* TranslateToolView.swift in Sources */,
 				A000000000000000000000F8 /* WordReviewState.swift in Sources */,
@@ -761,6 +792,7 @@
 				A0000000000000000000001B /* LookupHistoryView.swift in Sources */,
 				A0000000000000000000001C /* WordRecordViews.swift in Sources */,
 				A0000000000000000000002C /* LearningHubView.swift in Sources */,
+				EA2000000000000000000007 /* LearningDesignViews.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -884,7 +916,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 69;
+				CURRENT_PROJECT_VERSION = 71;
 				DEVELOPMENT_ASSET_PATHS = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -892,7 +924,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Jerreader";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
-				MARKETING_VERSION = 1.7.0;
+				MARKETING_VERSION = 2.0.0;
 				OTHER_SWIFT_FLAGS = "$(inherited) -file-prefix-map \"$(SRCROOT)=.\" -debug-prefix-map \"$(SRCROOT)=.\"";
 				PRODUCT_BUNDLE_IDENTIFIER = com.raydon.Jerreader;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -911,7 +943,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 69;
+				CURRENT_PROJECT_VERSION = 71;
 				DEVELOPMENT_ASSET_PATHS = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -919,7 +951,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Jerreader";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
-				MARKETING_VERSION = 1.7.0;
+				MARKETING_VERSION = 2.0.0;
 				OTHER_SWIFT_FLAGS = "$(inherited) -file-prefix-map \"$(SRCROOT)=.\" -debug-prefix-map \"$(SRCROOT)=.\"";
 				PRODUCT_BUNDLE_IDENTIFIER = com.raydon.Jerreader;
 				PRODUCT_NAME = "$(TARGET_NAME)";

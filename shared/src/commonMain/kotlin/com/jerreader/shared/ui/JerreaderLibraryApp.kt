@@ -1,74 +1,73 @@
 package com.jerreader.shared.ui
 
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items as lazyItems
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.Surface
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.draw.clip
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Checkbox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.ui.text.style.LineHeightStyle
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.LineHeightStyle
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.coerceAtLeast
+import androidx.compose.ui.unit.dp
 import com.jerreader.shared.library.LibraryBook
 import kotlinx.coroutines.delay
+import kotlin.time.Clock
 
 data class LibraryUiState(
     val books: List<LibraryBook> = emptyList(),
@@ -124,6 +123,18 @@ fun JerreaderLibraryApp(
             )
         }
     },
+    /**
+     * Opens a book from its cover, with the cover's bounds in window pixels
+     * (`boundsInWindow`, so clipped to what is on screen) for an opening
+     * animation that grows out of the cover, as the iOS zoom does. Null, or a
+     * tap without known bounds, falls back to [onOpenBook].
+     */
+    onOpenBookAt: ((bookId: String, coverBoundsInWindow: Rect) -> Unit)? = null,
+    /**
+     * The device time zone's offset from UTC at an instant, in milliseconds,
+     * for today's date under the 书架 title. Null leaves the date line out.
+     */
+    utcOffsetMillisAt: ((epochMillis: Long) -> Int)? = null,
     modifier: Modifier = Modifier,
     coverContent: (@Composable (LibraryBook) -> Unit)? = null,
     bottomBar: @Composable () -> Unit = {}
@@ -168,11 +179,43 @@ fun JerreaderLibraryApp(
     val recentBook = remember(state.books) { state.books
         .filter { it.lastOpenedAtEpochMillis != null }
         .maxByOrNull { it.lastOpenedAtEpochMillis ?: 0L } }
-    val startedBooks = remember(state.books) { state.books.filter { it.lastReadProgress > 0 } }
+    // The shelf's first second on screen once loaded: the one time the
+    // dashboard and the grid rise in one after another. Saveable, so a tab
+    // switch, a closed reader or a rotation shows the shelf at once.
+    var isShelfRevealOpen by rememberSaveable { mutableStateOf(true) }
+    if (!state.isLoading && isShelfRevealOpen) {
+        LaunchedEffect(Unit) {
+            delay(SHELF_REVEAL_WINDOW_MILLIS)
+            isShelfRevealOpen = false
+        }
+    }
+    val gridState = rememberLazyGridState()
+    val haptics = LocalHapticFeedback.current
+    // Refreshed on the minute, so the date rolls over at midnight and the
+    // hero's relative time keeps up.
+    val nowMillis by produceState(currentEpochMillis()) {
+        while (true) {
+            delay(MINUTE_MILLIS - currentEpochMillis().mod(MINUTE_MILLIS))
+            value = currentEpochMillis()
+        }
+    }
+    val dateText = utcOffsetMillisAt?.let { offsetAt -> LibraryShelfDate.format(nowMillis, offsetAt(nowMillis)) }
+    val isSearchActive = searchQuery.isNotBlank()
+    val statsSummary = remember(state.books) { LibraryReadingStatsSummary.of(state.books) }
+    val openBook: (String, Rect?) -> Unit = { bookId, coverBounds ->
+        val openAt = onOpenBookAt
+        val visibleCover = coverBounds?.takeIf { it.width > 0f && it.height > 0f }
+        if (openAt != null && visibleCover != null) openAt(bookId, visibleCover) else onOpenBook(bookId)
+    }
+    // iOS plays the warning haptic as the delete confirmation appears.
+    LaunchedEffect(pendingDeletion?.id) {
+        if (pendingDeletion != null) haptics.performHapticFeedback(HapticFeedbackType.Reject)
+    }
 
     Scaffold(
-        modifier = modifier.fillMaxSize(),
-        containerColor = MaterialTheme.colorScheme.background,
+        modifier = modifier.fillMaxSize().jerreaderCanvasBackground(),
+        containerColor = Color.Transparent,
+        contentColor = MaterialTheme.colorScheme.onBackground,
         bottomBar = bottomBar,
         topBar = {
             // Match the iOS library's large title and icon-only toolbar actions.
@@ -230,7 +273,18 @@ fun JerreaderLibraryApp(
                     style = MaterialTheme.typography.displaySmall
                 )
                 // iOS pins the search field directly under the large title.
-                LibrarySearchField(searchQuery) { searchQuery = it }
+                LibrarySearchField(searchQuery) { query ->
+                    val wasSearching = searchQuery.isNotBlank()
+                    searchQuery = query
+                    // The dashboard comes back above 所有书籍 when a search is
+                    // cleared; at the top of the grid, scroll so it shows
+                    // instead of staying pinned above the viewport.
+                    if (wasSearching && query.isBlank() &&
+                        gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0
+                    ) {
+                        gridState.requestScrollToItem(0)
+                    }
+                }
                 Spacer(Modifier.padding(bottom = 8.dp))
             }
         }
@@ -238,98 +292,120 @@ fun JerreaderLibraryApp(
         Box(modifier = Modifier.fillMaxSize().padding(contentPadding)) {
             when {
                 state.isLoading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
-                state.books.isEmpty() -> EmptyLibrary(
+                state.books.isEmpty() -> LibraryEmptyShelfView(
+                    dateText = dateText,
+                    isImporting = state.isImporting,
+                    revealsOnAppear = isShelfRevealOpen,
                     onImport = { isShowingImportOptions = true },
-                    onRestoreBackup = onRestoreBackup,
-                    modifier = Modifier.align(Alignment.Center)
+                    onRestore = onRestoreBackup
                 )
-                else -> LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = 145.dp),
-                    contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 36.dp),
-                    horizontalArrangement = Arrangement.spacedBy(26.dp),
-                    verticalArrangement = Arrangement.spacedBy(26.dp)
-                ) {
-                    if (recentBook != null) {
-                        item(span = { GridItemSpan(maxLineSpan) }) {
-                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                LibrarySectionTitle(
-                                    title = "继续阅读",
-                                    detail = "上次打开的书",
-                                    icon = JerreaderIcon.CLOCK
+                else -> BoxWithConstraints(Modifier.fillMaxSize()) {
+                    // iOS: at most 1120 wide and centred, never closer than 20 to the edges.
+                    val sidePadding = ((maxWidth - SHELF_MAX_CONTENT_WIDTH) / 2).coerceAtLeast(JerreaderSpacing.lg)
+                    // Three columns on a phone; on a wide window as many 132dp-or-wider ones as fit.
+                    val columns = if (maxWidth >= 600.dp) GridCells.Adaptive(132.dp) else GridCells.Fixed(3)
+                    val itemFade = JerreaderMotion.stateChange<Float>()
+                    val itemPlacement = JerreaderMotion.stateChange<IntOffset>()
+                    LazyVerticalGrid(
+                        columns = columns,
+                        modifier = Modifier.fillMaxSize(),
+                        state = gridState,
+                        contentPadding = PaddingValues(
+                            start = sidePadding,
+                            end = sidePadding,
+                            top = JerreaderSpacing.xxs,
+                            // 36 under the content; the last row of tiles brings 24 of it.
+                            bottom = if (displayedBooks.isEmpty()) 36.dp else 12.dp
+                        ),
+                        horizontalArrangement = Arrangement.spacedBy(JerreaderSpacing.md)
+                    ) {
+                        // The dashboard steps aside while searching, so the results
+                        // start right under the search field.
+                        if (!isSearchActive) {
+                            item(key = "shelf:dashboard", span = { GridItemSpan(maxLineSpan) }, contentType = "dashboard") {
+                                LibraryShelfDashboard(
+                                    dateText = dateText,
+                                    recentBook = recentBook,
+                                    summary = statsSummary,
+                                    nowMillis = nowMillis,
+                                    revealOpen = isShelfRevealOpen,
+                                    onOpenRecent = { coverBounds -> recentBook?.let { openBook(it.id, coverBounds) } },
+                                    modifier = Modifier.animateItem(
+                                        fadeInSpec = itemFade,
+                                        placementSpec = itemPlacement,
+                                        fadeOutSpec = itemFade
+                                    ),
+                                    coverContent = coverContent
                                 )
-                                LibraryRecentlyViewedRow(
-                                    title = recentBook.title,
-                                    author = recentBook.author ?: "未知作者",
-                                    format = recentBook.sourceFormat,
-                                    lastOpenedLabel = null,
-                                    progress = recentBook.lastReadProgress,
-                                    onOpen = { onOpenBook(recentBook.id) },
-                                    cover = { coverContent?.invoke(recentBook) }
+                            }
+                        }
+                        item(key = "shelf:header", span = { GridItemSpan(maxLineSpan) }, contentType = "header") {
+                            val headerTop by animateDpAsState(
+                                targetValue = if (isSearchActive) JerreaderSpacing.xxs else JerreaderSpacing.xl,
+                                animationSpec = JerreaderMotion.stateChange(),
+                                label = "shelfHeaderTop"
+                            )
+                            LibraryShelfSectionHeader(
+                                title = "所有书籍",
+                                detail = "${displayedBooks.size} 本",
+                                modifier = Modifier
+                                    .animateItem(fadeInSpec = null, placementSpec = itemPlacement, fadeOutSpec = null)
+                                    .libraryShelfReveal(order = 3, isEnabled = isShelfRevealOpen)
+                                    .padding(top = headerTop)
+                            ) {
+                                LibrarySortCapsule(selected = sortOrder, onSelect = { sortOrder = it })
+                            }
+                        }
+                        if (categories.isNotEmpty()) {
+                            item(key = "shelf:folders", span = { GridItemSpan(maxLineSpan) }, contentType = "folders") {
+                                LibraryFolderChips(
+                                    categories = categories,
+                                    books = state.books,
+                                    selectedCategory = selectedCategory,
+                                    onSelect = { selectedCategory = it },
+                                    modifier = Modifier
+                                        .animateItem(fadeInSpec = itemFade, placementSpec = itemPlacement, fadeOutSpec = itemFade)
+                                        .libraryShelfReveal(order = 3, isEnabled = isShelfRevealOpen)
+                                        .padding(top = JerreaderSpacing.sm)
                                 )
                             }
                         }
-                    }
-                    if (categories.isNotEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
-                        Column(verticalArrangement = Arrangement.spacedBy(13.dp)) {
-                            LibrarySectionTitle("文件夹", "${categories.size} 个", JerreaderIcon.FOLDER)
-                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                (listOf<String?>(null) + categories).forEach { folder ->
-                                    val active = selectedCategory == folder
-                                    Surface(onClick = { selectedCategory = folder }, shape = RoundedCornerShape(14.dp),
-                                        color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
-                                        border = if (active) null else BorderStroke(.75.dp, MaterialTheme.colorScheme.outline)) {
-                                        Row(Modifier.widthIn(min = 160.dp).heightIn(min = 64.dp).padding(horizontal = 14.dp),
-                                            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
-                                            val tint = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary
-                                            JerreaderGlyph(if (folder == null) JerreaderIcon.GRID else JerreaderIcon.FOLDER, tint, Modifier.size(20.dp))
-                                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                                Text(folder ?: "全部书籍", style = MaterialTheme.typography.titleSmall,
-                                                    color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface)
-                                                Text("${if (folder == null) state.books.size else state.books.count { it.category == folder }} 本",
-                                                    style = MaterialTheme.typography.labelSmall, color = tint)
-                                            }
-                                        }
-                                    }
-                                }
+                        if (displayedBooks.isEmpty()) {
+                            item(key = "shelf:no-match", span = { GridItemSpan(maxLineSpan) }, contentType = "no-match") {
+                                LibraryNoMatchView(
+                                    Modifier
+                                        .animateItem(fadeInSpec = itemFade, placementSpec = itemPlacement, fadeOutSpec = itemFade)
+                                        .padding(top = JerreaderSpacing.sm)
+                                )
+                            }
+                        } else {
+                            item(key = "shelf:grid-top", span = { GridItemSpan(maxLineSpan) }, contentType = "grid-top") {
+                                Spacer(
+                                    Modifier
+                                        .animateItem(fadeInSpec = null, placementSpec = itemPlacement, fadeOutSpec = null)
+                                        .height(JerreaderSpacing.md)
+                                )
+                            }
+                            itemsIndexed(
+                                displayedBooks,
+                                key = { _, book -> book.id },
+                                contentType = { _, _ -> "book" }
+                            ) { index, book ->
+                                LibraryBookTile(
+                                    book = book,
+                                    onOpen = { coverBounds -> openBook(book.id, coverBounds) },
+                                    onEdit = { editingBook = book },
+                                    onChangeCover = { onChangeCover(book.id) },
+                                    onDelete = { pendingDeletion = book },
+                                    modifier = Modifier
+                                        .animateItem(fadeInSpec = itemFade, placementSpec = itemPlacement, fadeOutSpec = itemFade)
+                                        // iOS: 24 between rows, outside the tile's own reveal.
+                                        .padding(bottom = JerreaderSpacing.xl)
+                                        .libraryShelfReveal(order = index + 4, isEnabled = isShelfRevealOpen),
+                                    coverContent = coverContent
+                                )
                             }
                         }
-                    }
-                    item(span = { GridItemSpan(maxLineSpan) }) {
-                        LibrarySectionTitle(
-                            title = "所有书籍",
-                            detail = "${displayedBooks.size} 本 · ${sortOrder.title}",
-                            icon = JerreaderIcon.GRID
-                        )
-                    }
-                    if (displayedBooks.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
-                        Column(Modifier.fillMaxWidth().padding(vertical = 20.dp), horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            JerreaderGlyph(JerreaderIcon.BOOKS, MaterialTheme.colorScheme.onSurfaceVariant, Modifier.size(38.dp))
-                            Text("没有匹配的书籍", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                            Text("请清除搜索文字或切换文件夹。", style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                    items(displayedBooks, key = LibraryBook::id) { book ->
-                        LibraryBookCard(
-                            book = book,
-                            onOpen = { onOpenBook(book.id) },
-                            onDelete = { pendingDeletion = book },
-                            onEdit = { editingBook = book },
-                            onChangeCover = { onChangeCover(book.id) },
-                            coverContent = coverContent
-                        )
-                    }
-                    item(span = { GridItemSpan(maxLineSpan) }) {
-                        LibraryReadingOverview(
-                            totalMinutes = (state.books.sumOf { it.totalReadingSeconds } / 60).toInt(),
-                            startedCount = startedBooks.size,
-                            averageProgress = if (startedBooks.isEmpty()) {
-                                0.0
-                            } else {
-                                startedBooks.sumOf { it.lastReadProgress } / startedBooks.size
-                            }
-                        )
                     }
                 }
             }
@@ -462,155 +538,16 @@ private fun LibrarySearchField(value: String, onValueChange: (String) -> Unit) {
 
 private const val MESSAGE_DISPLAY_MILLIS = 3_000L
 
-@Composable
-private fun EmptyLibrary(
-    onImport: () -> Unit,
-    onRestoreBackup: (() -> Unit)? = null,
-    modifier: Modifier = Modifier
-) = SystemLineHeights {
-    Column(
-        modifier = modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 20.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Spacer(Modifier.weight(1f))
-        Column(
-            modifier = Modifier.widthIn(max = 396.dp).padding(28.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Box(
-                modifier = Modifier.size(68.dp).clip(RoundedCornerShape(20.dp))
-                    .background(MaterialTheme.colorScheme.secondaryContainer),
-                contentAlignment = Alignment.Center
-            ) {
-                JerreaderGlyph(JerreaderIcon.BOOKS, MaterialTheme.colorScheme.primary, Modifier.size(30.dp))
-            }
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(7.dp)
-            ) {
-                Text("把下一本书放进来", style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
-                Text(
-                    "导入 EPUB、PDF、DOCX 或 TXT。书籍只保存在这台设备上。",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center
-                )
-            }
-        }
-        EmptyLibraryAction(
-            text = "导入书籍",
-            icon = JerreaderIcon.DOWNLOAD,
-            primary = true,
-            onClick = onImport
-        )
-        if (onRestoreBackup != null) {
-            EmptyLibraryAction(text = "从备份恢复", icon = JerreaderIcon.RESTORE, primary = false, onClick = onRestoreBackup)
-            Text(
-                "装过 Jerreader 的话，选择以前的备份文件夹即可恢复书架、进度和备份计划。",
-                // iOS: 10 points under the button; the 44-point tap box already adds 6.
-                modifier = Modifier.padding(top = 4.dp),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
-            )
-        }
-        Row(
-            modifier = Modifier.padding(top = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            JerreaderGlyph(
-                icon = JerreaderIcon.LOCK,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(13.dp)
-            )
-            Text(
-                "本机保存，不会上传",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        Spacer(Modifier.weight(2f))
-    }
-}
+/** iOS staggers the shelf in only during its first second on screen. */
+private const val SHELF_REVEAL_WINDOW_MILLIS = 1_000L
+private const val MINUTE_MILLIS = 60_000L
 
-@Composable
-private fun EmptyLibraryAction(text: String, icon: JerreaderIcon, primary: Boolean, onClick: () -> Unit) {
-    val foreground = if (primary) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary
-    Box(Modifier.heightIn(min = 44.dp).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
-        Row(
-            modifier = Modifier.clip(RoundedCornerShape(7.dp))
-                .background(if (primary) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer)
-                .padding(horizontal = 20.dp, vertical = 7.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            JerreaderGlyph(icon, foreground, Modifier.size(if (primary) 18.dp else 16.dp))
-            Text(text, style = if (primary) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyMedium, color = foreground)
-        }
-    }
-}
+/** iOS frames the shelf at most 1120 points wide. */
+private val SHELF_MAX_CONTENT_WIDTH = 1_120.dp
 
-@Composable
-private fun LibraryBookCard(
-    book: LibraryBook,
-    onOpen: () -> Unit,
-    onDelete: () -> Unit,
-    onEdit: () -> Unit,
-    onChangeCover: () -> Unit,
-    coverContent: (@Composable (LibraryBook) -> Unit)?
-) {
-    var menuExpanded by remember { mutableStateOf(false) }
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f).shadow(7.dp, RoundedCornerShape(9.dp))
-            .clip(RoundedCornerShape(9.dp)).clickable(onClick = onOpen)
-            .semantics { contentDescription = "${book.title}，作者 ${book.author ?: "未知作者"}" }) {
-            if (coverContent != null) coverContent(book) else JerreaderBookPlaceholder(book)
-        }
-        Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(book.title, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(book.author ?: "未知作者", style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.primaryContainer) {
-                    Text(book.sourceFormat.uppercase(), Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
-                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                }
-                if (book.lastReadProgress > 0) {
-                    Box(Modifier.fillMaxWidth().height(4.dp).background(MaterialTheme.colorScheme.primaryContainer)) {
-                        Box(Modifier.fillMaxWidth(book.lastReadProgress.toFloat().coerceIn(0f, 1f)).height(4.dp)
-                            .background(MaterialTheme.colorScheme.primary))
-                    }
-                }
-                if (book.category.isNotEmpty()) Text(book.category, style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-            }
-            Box {
-                Box(Modifier.size(44.dp).clickable { menuExpanded = true }
-                    .semantics { contentDescription = "${book.title}的更多操作" }, contentAlignment = Alignment.TopCenter) {
-                    JerreaderGlyph(JerreaderIcon.MORE, MaterialTheme.colorScheme.onSurfaceVariant, Modifier.padding(top = 4.dp).size(18.dp))
-                }
-                DropdownMenu(menuExpanded, { menuExpanded = false }) {
-                    DropdownMenuItem(text = { Text("开始阅读", color = MaterialTheme.colorScheme.onSurface) },
-                        leadingIcon = { JerreaderGlyph(JerreaderIcon.BOOKS, MaterialTheme.colorScheme.onSurface, Modifier.size(18.dp)) },
-                        onClick = { menuExpanded = false; onOpen() })
-                    DropdownMenuItem(text = { Text("编辑书籍信息", color = MaterialTheme.colorScheme.onSurface) },
-                        leadingIcon = { JerreaderGlyph(JerreaderIcon.NOTE, MaterialTheme.colorScheme.onSurface, Modifier.size(18.dp)) },
-                        onClick = { menuExpanded = false; onEdit() })
-                    DropdownMenuItem(text = { Text("更换封面", color = MaterialTheme.colorScheme.onSurface) },
-                        leadingIcon = { JerreaderGlyph(JerreaderIcon.PHOTO, MaterialTheme.colorScheme.onSurface, Modifier.size(18.dp)) },
-                        onClick = { menuExpanded = false; onChangeCover() })
-                    DropdownMenuItem(text = { Text("删除", color = MaterialTheme.colorScheme.error) },
-                        leadingIcon = { JerreaderGlyph(JerreaderIcon.TRASH, MaterialTheme.colorScheme.error, Modifier.size(18.dp)) },
-                        onClick = { menuExpanded = false; onDelete() })
-                }
-            }
-        }
-    }
-}
+private fun currentEpochMillis(): Long = Clock.System.now().toEpochMilliseconds()
 
-private enum class LibrarySortOrder(val title: String) {
+internal enum class LibrarySortOrder(val title: String) {
     RECENT("最近"),
     TITLE("书名"),
     AUTHOR("作者")
@@ -666,7 +603,8 @@ private fun BookEditDialog(
                 SettingsGroup("书籍") {
                     SettingsInsetRow(showDivider = false) {
                         Row(Modifier.padding(vertical = 1.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            Box(Modifier.width(82.dp).height(123.dp).clip(RoundedCornerShape(8.dp))) {
+                            Box(Modifier.width(82.dp).height(123.dp)
+                                .jerreaderBookCover(RoundedCornerShape(JerreaderRadius.cover), elevated = false)) {
                                 val candidate = pendingCover
                                 if (candidate != null && coverDraftContent != null) coverDraftContent(candidate)
                                 else if (coverContent != null) coverContent(book) else JerreaderBookPlaceholder(book)
@@ -700,8 +638,8 @@ private fun BookEditDialog(
                         language, { language = it })
                     SettingsTextFieldRow("系列（可选）", series, { series = it })
                     SettingsValueRow("格式", book.sourceFormat.uppercase(), compact = false)
-                    SettingsValueRow("阅读进度", "${(book.lastReadProgress * 100).toInt()}%", compact = false)
-                    SettingsValueRow("累计阅读", "${(book.totalReadingSeconds / 60).toInt()} 分钟", compact = false)
+                    SettingsValueRow("阅读进度", LibraryShelfFormat.progressText(book.lastReadProgress), compact = false)
+                    SettingsValueRow("累计阅读", LibraryShelfFormat.durationText(book.totalReadingSeconds), compact = false)
                 }
                 SettingsGroup("整理") {
                     SettingsTextFieldRow("文件夹，例如：日本文学", category, { category = it })

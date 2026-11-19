@@ -659,6 +659,9 @@ class Supervisor:
         suites.append(("ai-providers", ["Jerreader/Core/Models/LanguageCode.swift",
                                         "Jerreader/Core/Models/TranslationPreferences.swift",
                                         "Jerreader/Core/Models/AIProviderSettings.swift"], "test_ai_providers"))
+        # Sign in with ChatGPT; the loopback listener runs for real on 127.0.0.1, nothing leaves the Mac.
+        suites.append(("chatgpt-plan", ["Jerreader/Data/Services/ChatGPTPlan.swift",
+                                        "Jerreader/Data/Services/ChatGPTPlanLoopback.swift"], "test_chatgpt_plan"))
         # Same cases as the Android ParityFixturesTest, read from shared/parity/.
         suites.append(("parity-fixtures", [learning + "WordReviewState.swift", learning + "SentencePractice.swift",
                                            "Jerreader/Data/Services/LibraryBackupPruner.swift",

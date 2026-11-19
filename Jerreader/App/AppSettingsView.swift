@@ -11,6 +11,7 @@ struct AppSettingsView: View {
     @AppStorage(ReaderAppearanceDefaults.readingModeKey)
     private var readingModeRawValue = ReaderReadingMode.paginated.rawValue
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.colorScheme) private var colorScheme
 
     private var themeColor: JerreaderThemeColorChoice {
         JerreaderThemeColorChoice(rawValue: themeColorRawValue) ?? .ocean
@@ -19,31 +20,33 @@ struct AppSettingsView: View {
     /// The home page fills one screen exactly: its rows share whatever height
     /// a taller phone leaves over, so nothing scrolls and no gap is left above
     /// the tab bar. A system list cannot do that, so the groups are drawn here
-    /// to look like one. Large text or a short screen still scrolls.
+    /// to look like one: each row reports its frame, and one paper card per
+    /// group is drawn behind the rows. Large text or a short screen still scrolls.
     var body: some View {
         NavigationStack {
             OneScreenPage(identifier: "settingsHome") { size in
                 // The margin the system gives a grouped list at this width.
                 let margin: CGFloat = size.width >= 400 ? 20 : 16
                 FillStack {
-                    brand
+                    header
                     Group {
                         groupTitle("阅读")
-                        row("界面主题", value: themeColor.title, icon: "paintpalette.fill",
-                            color: JerreaderTheme.accent(for: themeColor), id: "themeSettingsLink",
-                            position: .first, edge: margin) {
+                        row("界面主题", value: themeColor.title, icon: "PALETTE_FILLED",
+                            tint: JerreaderTheme.accent(for: themeColor), id: "themeSettingsLink",
+                            group: 0, position: .first, edge: margin) {
                             AppThemeColorSettingsView()
                         }
                         row("默认阅读排版", value: readerDefaultsSummary, icon: "textformat.size",
-                            color: .indigo, id: "readerDefaultsLink", position: .last, edge: margin) {
+                            tint: SettingsTint.reading, id: "readerDefaultsLink",
+                            group: 0, position: .last, edge: margin) {
                             GlobalReaderDefaultsView()
                         }
                     }
                     Group {
                         groupTitle("翻译")
                         row("翻译与 AI", value: translationSettings.provider.title,
-                            icon: "character.bubble.fill", color: .blue, id: "translationSettingsLink",
-                            position: .first, edge: margin) {
+                            icon: "character.bubble.fill", tint: SettingsTint.translation,
+                            id: "translationSettingsLink", group: 1, position: .first, edge: margin) {
                             TranslationSettingsDetailView(
                                 settings: translationSettings,
                                 quickSentenceEnabled: quickSentenceBinding,
@@ -52,27 +55,31 @@ struct AppSettingsView: View {
                                 showsQuickSentenceToggle: true
                             )
                         }
-                        row("AI 大模型", value: aiModelsSummary, warn: aiModelsNeedKey, icon: "sparkles",
-                            color: .green, id: "aiModelsSettingsLink", position: .last, edge: margin) {
+                        row("AI 大模型", value: aiModelsSummary, warn: aiModelsNeedKey, icon: "SPARKLES",
+                            tint: SettingsTint.models, id: "aiModelsSettingsLink",
+                            group: 1, position: .last, edge: margin) {
                             AIModelsView(store: translationSettings)
                         }
                     }
                     Group {
                         groupTitle("数据与帮助")
-                        row("备份与恢复", icon: "externaldrive.fill", color: .orange, id: "backupSettingsLink",
-                            position: .first, edge: margin) {
+                        row("备份与恢复", icon: "EXTERNAL_DRIVE_FILLED", tint: SettingsTint.backup,
+                            id: "backupSettingsLink", group: 2, position: .first, edge: margin) {
                             LibraryBackupSettingsView(translationSettings: translationSettings)
                         }
-                        row("数据与隐私", icon: "hand.raised.fill", color: .teal, id: "privacySettingsLink",
-                            position: .middle, edge: margin) {
+                        row("数据与隐私", icon: "HAND_FILLED", tint: SettingsTint.privacy,
+                            id: "privacySettingsLink", group: 2, position: .middle, edge: margin) {
                             DataPrivacySettingsView()
                         }
-                        row("操作指南", icon: "questionmark", color: .gray, id: "guideSettingsLink",
-                            position: .last, edge: margin) {
+                        row("操作指南", icon: "questionmark.circle", tint: SettingsTint.guide,
+                            id: "guideSettingsLink", group: 2, position: .last, edge: margin) {
                             AppGuideView()
                         }
                     }
                     credit
+                }
+                .backgroundPreferenceValue(SettingsGroupFrames.self) { groups in
+                    SettingsGroupCards(groups: groups)
                 }
                 .padding(.horizontal, margin)
                 .frame(maxWidth: 720)
@@ -85,27 +92,47 @@ struct AppSettingsView: View {
         .tint(JerreaderTheme.accent(for: themeColor))
     }
 
-    private var brand: some View {
-        HStack(spacing: 14) {
-            Image("BrandMark").resizable().scaledToFill().frame(width: 56, height: 56)
-                .clipShape(RoundedRectangle(cornerRadius: 12.5, style: .continuous))
+    /// The app's own card: its mark, name and what it does, on paper with a
+    /// faint wash of the theme colour from the top-leading corner. Its natural
+    /// height (80 pt) is the one the old brand row had, so the page budget holds;
+    /// a taller phone gives it up to 20 pt more.
+    private var header: some View {
+        let accent = JerreaderTheme.accent(for: themeColor)
+        let wash = colorScheme == .dark ? 0.16 : 0.1
+        return HStack(spacing: 14) {
+            Image("BrandMark").resizable().scaledToFill().frame(width: 52, height: 52)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(JerreaderTheme.line, lineWidth: 0.5)
+                }
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Jerreader").font(.title2.weight(.semibold))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Jerreader").font(.title3.weight(.bold))
                 Text("原版阅读 · 查词 · 翻译").font(.subheadline).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16).padding(.vertical, 12)
-        .background(JerreaderTheme.groupedRow, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.horizontal, 16).padding(.vertical, 14)
+        .frame(maxHeight: .infinity)
+        .background {
+            RoundedRectangle(cornerRadius: JerreaderRadius.card, style: .continuous)
+                .fill(RadialGradient(colors: [accent.opacity(wash), accent.opacity(0)],
+                                     center: .topLeading, startRadius: 0, endRadius: 280))
+        }
+        .jerreaderPaperCard(padding: 0, radius: JerreaderRadius.card)
         .accessibilityElement(children: .combine)
+        .stretch(20)
     }
 
+    /// A group title, level with the icon tiles below it. On a taller phone it
+    /// takes up to 8 pt more above itself, which separates the groups.
     private func groupTitle(_ title: String) -> some View {
-        Text(title).font(.footnote).foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 20).padding(.top, 21).padding(.bottom, 5)
+        Text(title).settingsHeader()
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+            .padding(.horizontal, 16).padding(.top, 21).padding(.bottom, 5)
             .accessibilityAddTraits(.isHeader)
+            .stretch(8)
     }
 
     private var credit: some View {
@@ -120,12 +147,14 @@ struct AppSettingsView: View {
         .frame(maxWidth: .infinity).padding(.top, 12).padding(.bottom, 8)
     }
 
-    /// A row in the style of the system Settings app: coloured icon, title, and
-    /// the current value on the trailing side.
-    /// - Parameter edge: the space after the chevron, which follows the page margin as in a system list.
+    /// A row in the style of the system Settings app: coloured icon tile, title,
+    /// and the current value on the trailing side.
+    /// - Parameters:
+    ///   - group: which paper card the row sits on.
+    ///   - edge: the space after the chevron, which follows the page margin as in a system list.
     private func row<Destination: View>(
-        _ title: String, value: String? = nil, warn: Bool = false, icon: String, color: Color,
-        id: String, position: GroupPosition, edge: CGFloat,
+        _ title: String, value: String? = nil, warn: Bool = false, icon: String, tint: Color,
+        id: String, group: Int, position: GroupPosition, edge: CGFloat,
         @ViewBuilder destination: () -> Destination
     ) -> some View {
         // Large text puts the value under the title instead of squeezing both onto one line.
@@ -133,10 +162,7 @@ struct AppSettingsView: View {
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2)) : AnyLayout(HStackLayout(spacing: 8))
         return NavigationLink(destination: destination()) {
             HStack(spacing: 14) {
-                Image(systemName: icon).font(.system(size: 17, weight: .medium)).foregroundStyle(.white)
-                    .frame(width: 32, height: 32)
-                    .background(color.gradient, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .accessibilityHidden(true)
+                JerreaderIconTile(systemImage: icon, tint: tint, size: 30)
                 text {
                     Text(title).foregroundStyle(Color.primary).layoutPriority(1)
                     if !typeSize.isAccessibilitySize { Spacer(minLength: 0) }
@@ -145,16 +171,17 @@ struct AppSettingsView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                Image(systemName: "chevron.right").font(.footnote.weight(.semibold))
-                    .foregroundStyle(Color(uiColor: .tertiaryLabel)).accessibilityHidden(true)
+                JerreaderSymbol(name: "chevron.right", size: 16)
+                    .foregroundStyle(Color(uiColor: .tertiaryLabel))
             }
-            .padding(.leading, 16).padding(.trailing, edge).padding(.vertical, 6)
+            .padding(.leading, 16).padding(.trailing, edge).padding(.vertical, 7)
             // The row takes whatever height the page hands it.
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
         }
-        .buttonStyle(GroupedRowStyle(position: position, separatorInset: 62))
+        .buttonStyle(SettingsGroupRowStyle(position: position, separatorInset: 60))
         .accessibilityIdentifier(id)
+        .anchorPreference(key: SettingsGroupFrames.self, value: .bounds) { [group: [$0]] }
         .stretch(22)
     }
 
@@ -204,9 +231,88 @@ struct AppSettingsView: View {
     }
 }
 
+/// The frames of the settings home rows, by group, so that one paper card can
+/// be drawn behind each group.
+private struct SettingsGroupFrames: PreferenceKey {
+    static var defaultValue: [Int: [Anchor<CGRect>]] { [:] }
+
+    static func reduce(value: inout [Int: [Anchor<CGRect>]], nextValue: () -> [Int: [Anchor<CGRect>]]) {
+        value.merge(nextValue()) { $0 + $1 }
+    }
+}
+
+/// One paper card per group of the settings home, behind its rows: paper,
+/// a 0.75 pt hairline and, in light mode, the e1 shadow.
+private struct SettingsGroupCards: View {
+    let groups: [Int: [Anchor<CGRect>]]
+
+    var body: some View {
+        GeometryReader { proxy in
+            ForEach(groups.keys.sorted(), id: \.self) { key in
+                card(in: frame(of: key, in: proxy))
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private func frame(of key: Int, in proxy: GeometryProxy) -> CGRect {
+        (groups[key] ?? []).reduce(CGRect.null) { $0.union(proxy[$1]) }
+    }
+
+    @ViewBuilder
+    private func card(in frame: CGRect) -> some View {
+        if !frame.isNull, frame.width > 0, frame.height > 0 {
+            Color.clear
+                .frame(width: frame.width, height: frame.height)
+                .jerreaderPaperCard(padding: 0, radius: JerreaderRadius.card)
+                .position(x: frame.midX, y: frame.midY)
+        }
+    }
+}
+
+/// A row of a settings home group. The group's card is drawn behind the rows,
+/// so a row adds only its pressed tint and the hairline above it.
+private struct SettingsGroupRowStyle: ButtonStyle {
+    var position: GroupPosition
+    /// Where the hairline above the row starts: level with the row's title.
+    var separatorInset: CGFloat
+
+    func makeBody(configuration: Configuration) -> some View {
+        let top: CGFloat = position.roundsTop ? JerreaderRadius.card : 0
+        let bottom: CGFloat = position.roundsBottom ? JerreaderRadius.card : 0
+        configuration.label
+            .background {
+                UnevenRoundedRectangle(topLeadingRadius: top, bottomLeadingRadius: bottom,
+                                       bottomTrailingRadius: bottom, topTrailingRadius: top,
+                                       style: .continuous)
+                    .fill(Color.primary.opacity(configuration.isPressed ? 0.07 : 0))
+            }
+            .overlay(alignment: .top) {
+                if !position.roundsTop { SettingsHairline().padding(.leading, separatorInset) }
+            }
+            // The tint comes at once and fades out after the finger lifts.
+            .animation(configuration.isPressed ? nil : JerreaderMotion.quick, value: configuration.isPressed)
+    }
+}
+
+/// A one-pixel line in the hairline colour.
+private struct SettingsHairline: View {
+    @Environment(\.displayScale) private var displayScale
+
+    var body: some View {
+        Rectangle().fill(JerreaderTheme.line).frame(height: 1 / max(displayScale, 1))
+    }
+}
+
+/// 界面主题: the five colours as a row of round swatches, as in the reader's
+/// settings sheet. The chosen one carries a 2 pt ring in its own colour and a
+/// check; the switch springs (`stateChange`) and ticks (selection haptic).
 private struct AppThemeColorSettingsView: View {
     @AppStorage(JerreaderThemePreferences.storageKey)
     private var selectedRawValue = JerreaderThemeColorChoice.ocean.rawValue
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     private var selected: JerreaderThemeColorChoice {
         JerreaderThemeColorChoice(rawValue: selectedRawValue) ?? .ocean
@@ -215,39 +321,30 @@ private struct AppThemeColorSettingsView: View {
     var body: some View {
         Form {
             Section {
-                ForEach(JerreaderThemeColorChoice.allCases) { choice in
-                    Button {
-                        selectedRawValue = choice.rawValue
-                    } label: {
-                        HStack(spacing: 14) {
-                            Circle()
-                                .fill(JerreaderTheme.accent(for: choice))
-                                .frame(width: 32, height: 32)
-                                .overlay {
-                                    Circle().stroke(.white.opacity(0.7), lineWidth: 1)
-                                }
-                                .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(choice.title)
-                                    .foregroundStyle(.primary)
-                                Text(choice.detail)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            if selected == choice {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(JerreaderTheme.accent(for: choice))
-                            }
-                        }
-                        .frame(minHeight: 56)
-                        .contentShape(Rectangle())
+                if typeSize.isAccessibilitySize {
+                    // Large text: one row per colour, so every name and detail fits.
+                    ForEach(JerreaderThemeColorChoice.allCases) { choice in
+                        listRow(choice)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(selected == choice ? .isSelected : [])
+                } else {
+                    HStack(spacing: 0) {
+                        ForEach(JerreaderThemeColorChoice.allCases) { choice in
+                            swatch(choice)
+                        }
+                    }
+                    .padding(.vertical, 6)
+                    .animation(JerreaderMotion.choose(JerreaderMotion.stateChange, reduceMotion: reduceMotion),
+                               value: selectedRawValue)
+                    .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(selected.title).font(.headline)
+                        Text(selected.detail).font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                    .accessibilityElement(children: .combine)
                 }
             } header: {
-                Text("主题色系")
+                Text("主题色系").settingsHeader()
             } footer: {
                 Text("色系会同时调整强调色、按钮、卡片与背景，并自动适配系统深色/浅色外观。阅读页的纸张主题仍在“默认阅读排版”中单独设置。")
             }
@@ -257,6 +354,81 @@ private struct AppThemeColorSettingsView: View {
         .navigationTitle("界面主题")
         .navigationBarTitleDisplayMode(.inline)
         .tint(JerreaderTheme.accent(for: selected))
+        .sensoryFeedback(.selection, trigger: selectedRawValue)
+    }
+
+    /// A 44 pt colour circle inside a 54 pt ring, with the colour's name under it.
+    private func swatch(_ choice: JerreaderThemeColorChoice) -> some View {
+        let isSelected = choice == selected
+        let tint = JerreaderTheme.accent(for: choice)
+        return Button {
+            select(choice)
+        } label: {
+            VStack(spacing: 8) {
+                ZStack {
+                    Circle()
+                        .strokeBorder(tint, lineWidth: 2)
+                        .frame(width: 54, height: 54)
+                        .scaleEffect(isSelected || reduceMotion ? 1 : 0.84)
+                        .opacity(isSelected ? 1 : 0)
+                    Circle()
+                        .fill(tint)
+                        .frame(width: 44, height: 44)
+                        .overlay { Circle().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5) }
+                    JerreaderSymbol(name: "checkmark", size: 20)
+                        .foregroundStyle(JerreaderTheme.onPrimaryAction)
+                        .scaleEffect(isSelected || reduceMotion ? 1 : 0.5)
+                        .opacity(isSelected ? 1 : 0)
+                }
+                .frame(width: 54, height: 54)
+                Text(choice.title)
+                    .font(.caption.weight(isSelected ? .semibold : .regular))
+                    .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.94))
+        .accessibilityLabel("\(choice.title)，\(choice.detail)")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityIdentifier("themeSwatch-\(choice.rawValue)")
+    }
+
+    /// The large-text row: swatch, name and detail, and the check on the chosen one.
+    private func listRow(_ choice: JerreaderThemeColorChoice) -> some View {
+        let isSelected = choice == selected
+        let tint = JerreaderTheme.accent(for: choice)
+        return Button {
+            select(choice)
+        } label: {
+            HStack(spacing: 14) {
+                Circle()
+                    .fill(tint)
+                    .frame(width: 44, height: 44)
+                    .overlay { Circle().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5) }
+                    .padding(3)
+                    .overlay { Circle().strokeBorder(tint, lineWidth: 2).opacity(isSelected ? 1 : 0) }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(choice.title).foregroundStyle(.primary)
+                    Text(choice.detail).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                if isSelected {
+                    JerreaderSymbol(name: "checkmark", size: 20).foregroundStyle(tint)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityIdentifier("themeSwatch-\(choice.rawValue)")
+    }
+
+    private func select(_ choice: JerreaderThemeColorChoice) {
+        guard choice != selected else { return }
+        selectedRawValue = choice.rawValue
     }
 }
 
@@ -309,11 +481,12 @@ private struct GlobalReaderDefaultsView: View {
                 .foregroundStyle(.secondary)
 
                 if appliesToExistingBooks {
-                    Label(
-                        "已自动同步到 \(books.count) 本现有书籍",
-                        systemImage: "checkmark.circle.fill"
-                    )
-                    .foregroundStyle(.secondary)
+                    Label {
+                        Text("已自动同步到 \(books.count) 本现有书籍").foregroundStyle(.secondary)
+                    } icon: {
+                        JerreaderSymbol(name: "checkmark.circle.fill", size: 20)
+                            .foregroundStyle(JerreaderTheme.jade)
+                    }
                 } else {
                     Button {
                         isConfirmingApply = true
@@ -326,22 +499,26 @@ private struct GlobalReaderDefaultsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {
-                Text("应用范围")
+                Text("应用范围").settingsHeader()
             }
 
             Section {
-                Picker("翻页方式", selection: readingModeBinding) {
-                    ForEach(ReaderReadingMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
+                // The 2.0 pill control in place of the system segments, so the
+                // chosen option carries the theme colour.
+                JerreaderPillPicker(
+                    options: ReaderReadingMode.allCases.map { mode in
+                        JerreaderPillPicker<ReaderReadingMode>.Option(value: mode, title: mode.title)
+                    },
+                    selection: readingModeBinding
+                )
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("翻页方式")
                 Text(readingModeBinding.wrappedValue.detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Toggle("显示可拖动阅读进度", isOn: $showsReadingProgress)
             } header: {
-                Text("翻页与导航")
+                Text("翻页与导航").settingsHeader()
             } footer: {
                 Text(
                     appliesToExistingBooks
@@ -350,7 +527,7 @@ private struct GlobalReaderDefaultsView: View {
                 )
             }
 
-            Section("字体与字号") {
+            Section {
                 Picker("字体", selection: fontBinding) {
                     ForEach(ReaderFontChoice.allCases) { font in
                         Text(font.title).tag(font)
@@ -366,9 +543,11 @@ private struct GlobalReaderDefaultsView: View {
                     in: ReaderFontSizing.pointSizeRange,
                     step: ReaderFontSizing.pointSizeStep
                 )
+            } header: {
+                Text("字体与字号").settingsHeader()
             }
 
-            Section("间距") {
+            Section {
                 LabeledContent("行间距") {
                     Text(lineHeight.formatted(.number.precision(.fractionLength(1))))
                         .monospacedDigit()
@@ -384,9 +563,11 @@ private struct GlobalReaderDefaultsView: View {
                         .monospacedDigit()
                 }
                 Slider(value: $pageMargins, in: 0.5 ... 2, step: 0.1)
+            } header: {
+                Text("间距").settingsHeader()
             }
 
-            Section("背景") {
+            Section {
                 Picker("预设背景", selection: themeBinding) {
                     ForEach(ReaderThemeChoice.allCases) { theme in
                         Text(theme.title).tag(theme)
@@ -411,20 +592,27 @@ private struct GlobalReaderDefaultsView: View {
                         supportsOpacity: false
                     )
                 }
+            } header: {
+                Text("背景").settingsHeader()
             }
 
-            Section("日文原版排版") {
-                Picker("默认版式", selection: japaneseOrientationBinding) {
-                    ForEach(ReaderTextOrientationChoice.allCases) { orientation in
-                        Text(orientation.title).tag(orientation)
-                    }
-                }
-                .pickerStyle(.segmented)
+            Section {
+                JerreaderPillPicker(
+                    options: ReaderTextOrientationChoice.allCases.map { orientation in
+                        JerreaderPillPicker<ReaderTextOrientationChoice>.Option(
+                            value: orientation, title: orientation.title
+                        )
+                    },
+                    selection: japaneseOrientationBinding
+                )
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("默认版式")
                 Text(japaneseOrientationBinding.wrappedValue.detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            } header: {
+                Text("日文原版排版").settingsHeader()
             }
-
         }
         .scrollContentBackground(.hidden)
         .background(JerreaderCanvasBackground())
@@ -652,15 +840,18 @@ struct TranslationSettingsDetailView: View {
 private struct DataPrivacySettingsView: View {
     var body: some View {
         Form {
-            Section("本机数据") {
-                JerreaderLabel(title: "书籍、书架与学习记录默认只保存在本机", icon: "books.vertical")
-                JerreaderLabel(title: "API Key 只保存在本机安全存储", icon: "lock")
-                JerreaderLabel(title: "在线 AI 只接收你主动选择的文字与必要上下文", icon: "checkmark.shield")
-                JerreaderLabel(title: "导入的书籍是只读输入，阅读与翻译不会改写它", icon: "character.book.closed")
+            Section {
+                fact("书籍、书架与学习记录默认只保存在本机", icon: "books.vertical", tint: JerreaderTheme.accent)
+                fact("API Key 只保存在本机安全存储", icon: "lock", tint: SettingsTint.guide)
+                fact("在线 AI 只接收你主动选择的文字与必要上下文", icon: "checkmark.shield", tint: SettingsTint.privacy)
+                fact("导入的书籍是只读输入，阅读与翻译不会改写它", icon: "character.book.closed",
+                     tint: SettingsTint.reading)
+            } header: {
+                Text("本机数据").settingsHeader()
             }
             Section {
-                JerreaderLabel(title: "备份需要你先授权一个文件夹", icon: "square.and.arrow.down")
-            } header: { Text("写出副本") } footer: {
+                fact("备份需要你先授权一个文件夹", icon: "square.and.arrow.down", tint: SettingsTint.backup)
+            } header: { Text("写出副本").settingsHeader() } footer: {
                 Text("密钥不会写入书籍、日志或安装包。备份只写入你选择的位置。")
             }
         }
@@ -669,6 +860,18 @@ private struct DataPrivacySettingsView: View {
         .navigationTitle("数据与隐私")
         .navigationBarTitleDisplayMode(.inline)
     }
+
+    /// One promise about the data: a 30 pt tile and the sentence beside it.
+    private func fact(_ title: String, icon: String, tint: Color) -> some View {
+        HStack(spacing: 14) {
+            JerreaderIconTile(systemImage: icon, tint: tint, size: 30)
+            Text(LocalizedStringKey(title))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+    }
 }
 
 private struct SettingsSectionHeader: View {
@@ -676,10 +879,8 @@ private struct SettingsSectionHeader: View {
     let systemImage: String
 
     var body: some View {
-        JerreaderLabel(title: title, icon: systemImage)
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(JerreaderTheme.accent)
-            .textCase(nil)
+        JerreaderLabel(title: title, icon: systemImage, size: 15)
+            .settingsHeader()
             .accessibilityAddTraits(.isHeader)
     }
 }
@@ -698,13 +899,16 @@ struct TranslationPreferencesSection: View {
             if showsQuickSentenceToggle {
                 Toggle("轻点正文快速翻译", isOn: $quickSentenceEnabled)
 
-                Picker("翻译范围", selection: $settings.quickTranslationUnit) {
-                    ForEach(ReaderQuickTranslationUnit.allCases) { unit in
-                        Text(unit.title).tag(unit)
-                    }
-                }
-                .pickerStyle(.segmented)
+                JerreaderPillPicker(
+                    options: ReaderQuickTranslationUnit.allCases.map { unit in
+                        JerreaderPillPicker<ReaderQuickTranslationUnit>.Option(value: unit, title: unit.title)
+                    },
+                    selection: $settings.quickTranslationUnit
+                )
                 .disabled(!quickSentenceEnabled)
+                .opacity(quickSentenceEnabled ? 1 : 0.45)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("翻译范围")
 
                 Toggle(
                     "轻点翻译时禁用点按翻页",
@@ -746,10 +950,11 @@ struct TranslationPreferencesSection: View {
             if settings.sourceLanguageChoice.languageCode
                 == settings.targetLanguage
             {
-                Label(
-                    "原文和目标语言不能相同，请选择另一个目标语言或使用自动识别。",
-                    systemImage: "exclamationmark.triangle"
-                )
+                Label {
+                    Text("原文和目标语言不能相同，请选择另一个目标语言或使用自动识别。")
+                } icon: {
+                    JerreaderSymbol(name: "exclamationmark.triangle", size: 15)
+                }
                 .font(.caption)
                 .foregroundStyle(.orange)
             } else {
@@ -864,10 +1069,11 @@ struct TranslationPreferencesSection: View {
                     .padding(.vertical, 6)
                 }
             } else {
-                Label(
-                    "Apple 翻译首次使用时可能需要数分钟下载语言包；请保持 App 在前台。若长时间无进展，可先在 Apple“翻译”App 中下载对应语言。",
-                    systemImage: "iphone.and.arrow.forward"
-                )
+                Label {
+                    Text("Apple 翻译首次使用时可能需要数分钟下载语言包；请保持 App 在前台。若长时间无进展，可先在 Apple“翻译”App 中下载对应语言。")
+                } icon: {
+                    JerreaderSymbol(name: "arrow.down.to.line", size: 15)
+                }
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
@@ -936,20 +1142,20 @@ struct TranslationPreferencesSection: View {
         return model.isEmpty ? entry.displayName : "\(entry.displayName) · \(model)"
     }
 
+    /// Ready reads in jade (the success colour), missing setup in orange.
     private func configurationStatus(message: String, isReady: Bool) -> some View {
-        Label(
-            message,
-            systemImage: isReady ? "checkmark.shield" : "exclamationmark.triangle"
-        )
+        let tint = isReady ? JerreaderTheme.jade : Color.orange
+        return Label {
+            Text(message)
+        } icon: {
+            JerreaderSymbol(name: isReady ? "checkmark.shield" : "exclamationmark.triangle", size: 16)
+        }
         .font(.caption)
-        .foregroundStyle(isReady ? AnyShapeStyle(JerreaderTheme.accent) : AnyShapeStyle(.orange))
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .foregroundStyle(tint)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            isReady ? JerreaderTheme.accentFill : Color.orange.opacity(0.10),
-            in: RoundedRectangle(cornerRadius: 11, style: .continuous)
-        )
+        .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: JerreaderRadius.small, style: .continuous))
     }
 
     private func promptEditor(
@@ -996,8 +1202,7 @@ struct TranslationPreferencesSection: View {
                 Text(connectionTestState.title)
             }
         }
-        .buttonStyle(.bordered)
-        .buttonBorderShape(.roundedRectangle(radius: 11))
+        .buttonStyle(JerreaderTintedButtonStyle(height: 40))
         .disabled(!canTestConnection || connectionTestState == .testing)
 
         if let message = connectionTestState.detail {

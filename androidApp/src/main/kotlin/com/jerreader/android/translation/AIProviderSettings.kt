@@ -69,9 +69,18 @@ enum class AIProviderKind(
     ZHIPU("zhipu", "智谱 GLM", "智谱 AI", null),
     MINIMAX("minimax", "MiniMax", "稀宇科技", null),
     GEMINI("gemini", "Gemini", "Google", "GEMINI"),
-    OPENAI_COMPATIBLE("openAICompatible", "自定义 API", "OpenAI 或 Claude 兼容接口", "OPENAI_COMPATIBLE");
+    OPENAI_COMPATIBLE("openAICompatible", "自定义 API", "OpenAI 或 Claude 兼容接口", "OPENAI_COMPATIBLE"),
+
+    /**
+     * A ChatGPT plan, signed in with Sign in with ChatGPT instead of an API
+     * key. It did not exist before providers kept lists, so it has no legacy name.
+     */
+    CHATGPT_PLAN("chatGPTPlan", "ChatGPT 套餐", "用 ChatGPT 账号登录 · 实验", null);
 
     val isCustom: Boolean get() = this == OPENAI_COMPATIBLE
+
+    /** Signed in with an account instead of an API key; its address and request format are fixed. */
+    val usesAccountSignIn: Boolean get() = this == CHATGPT_PLAN
 
     val isRecommended: Boolean get() = this == defaultProvider
 
@@ -87,12 +96,13 @@ enum class AIProviderKind(
             MINIMAX -> "https://api.minimax.cn/v1"
             GEMINI -> "https://generativelanguage.googleapis.com/v1beta/openai"
             OPENAI_COMPATIBLE -> ""
+            CHATGPT_PLAN -> "https://api.openai.com/v1"
         }
 
     /** The format a newly added model of this provider uses. */
     val defaultStyle: AIAPIStyle
         get() = when (this) {
-            OPENAI -> AIAPIStyle.RESPONSES
+            OPENAI, CHATGPT_PLAN -> AIAPIStyle.RESPONSES
             ANTHROPIC -> AIAPIStyle.ANTHROPIC_MESSAGES
             else -> AIAPIStyle.CHAT_COMPLETIONS
         }
@@ -146,7 +156,8 @@ enum class AIProviderKind(
                 AIModelPreset("gemini-3.8-flash", "Gemini 3.8 Flash", "日常翻译"),
                 AIModelPreset("gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite", "轻量翻译")
             )
-            OPENAI_COMPATIBLE -> emptyList()
+            // A ChatGPT plan's models come from the signed-in account.
+            OPENAI_COMPATIBLE, CHATGPT_PLAN -> emptyList()
         }
 
     val defaultModel: String get() = modelPresets.firstOrNull()?.id.orEmpty()
@@ -160,6 +171,7 @@ enum class AIProviderKind(
             ZHIPU -> "默认是国内站的地址。国际站 Z.AI 的密钥不通用，要用它请把 API 地址改成 https://api.z.ai/api/paas/v4。"
             MINIMAX -> "默认是国内站的地址。国际站请把 API 地址改成 https://api.minimax.io/v1。"
             ANTHROPIC, OPENAI, DEEPSEEK, GEMINI, OPENAI_COMPATIBLE -> "已填入官方地址，一般不用改。"
+            CHATGPT_PLAN -> "不用 API Key，翻译用的是这个 ChatGPT 账号的套餐额度。Plus 的 5 小时额度和 ChatGPT、Codex 等用同一套餐的应用共用；额度用完会暂停，不会改走别的计费。"
         }
 
     val documentationURL: String
@@ -175,6 +187,7 @@ enum class AIProviderKind(
             GEMINI -> "https://ai.google.dev/gemini-api/docs/openai"
             OPENAI_COMPATIBLE ->
                 "https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create"
+            CHATGPT_PLAN -> "https://developers.openai.com/siwc/token-sharing-open-source"
         }
 
     /** The console page where a key is made, when the provider has a stable one. */
@@ -189,7 +202,7 @@ enum class AIProviderKind(
             MINIMAX -> "https://platform.minimax.cn/user-center/basic-information/interface-key"
             GEMINI -> "https://aistudio.google.com/apikey"
             // 通义千问's console differs by region; the documentation link covers it.
-            QWEN, OPENAI_COMPATIBLE -> null
+            QWEN, OPENAI_COMPATIBLE, CHATGPT_PLAN -> null
         }
 
     /** 通义千问 only thinks when streaming, so it offers 关闭 alone. */
@@ -207,6 +220,7 @@ enum class AIProviderKind(
             MINIMAX -> "M3.1 Flash 无法关闭思考，自动和“关闭”都用最低档；M3 只能开或关，不分强度。"
             GEMINI -> "自动：翻译时对 Flash 系列用最低档（2.5 Flash 关闭思考）。Gemini 3 等无法完全关闭思考的模型，“关闭”会用最低档。"
             OPENAI_COMPATIBLE -> "自动不发送任何推理参数；其他档位按所选接口格式发送标准字段。"
+            CHATGPT_PLAN -> "自动：翻译时对已知模型降低推理强度，语法解释用模型默认的强度。"
         }
 
     /**
@@ -238,7 +252,8 @@ enum class AIProviderKind(
     val monogram: String?
         get() = when (this) {
             ANTHROPIC -> "C"
-            OPENAI -> "G"
+            // The plan is ChatGPT too, so it draws the same letter.
+            OPENAI, CHATGPT_PLAN -> "G"
             DEEPSEEK -> "D"
             QWEN -> "通"
             DOUBAO -> "豆"
@@ -261,6 +276,7 @@ enum class AIProviderKind(
             MINIMAX -> 0xD9365E
             GEMINI -> 0x3B7DED
             OPENAI_COMPATIBLE -> 0x6E7380
+            CHATGPT_PLAN -> 0x1A1A1A
         }
 
     companion object {
@@ -367,6 +383,7 @@ sealed class AIProviderSettingsError(message: String) : Exception(message) {
     class UnknownProvider : AIProviderSettingsError("找不到这个供应商，可能已经删除。")
     class InvalidAddress : AIProviderSettingsError("API 地址必须是带完整主机名的 HTTPS 地址。")
     class MissingModel : AIProviderSettingsError("请先选一个模型。")
+    class SignInRequired(provider: String) : AIProviderSettingsError("$provider 还没有登录，或者登录已失效。")
 }
 
 /**
@@ -769,7 +786,7 @@ object AIRequestTuning {
                 }
             }
         }
-        if (quick && kind == AIProviderKind.OPENAI) {
+        if (quick && (kind == AIProviderKind.OPENAI || kind == AIProviderKind.CHATGPT_PLAN)) {
             val efforts = mapOf("gpt-6-luna" to "none", "gpt-6-sol" to "none", "gpt-6.1-sol" to "low", "gpt-6-astra" to "low")
             efforts[model]?.let { value ->
                 if (style == AIAPIStyle.RESPONSES) body.put("reasoning", effortLevel(value))

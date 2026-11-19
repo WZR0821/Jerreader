@@ -5,7 +5,7 @@ protocol BackendTranslationHTTPClient: Sendable {
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse)
 }
 
-struct URLSessionBackendTranslationHTTPClient: BackendTranslationHTTPClient {
+struct URLSessionBackendTranslationHTTPClient: BackendTranslationHTTPClient, ChatGPTPlanHTTPClient {
     private let session: URLSession
 
     init(session: URLSession = .shared) {
@@ -306,13 +306,17 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
 
     let configuration: DirectAITranslationConfiguration
     private let client: any BackendTranslationHTTPClient
+    /// Hands out the access token of a ChatGPT plan; unused by other providers.
+    private let planSession: ChatGPTPlanSession
 
     init(
         configuration: DirectAITranslationConfiguration,
-        client: any BackendTranslationHTTPClient = URLSessionBackendTranslationHTTPClient()
+        client: any BackendTranslationHTTPClient = URLSessionBackendTranslationHTTPClient(),
+        planSession: ChatGPTPlanSession = .shared
     ) {
         self.configuration = configuration
         self.client = client
+        self.planSession = planSession
     }
 
     var providerIdentifier: String {
@@ -400,36 +404,12 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
             targetLanguage: targetLanguage,
             template: configuration.translationPromptTemplate
         )
-        let request = try makeRequest(
+        let text = try await completion(
             systemInstruction: prompt.systemInstruction,
             userContent: prompt.userContent
         )
-        let data: Data
-        let response: HTTPURLResponse
-        do {
-            (data, response) = try await client.data(for: request)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch let error as ServiceError {
-            throw error
-        } catch {
-            throw ServiceError.temporarilyUnavailable
-        }
 
-        switch response.statusCode {
-        case 200 ..< 300:
-            break
-        case 401, 403:
-            throw ServiceError.authenticationFailed
-        case 400, 404, 405, 415, 422:
-            throw ServiceError.invalidConfiguration
-        default:
-            throw ServiceError.temporarilyUnavailable
-        }
-
-        guard let translatedText = TranslationOutputPolicy.displayText(
-            try decodedText(from: data)
-        ) else {
+        guard let translatedText = TranslationOutputPolicy.displayText(text) else {
             throw ServiceError.resultNotFound
         }
 
@@ -485,25 +465,45 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
         } else {
             userContent = "SELECTED TEXT:\n\(focusedText)"
         }
-        let request = try makeRequest(
+        let text = try await completion(
             systemInstruction: systemInstruction,
             userContent: userContent,
             timeoutInterval: Self.explanationRequestTimeout,
             quick: false
         )
 
-        let data: Data
-        let response: HTTPURLResponse
-        do {
-            (data, response) = try await client.data(for: request)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch let error as ServiceError {
-            throw error
-        } catch {
-            throw ServiceError.temporarilyUnavailable
+        guard let explanation = TranslationOutputPolicy.displayText(text) else {
+            throw ServiceError.resultNotFound
         }
+        return ContextExplanationResult(
+            explanation: explanation,
+            providerIdentifier: providerIdentifier,
+            providerVersion: providerVersion
+        )
+    }
 
+    /// Sends one request and returns the model's text.
+    /// - Parameter quick: a translation, as opposed to an explanation; 自动
+    ///   reasoning is lighter for it.
+    private func completion(
+        systemInstruction: String,
+        userContent: String,
+        timeoutInterval: TimeInterval = 30,
+        quick: Bool = true
+    ) async throws -> String {
+        if configuration.provider.usesAccountSignIn {
+            return try await planCompletion(
+                systemInstruction: systemInstruction, userContent: userContent,
+                timeoutInterval: timeoutInterval, quick: quick
+            )
+        }
+        let request = try makeRequest(
+            systemInstruction: systemInstruction,
+            userContent: userContent,
+            timeoutInterval: timeoutInterval,
+            quick: quick
+        )
+        let (data, response) = try await send(request)
         switch response.statusCode {
         case 200 ..< 300:
             break
@@ -514,17 +514,90 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
         default:
             throw ServiceError.temporarilyUnavailable
         }
+        return try decodedText(from: data)
+    }
 
-        guard let explanation = TranslationOutputPolicy.displayText(
-            try decodedText(from: data)
-        ) else {
-            throw ServiceError.resultNotFound
-        }
-        return ContextExplanationResult(
-            explanation: explanation,
-            providerIdentifier: providerIdentifier,
-            providerVersion: providerVersion
+    /// A request paid by a ChatGPT plan: a current access token, one retry
+    /// with a fresh token when it is refused, and success only on
+    /// `response.completed`, so a cut-off answer is never shown or cached.
+    private func planCompletion(
+        systemInstruction: String,
+        userContent: String,
+        timeoutInterval: TimeInterval,
+        quick: Bool
+    ) async throws -> String {
+        let extra = AIRequestTuning.extraFields(
+            kind: configuration.provider,
+            style: .responses,
+            model: configuration.model,
+            reasoning: configuration.reasoning,
+            quick: quick
         )
+        func request(_ token: String) throws -> URLRequest {
+            try ChatGPTPlanRequests.responses(
+                accessToken: token, model: configuration.model, instructions: systemInstruction,
+                input: userContent, extra: extra, timeoutInterval: timeoutInterval
+            )
+        }
+        var token = try await planAccessToken(rejected: nil)
+        var (data, response) = try await send(try request(token))
+        if response.statusCode == 401 {
+            token = try await planAccessToken(rejected: token)
+            (data, response) = try await send(try request(token))
+        }
+        switch response.statusCode {
+        case 200 ..< 300:
+            break
+        case 429 where ChatGPTPlanStream.usageLimitCode(in: data) != nil:
+            throw ServiceError.planUsageLimitReached
+        case 401:
+            throw ServiceError.planSignInRequired
+        case 403 where ChatGPTPlanStream.usageLimitCode(in: data) != nil:
+            throw ServiceError.planUsageLimitReached
+        case 403:
+            throw ServiceError.planSignInRequired
+        case 400, 404, 405, 415, 422:
+            throw ServiceError.invalidConfiguration
+        default:
+            throw ServiceError.temporarilyUnavailable
+        }
+        switch ChatGPTPlanStream.parse(data) {
+        case .completed(let text):
+            let answer = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !answer.isEmpty else { throw ServiceError.resultNotFound }
+            return answer
+        case .failed(let code):
+            throw ChatGPTPlanStream.isUsageLimit(code)
+                ? ServiceError.planUsageLimitReached : ServiceError.temporarilyUnavailable
+        case .incomplete:
+            throw ServiceError.resultNotFound
+        case .interrupted:
+            throw ServiceError.temporarilyUnavailable
+        }
+    }
+
+    private func planAccessToken(rejected: String?) async throws -> String {
+        do {
+            return try await planSession.accessToken(rejected: rejected)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch ChatGPTPlanError.signInRequired {
+            throw ServiceError.planSignInRequired
+        } catch {
+            throw ServiceError.temporarilyUnavailable
+        }
+    }
+
+    private func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        do {
+            return try await client.data(for: request)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as ServiceError {
+            throw error
+        } catch {
+            throw ServiceError.temporarilyUnavailable
+        }
     }
 
     /// - Parameter quick: a translation, as opposed to an explanation; 自动

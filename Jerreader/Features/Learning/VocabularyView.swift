@@ -22,13 +22,12 @@ struct VocabularyView: View {
     @State private var exportDocument: LearningExportDocument?
     @State private var exportFormat: LearningExportFormat = .csv
     @State private var isExporting = false
+    /// Open only just after the page appears; see `LearningStagger`.
+    @State private var staggerActive = true
 
     var body: some View {
         VStack(spacing: 0) {
             collectionControls
-
-            Divider()
-                .overlay(JerreaderTheme.line)
 
             Group {
                 if filteredWordFavorites.isEmpty, filteredTranslationFavorites.isEmpty {
@@ -38,14 +37,19 @@ struct VocabularyView: View {
                 }
             }
             .id(collectionStateIdentity)
-            .transition(.opacity.combined(with: .scale(scale: 0.99, anchor: .top)))
+            .transition(stateTransition)
         }
         .background(Color.clear)
         .tint(JerreaderTheme.accent)
+        // Scoped to switching between the list, 收藏还是空的 and 没有匹配内容.
         .animation(
-            reduceMotion ? nil : JerreaderMotion.stateChange,
+            JerreaderMotion.choose(JerreaderMotion.stateChange, reduceMotion: reduceMotion),
             value: collectionStateIdentity
         )
+        .task {
+            try? await Task.sleep(for: LearningStagger.window)
+            staggerActive = false
+        }
         .alert(item: $alert) { item in
             Alert(
                 title: Text(item.title),
@@ -71,8 +75,17 @@ struct VocabularyView: View {
         }
     }
 
+    /// The list and the empty states cross-fade, the new one settling from
+    /// 99%; with Reduce Motion they only cross-fade.
+    private var stateTransition: AnyTransition {
+        reduceMotion
+            ? AnyTransition.opacity
+            : AnyTransition.opacity.combined(with: .scale(scale: 0.99, anchor: .top))
+    }
+
+    /// Search, count and export on the canvas, under the section switcher.
     private var collectionControls: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: JerreaderSpacing.xs) {
             LearningSearchField(
                 text: $searchText,
                 prompt: "搜索词语、原文或译文"
@@ -102,8 +115,8 @@ struct VocabularyView: View {
         .frame(maxWidth: 960)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, JerreaderTheme.pagePadding)
-        .padding(.vertical, 10)
-        .background(JerreaderTheme.mutedSurface)
+        .padding(.top, JerreaderSpacing.sm)
+        .padding(.bottom, JerreaderSpacing.xxs)
     }
 
     private var filteredWordFavorites: [WordLookupRecord] {
@@ -141,50 +154,57 @@ struct VocabularyView: View {
     }
 
     private var favoritesList: some View {
-        List {
-            if !filteredWordFavorites.isEmpty {
-                Section {
-                    ForEach(filteredWordFavorites) { record in
-                        NavigationLink {
-                            WordRecordDetailView(record: record)
+        // Filtered once per update, not once per row.
+        let words = filteredWordFavorites
+        let translations = filteredTranslationFavorites
+        // The translations continue the stagger where the words leave off.
+        let translationOffset = min(words.count, LearningStagger.rowLimit)
+        return List {
+            if !words.isEmpty {
+                LearningListHeading(
+                    title: "收藏词语",
+                    detail: "词条收藏保存在本机，清空查词历史不会删除它们。"
+                )
+                ForEach(words) { record in
+                    NavigationLink {
+                        WordRecordDetailView(record: record)
+                    } label: {
+                        WordRecordRow(record: record)
+                    }
+                    .learningListCard(
+                        order: LearningStagger.order(of: record, in: words),
+                        active: staggerActive
+                    )
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
+                            removeWordFavorite(record)
                         } label: {
-                            WordRecordRow(record: record)
+                            Label("取消收藏", systemImage: "star.slash")
                         }
-                        .favoriteCardStyle()
+                    }
+                }
+            }
+
+            if !translations.isEmpty {
+                LearningListHeading(
+                    title: "收藏译文",
+                    detail: "阅读中点按译文卡片上的星标即可保存。"
+                )
+                ForEach(translations) { record in
+                    TranslationFavoriteRow(record: record)
+                        .learningListCard(
+                            order: LearningStagger.order(of: record, in: translations).flatMap { order in
+                                order + translationOffset < LearningStagger.rowLimit ? order + translationOffset : nil
+                            },
+                            active: staggerActive
+                        )
                         .swipeActions(edge: .trailing) {
                             Button(role: .destructive) {
-                                removeWordFavorite(record)
+                                removeTranslationFavorite(record)
                             } label: {
                                 Label("取消收藏", systemImage: "star.slash")
                             }
                         }
-                    }
-                } header: {
-                    FavoriteSectionHeader(
-                        title: "收藏词语",
-                        detail: "词条收藏保存在本机，清空查词历史不会删除它们。"
-                    )
-                }
-            }
-
-            if !filteredTranslationFavorites.isEmpty {
-                Section {
-                    ForEach(filteredTranslationFavorites) { record in
-                        TranslationFavoriteRow(record: record)
-                            .favoriteCardStyle()
-                            .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) {
-                                    removeTranslationFavorite(record)
-                                } label: {
-                                    Label("取消收藏", systemImage: "star.slash")
-                                }
-                            }
-                    }
-                } header: {
-                    FavoriteSectionHeader(
-                        title: "收藏译文",
-                        detail: "阅读中点按译文卡片上的星标即可保存。"
-                    )
                 }
             }
         }
@@ -289,36 +309,16 @@ private struct LearningExportDocument: FileDocument {
     }
 }
 
-private struct FavoriteSectionHeader: View {
-    let title: String
-    let detail: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.headline)
-                .foregroundStyle(.primary)
-            Text(detail)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .textCase(nil)
-        .padding(.bottom, 4)
-    }
-}
-
 private struct TranslationFavoriteRow: View {
     let record: TranslationFavoriteRecord
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                JerreaderLabel(title: languagePair, icon: "character.book.closed", size: 18)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(JerreaderTheme.accent)
-                Spacer()
+        VStack(alignment: .leading, spacing: JerreaderSpacing.xs) {
+            HStack(alignment: .firstTextBaseline, spacing: JerreaderSpacing.xs) {
+                LearningChip(text: languagePair)
+                Spacer(minLength: JerreaderSpacing.xs)
                 Text(record.updatedAt, format: .dateTime.month().day())
-                    .font(.caption2)
+                    .font(.caption)
                     .foregroundStyle(.tertiary)
             }
 
@@ -328,12 +328,19 @@ private struct TranslationFavoriteRow: View {
                 .lineLimit(5)
 
             Text(record.sourceText)
-                .font(.subheadline)
+                .font(.system(.subheadline, design: .serif))
                 .foregroundStyle(.secondary)
                 .lineLimit(3)
+                .padding(.leading, 10)
+                .overlay(alignment: .leading) {
+                    Capsule()
+                        .fill(JerreaderTheme.accent.opacity(0.35))
+                        .frame(width: 3)
+                        .accessibilityHidden(true)
+                }
 
             if let bookTitle = record.bookTitle, !bookTitle.isEmpty {
-                JerreaderLabel(title: bookTitle, icon: "book.closed", size: 16)
+                JerreaderLabel(title: bookTitle, icon: "book.closed", size: 14)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
@@ -346,19 +353,5 @@ private struct TranslationFavoriteRow: View {
         let source = record.sourceLanguage?.displayName ?? "原文"
         let target = record.targetLanguage?.displayName ?? "译文"
         return "\(source) → \(target)"
-    }
-}
-
-private extension View {
-    func favoriteCardStyle() -> some View {
-        padding(16)
-            .background(JerreaderTheme.paper, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(JerreaderTheme.line, lineWidth: 0.75)
-            }
-            .listRowInsets(EdgeInsets(top: 6, leading: 20, bottom: 6, trailing: 20))
-            .listRowBackground(Color.clear)
-            .listRowSeparator(.hidden)
     }
 }

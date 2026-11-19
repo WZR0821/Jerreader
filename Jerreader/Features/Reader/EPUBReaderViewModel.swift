@@ -2787,6 +2787,10 @@ final class EPUBReaderViewModel {
             return .providerConfigurationInvalid
         case .authenticationFailed:
             return .providerAuthenticationFailed
+        case .planUsageLimitReached:
+            return .providerPlanUsageLimit
+        case .planSignInRequired:
+            return .providerPlanSignInRequired
         case .temporarilyUnavailable where provider.isNetworkProvider:
             return .providerUnavailable
         case .resultNotFound where provider.isNetworkProvider:
@@ -2808,6 +2812,10 @@ final class EPUBReaderViewModel {
             return .configurationInvalid
         case .authenticationFailed:
             return .authenticationFailed
+        case .planUsageLimitReached:
+            return .planUsageLimit
+        case .planSignInRequired:
+            return .planSignInRequired
         case .emptyText, .textTooLong, .unsupportedLanguage:
             return .invalidSelection
         case .resultNotFound:

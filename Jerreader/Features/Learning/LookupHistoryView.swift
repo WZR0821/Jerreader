@@ -14,13 +14,12 @@ struct LookupHistoryView: View {
     @State private var searchText = ""
     @State private var isConfirmingClear = false
     @State private var alert: LearningAlert?
+    /// Open only just after the page appears; see `LearningStagger`.
+    @State private var staggerActive = true
 
     var body: some View {
         VStack(spacing: 0) {
             collectionControls
-
-            Divider()
-                .overlay(JerreaderTheme.line)
 
             Group {
                 if filteredHistory.isEmpty {
@@ -30,14 +29,23 @@ struct LookupHistoryView: View {
                 }
             }
             .id(collectionStateIdentity)
-            .transition(.opacity.combined(with: .scale(scale: 0.99, anchor: .top)))
+            .transition(stateTransition)
         }
         .background(Color.clear)
         .tint(JerreaderTheme.accent)
+        // Scoped to switching between the list and the two empty states.
         .animation(
-            reduceMotion ? nil : JerreaderMotion.stateChange,
+            JerreaderMotion.choose(JerreaderMotion.stateChange, reduceMotion: reduceMotion),
             value: collectionStateIdentity
         )
+        .task {
+            try? await Task.sleep(for: LearningStagger.window)
+            staggerActive = false
+        }
+        // Clearing asks first: a warning tick as the question appears.
+        .sensoryFeedback(trigger: isConfirmingClear) { old, new in
+            !old && new ? SensoryFeedback.warning : nil
+        }
         .confirmationDialog(
             "清空查词历史？",
             isPresented: $isConfirmingClear,
@@ -57,8 +65,17 @@ struct LookupHistoryView: View {
         }
     }
 
+    /// The list and the empty states cross-fade, the new one settling from
+    /// 99%; with Reduce Motion they only cross-fade.
+    private var stateTransition: AnyTransition {
+        reduceMotion
+            ? AnyTransition.opacity
+            : AnyTransition.opacity.combined(with: .scale(scale: 0.99, anchor: .top))
+    }
+
+    /// Search, count and clear on the canvas, under the section switcher.
     private var collectionControls: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: JerreaderSpacing.xs) {
             LearningSearchField(text: $searchText, prompt: "搜索查词历史")
 
             LearningCountBadge(count: history.count, noun: "记录")
@@ -68,7 +85,8 @@ struct LookupHistoryView: View {
             } label: {
                 LearningToolbarIcon(
                     systemImage: "trash",
-                    accessibilityLabel: "清空查词历史"
+                    accessibilityLabel: "清空查词历史",
+                    tint: JerreaderTheme.vermilion
                 )
             }
             .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.94))
@@ -77,8 +95,8 @@ struct LookupHistoryView: View {
         .frame(maxWidth: 960)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, JerreaderTheme.pagePadding)
-        .padding(.vertical, 10)
-        .background(JerreaderTheme.mutedSurface)
+        .padding(.top, JerreaderSpacing.sm)
+        .padding(.bottom, JerreaderSpacing.xxs)
     }
 
     private var filteredHistory: [WordLookupRecord] {
@@ -102,23 +120,35 @@ struct LookupHistoryView: View {
     }
 
     private var historyList: some View {
-        List {
-            Section {
-                ForEach(filteredHistory) { record in
+        // Filtered and grouped once per update, not once per row.
+        let records = filteredHistory
+        let days = historyDays(records)
+        return List {
+            VStack(alignment: .leading, spacing: JerreaderSpacing.xs) {
+                LearningSectionHeading(
+                    title: "最近查询",
+                    detail: "共 \(history.count) 个词条，按最近查询时间排列。"
+                )
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isHeader)
+                dotLegend
+            }
+            .listRowInsets(EdgeInsets(top: 8, leading: JerreaderTheme.pagePadding, bottom: 2, trailing: JerreaderTheme.pagePadding))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+
+            ForEach(days) { day in
+                LearningDayHeading(title: day.title)
+                ForEach(day.records) { record in
                     NavigationLink {
                         WordRecordDetailView(record: record)
                     } label: {
-                        WordRecordRow(record: record)
+                        WordRecordRow(record: record, dotTint: dotTint(for: record))
                     }
-                    .padding(16)
-                    .background(JerreaderTheme.paper, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(JerreaderTheme.line, lineWidth: 0.75)
-                    }
-                    .listRowInsets(EdgeInsets(top: 6, leading: 20, bottom: 6, trailing: 20))
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
+                    .learningListCard(
+                        order: LearningStagger.order(of: record, in: records),
+                        active: staggerActive
+                    )
                     .swipeActions(edge: .leading) {
                         Button {
                             toggleFavorite(record)
@@ -138,17 +168,6 @@ struct LookupHistoryView: View {
                         }
                     }
                 }
-            } header: {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("最近查询")
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-                    Text("共 \(history.count) 个词条，按最近查询时间排列。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .textCase(nil)
-                .padding(.bottom, 4)
             }
         }
         .listStyle(.plain)
@@ -168,6 +187,62 @@ struct LookupHistoryView: View {
             systemImage: searchText.isEmpty ? "clock" : "magnifyingglass"
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// What the dots mean. VoiceOver hears 已收藏 from the star instead.
+    private var dotLegend: some View {
+        HStack(spacing: JerreaderSpacing.sm) {
+            legendItem("已收藏", tint: JerreaderTheme.accent)
+            legendItem("多次查询", tint: JerreaderTheme.vermilion)
+            legendItem("查过一次", tint: Color.secondary.opacity(0.4))
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .accessibilityHidden(true)
+    }
+
+    private func legendItem(_ title: String, tint: Color) -> some View {
+        HStack(spacing: 5) {
+            LearningKindDot(tint: tint)
+            Text(title)
+        }
+    }
+
+    /// Accent for a saved word, vermilion for one looked up more than once,
+    /// a light grey for the rest.
+    private func dotTint(for record: WordLookupRecord) -> Color {
+        if record.isFavorite { return JerreaderTheme.accent }
+        if record.lookupCount >= 2 { return JerreaderTheme.vermilion }
+        return Color.secondary.opacity(0.4)
+    }
+
+    /// Records by the day they were last looked up, newest first. `records`
+    /// is already sorted, so each day is one run of it.
+    private func historyDays(_ records: [WordLookupRecord]) -> [LookupHistoryDay] {
+        let calendar = Calendar.current
+        let now = Date()
+        var days: [LookupHistoryDay] = []
+        for record in records {
+            let day = calendar.startOfDay(for: record.lastLookedUpAt)
+            if days.last?.id == day {
+                days[days.count - 1].records.append(record)
+            } else {
+                days.append(LookupHistoryDay(id: day, title: dayTitle(day, now: now, calendar: calendar), records: [record]))
+            }
+        }
+        return days
+    }
+
+    /// 今天, 昨天, 11月3日, or 2025年11月3日 for an earlier year.
+    private func dayTitle(_ day: Date, now: Date, calendar: Calendar) -> String {
+        if calendar.isDate(day, inSameDayAs: now) { return "今天" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
+           calendar.isDate(day, inSameDayAs: yesterday) {
+            return "昨天"
+        }
+        let parts = calendar.dateComponents([.year, .month, .day], from: day)
+        let monthDay = "\(parts.month ?? 1)月\(parts.day ?? 1)日"
+        return parts.year == calendar.component(.year, from: now) ? monthDay : "\(parts.year ?? 0)年" + monthDay
     }
 
     private func toggleFavorite(_ record: WordLookupRecord) {
@@ -202,4 +277,11 @@ struct LookupHistoryView: View {
             )
         }
     }
+}
+
+/// One day of 历史.
+private struct LookupHistoryDay: Identifiable {
+    let id: Date
+    let title: String
+    var records: [WordLookupRecord]
 }

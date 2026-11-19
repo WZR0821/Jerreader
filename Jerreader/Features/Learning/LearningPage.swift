@@ -1,14 +1,16 @@
 import SwiftUI
 import SwiftData
 
-/// Shared layout for the five learning tools: 16-point margins and cards,
-/// bounded reading width, lazy rows, and the existing app color palette.
+/// Shared layout for the five learning tools: page margins of 20, paper
+/// cards, bounded reading width, lazy rows, on the canvas with its wash.
 struct LearningPage<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12) { content }
-                .padding(16)
+            LazyVStack(alignment: .leading, spacing: JerreaderSpacing.md) { content }
+                .padding(.horizontal, JerreaderTheme.pagePadding)
+                .padding(.top, JerreaderSpacing.md)
+                .padding(.bottom, JerreaderSpacing.xl)
                 .frame(maxWidth: 720)
                 .frame(maxWidth: .infinity)
         }
@@ -19,57 +21,120 @@ struct LearningPage<Content: View>: View {
     }
 }
 
+/// A paper card: radius 20, inner padding 16, e1 in light mode and a 1pt
+/// edge in dark mode.
 struct LearningCard<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) { content }
+        VStack(alignment: .leading, spacing: JerreaderSpacing.sm) { content }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .jerreaderPaperCard(padding: 16, radius: 16)
+            .jerreaderPaperCard(padding: JerreaderSpacing.md, radius: JerreaderRadius.card)
     }
 }
 
 struct LearningHint: View {
     let text: String
-    var body: some View { Text(text).font(.subheadline).foregroundStyle(.secondary) }
+    var body: some View {
+        Text(text)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
 }
 
 struct LearningActions<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) { content }.fixedSize(horizontal: true, vertical: false)
-            VStack(alignment: .leading, spacing: 8) { content }
+            HStack(spacing: JerreaderSpacing.xs) { content }.fixedSize(horizontal: true, vertical: false)
+            VStack(alignment: .leading, spacing: JerreaderSpacing.xs) { content }
         }
     }
 }
 
+/// The buttons of the learning tools. `filled` is the page's one accent
+/// capsule, `tinted` an accent-tinted capsule, `plain` accent text. A
+/// destructive role turns them vermilion. Capsules press to 0.97.
 struct LearningActionStyle: ButtonStyle {
     enum Kind { case plain, filled, tinted }
     var kind: Kind = .plain
     @Environment(\.isEnabled) private var enabled
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.body)
-            .foregroundStyle(configuration.role == .destructive ? Color.red : kind == .filled ? JerreaderTheme.onPrimaryAction : JerreaderTheme.accent)
-            .padding(.horizontal, kind == .plain ? 0 : 12)
+        let destructive = configuration.role == .destructive
+        let tint = destructive ? JerreaderTheme.vermilion : JerreaderTheme.accent
+        let pressed = configuration.isPressed
+        return configuration.label
+            .font(font)
+            .foregroundStyle(kind == .filled ? JerreaderTheme.onPrimaryAction : tint)
+            .padding(.horizontal, kind == .plain ? 0 : 18)
             .padding(.vertical, 8)
             .frame(minHeight: 44)
-            .background(kind == .filled ? JerreaderTheme.accent : kind == .tinted ? JerreaderTheme.accentFill : .clear,
-                in: RoundedRectangle(cornerRadius: 8))
+            .background {
+                switch kind {
+                case .filled:
+                    Capsule()
+                        .fill(tint)
+                        .overlay {
+                            Capsule().fill(
+                                LinearGradient(
+                                    colors: [Color.white.opacity(0.10), Color.white.opacity(0)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                        }
+                        .shadow(
+                            color: colorScheme == .dark || !enabled ? .clear : tint.opacity(0.28),
+                            radius: 12,
+                            y: 6
+                        )
+                case .tinted:
+                    Capsule().fill(tint.opacity(0.12))
+                case .plain:
+                    Color.clear
+                }
+            }
             .contentShape(Rectangle())
-            .opacity(enabled ? (configuration.isPressed ? 0.7 : 1) : 0.4)
+            .scaleEffect(kind != .plain && pressed ? 0.97 : 1)
+            .opacity(enabled ? (kind == .plain && pressed ? 0.6 : 1) : 0.45)
+            .animation(
+                reduceMotion ? nil : (pressed ? JerreaderMotion.press : JerreaderMotion.release),
+                value: pressed
+            )
+    }
+
+    private var font: Font {
+        switch kind {
+        case .filled: return .headline
+        case .tinted: return .subheadline.weight(.semibold)
+        case .plain: return .body
+        }
     }
 }
 
+/// A text field on mutedSurface, radius 14, optionally with a leading icon
+/// (a magnifying glass for a search field).
 struct LearningTextField: View {
     let title: String
     @Binding var text: String
+    var systemImage: String?
     var body: some View {
         TextField(title, text: $text)
             .font(.body).textInputAutocapitalization(.never).autocorrectionDisabled()
-            .padding(.horizontal, 10).padding(.vertical, 10).frame(minHeight: 44)
-            .background(JerreaderTheme.paper, in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(JerreaderTheme.line, lineWidth: 0.75))
+            .padding(.leading, systemImage == nil ? 14 : 38)
+            .padding(.trailing, 14)
+            .padding(.vertical, 10).frame(minHeight: 44)
+            .background(alignment: .leading) {
+                if let systemImage {
+                    JerreaderSymbol(name: systemImage, size: 16)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 14)
+                }
+            }
+            .background(JerreaderTheme.mutedSurface, in: RoundedRectangle(cornerRadius: JerreaderRadius.control, style: .continuous))
             .accessibilityLabel(title)
     }
 }

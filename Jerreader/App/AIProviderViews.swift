@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// 添加供应商: one list of presets, Claude, ChatGPT and DeepSeek first, with
-/// no domestic/overseas split, plus a form for any other compatible service.
+/// no domestic/overseas split; the plans that pay without an API key; and a
+/// form for any other compatible service.
 struct AddProviderView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var store: TranslationSettingsStore
@@ -10,25 +11,30 @@ struct AddProviderView: View {
     @State private var showHelp = false
 
     private enum Mode: String, CaseIterable, Identifiable {
-        case preset = "预设", custom = "自定义"
+        case preset = "预设", plan = "套餐", custom = "自定义"
         var id: String { rawValue }
     }
 
     var body: some View {
         NavigationStack {
             Group {
-                if mode == .preset {
-                    presets
-                } else {
-                    ProviderSetupForm(store: store, kind: .openAICompatible, finish: finish)
+                switch mode {
+                case .preset: presets
+                case .plan: PlanOptionsList(store: store, finish: finish)
+                case .custom: ProviderSetupForm(store: store, kind: .openAICompatible, finish: finish)
                 }
             }
             .safeAreaInset(edge: .top, spacing: 0) {
-                Picker("添加方式", selection: $mode) {
-                    ForEach(Mode.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented).padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 10)
-                .background(JerreaderTheme.canvas).accessibilityIdentifier("addProviderMode")
+                // The 2.0 pill control: the chosen way carries the theme colour.
+                JerreaderPillPicker(
+                    options: Mode.allCases.map { JerreaderPillPicker<Mode>.Option(value: $0, title: $0.rawValue) },
+                    selection: $mode
+                )
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("添加方式")
+                .accessibilityIdentifier("addProviderMode")
+                .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 10)
+                .background(JerreaderTheme.canvas)
             }
             .navigationTitle("添加供应商").navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -70,7 +76,7 @@ struct AddProviderView: View {
                     }
                 }
             } footer: {
-                Text("选一家，填上它的 API Key。没有列出的服务，用上面的“自定义”添加。")
+                Text("选一家，填上它的 API Key。想用 ChatGPT 或 Claude 的订阅额度，看“套餐”；没有列出的服务，用“自定义”添加。")
             }
         }
         .settingsList(icons: true)
@@ -186,10 +192,7 @@ struct ProviderSetupForm: View {
                     HStack {
                         ModelLabel(id: model.id, detail: model.title + " · " + model.detail)
                         Spacer()
-                        Image(systemName: chosen.contains(model.id) ? "checkmark.circle.fill" : "circle")
-                            .font(.title3)
-                            .foregroundStyle(chosen.contains(model.id)
-                                ? JerreaderTheme.accent : Color(uiColor: .tertiaryLabel))
+                        SettingsCheckMark(isOn: chosen.contains(model.id))
                     }
                 }
                 .accessibilityIdentifier("model-" + model.id)
@@ -341,6 +344,14 @@ struct ProviderDetailView: View {
     private var hasKey: Bool { store.keyedProviderIDs.contains(entryID) }
 
     var body: some View {
+        if kind.usesAccountSignIn {
+            ChatGPTPlanDetailView(store: store, entryID: entryID)
+        } else {
+            keyedProvider
+        }
+    }
+
+    private var keyedProvider: some View {
         List {
             Section {
                 ProviderHeader(provider: kind, name: entry.name, title: entry.displayName,
@@ -631,19 +642,26 @@ struct ModelDetailView: View {
         AIAPIStyle.selectable + (model?.style == .geminiNative ? [.geminiNative] : [])
     }
 
+    private var isPlan: Bool { kind.usesAccountSignIn }
+    private var title: String { entry.map { store.modelTitle(modelID, in: $0) } ?? modelID }
+
     var body: some View {
         List {
             Section {
-                ProviderHeader(provider: kind, name: entry?.name,
-                               title: modelID, detail: store.aiProviders.displayName(for: entryID))
+                ProviderHeader(provider: kind, name: entry?.name, title: title,
+                               detail: isPlan && title != modelID
+                                   ? modelID : store.aiProviders.displayName(for: entryID))
             }
-            Section {
-                Picker("接口格式", selection: style) {
-                    ForEach(styles) { Text($0.displayName).tag($0) }
+            // The plan always uses the Responses format.
+            if !isPlan {
+                Section {
+                    Picker("接口格式", selection: style) {
+                        ForEach(styles) { Text($0.displayName).tag($0) }
+                    }
+                    .accessibilityIdentifier("apiStylePicker")
+                } header: { Text("接口格式").sectionTitle() } footer: {
+                    Text("照服务商文档里写的格式选；测试连接通了就对。")
                 }
-                .accessibilityIdentifier("apiStylePicker")
-            } header: { Text("接口格式").sectionTitle() } footer: {
-                Text("照服务商文档里写的格式选；测试连接通了就对。")
             }
             if model?.style.supportsReasoning ?? true {
                 Section {
@@ -672,7 +690,8 @@ struct ModelDetailView: View {
                 .disabled(testing).accessibilityIdentifier("testConnectionButton")
                 testStatus
             } footer: {
-                Text("发送一句“Hello.”看这个模型能不能用，可能产生少量 API 费用。")
+                Text(isPlan ? "发送一句“Hello.”看这个模型能不能用，会用掉一点套餐额度。"
+                            : "发送一句“Hello.”看这个模型能不能用，可能产生少量 API 费用。")
             }
             Section {
                 Button { activate() } label: {
@@ -680,9 +699,8 @@ struct ModelDetailView: View {
                         Text(inUse ? "正在使用" : "设为正在用")
                         Spacer()
                         if inUse {
-                            Image(systemName: "checkmark").fontWeight(.semibold)
+                            JerreaderSymbol(name: "checkmark", size: 18)
                                 .foregroundStyle(JerreaderTheme.accent)
-                                .accessibilityHidden(true)
                         }
                     }
                 }
@@ -690,7 +708,8 @@ struct ModelDetailView: View {
             } footer: {
                 // The fresh default is already in use without a key; it then needs the key to translate.
                 if !hasKey {
-                    Text(inUse ? "这个供应商还没有填 API Key，填好后才能翻译。" : "这个供应商还没有填 API Key，填好后才能设为正在用。")
+                    let missing = isPlan ? "还没有登录 ChatGPT，登录" : "这个供应商还没有填 API Key，填好"
+                    Text(missing + (inUse ? "后才能翻译。" : "后才能设为正在用。"))
                 }
             }
             Section {
@@ -703,7 +722,7 @@ struct ModelDetailView: View {
         .settingsList()
         .navigationTitle("模型").navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .top, spacing: 0) { SettingsFeedback(error: error, notice: nil) }
-        .confirmationDialog("删除 \(modelID)？", isPresented: $confirmDelete, titleVisibility: .visible) {
+        .confirmationDialog("删除 \(title)？", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("删除", role: .destructive) { remove() }
         } message: {
             Text("只是从这个供应商的列表里移除，以后可以再添加。")
@@ -714,15 +733,19 @@ struct ModelDetailView: View {
     @ViewBuilder private var testStatus: some View {
         switch outcome {
         case .passed(let seconds):
-            Label(String(format: "连接正常，用时 %.1f 秒", seconds), systemImage: "checkmark.circle.fill")
-                .font(.subheadline).foregroundStyle(JerreaderTheme.accent)
+            Label {
+                Text(String(format: "连接正常，用时 %.1f 秒", seconds))
+            } icon: {
+                JerreaderSymbol(name: "checkmark.circle.fill", size: 18)
+            }
+                .font(.subheadline).foregroundStyle(JerreaderTheme.jade)
                 .accessibilityIdentifier("connectionResult")
         case .failed(let message):
             Label {
                 Text(message).font(.subheadline).foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
             } icon: {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
+                JerreaderSymbol(name: "exclamationmark.triangle", size: 18).foregroundStyle(JerreaderTheme.vermilion)
             }
             .accessibilityIdentifier("connectionResult")
         case nil:

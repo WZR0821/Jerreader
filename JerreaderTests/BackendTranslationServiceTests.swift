@@ -732,3 +732,305 @@ private actor BackendHTTPClientStub: BackendTranslationHTTPClient {
         capturedRequest
     }
 }
+
+/// The ChatGPT plan path of `DirectAITranslationService`: the plan's own
+/// access token, the streamed Responses request, one retry after a refused
+/// token, and the usage-limit stop. Mock servers only; nothing goes out.
+final class ChatGPTPlanTranslationTests: XCTestCase {
+    private let tokenPath = "/api/accounts/oauth/token"
+    private let responsesPath = "/v1/responses"
+
+    func testPlanTranslationStreamsResponsesWithThePlanToken() async throws {
+        let server = PlanServerStub()
+        await server.queue(responsesPath, 200, Self.completedStream("夜晚很安静。"))
+        let service = Self.service(server: server, store: PlanStoreStub(Self.credential(access: "plan-a1")))
+
+        let result = try await Self.translate(with: service)
+        let sent = await server.requests(to: responsesPath)
+        let request = try XCTUnwrap(sent.first)
+        let body = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: try XCTUnwrap(request.httpBody)) as? [String: Any]
+        )
+
+        XCTAssertEqual(sent.count, 1)
+        XCTAssertEqual(request.url, URL(string: "https://api.openai.com/v1/responses"))
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer plan-a1")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
+        XCTAssertEqual(body["model"] as? String, "gpt-test")
+        XCTAssertEqual(body["store"] as? Bool, false)
+        XCTAssertEqual(body["stream"] as? Bool, true)
+        XCTAssertTrue((body["instructions"] as? String)?.contains("只输出译文") == true)
+        let input = try XCTUnwrap(body["input"] as? String)
+        XCTAssertTrue(input.contains("<source>\nThe night was quiet.\n</source>"))
+        // Nothing the plan does not take goes out.
+        XCTAssertTrue(Set(body.keys).isSubset(of: ["model", "instructions", "input", "store", "stream", "reasoning"]))
+        XCTAssertTrue(Set(body.keys).isDisjoint(with: ChatGPTPlanRequests.omittedFields))
+        XCTAssertEqual(result.translatedText, "夜晚很安静。")
+        XCTAssertEqual(result.providerIdentifier, "direct-ai-chatGPTPlan")
+        let refreshes = await server.requests(to: tokenPath)
+        XCTAssertTrue(refreshes.isEmpty)
+    }
+
+    func testRefusedPlanTokenIsRefreshedOnceAndRetried() async throws {
+        let server = PlanServerStub()
+        await server.queue(responsesPath, 401, "{}")
+        await server.queue(tokenPath, 200, #"{"access_token":"plan-a2","refresh_token":"plan-r2","expires_in":3600}"#)
+        await server.queue(responsesPath, 200, Self.completedStream("夜晚很安静。"))
+        let store = PlanStoreStub(Self.credential(access: "plan-a1"))
+        let service = Self.service(server: server, store: store)
+
+        let result = try await Self.translate(with: service)
+        let sent = await server.requests(to: responsesPath)
+        let refreshes = await server.requests(to: tokenPath)
+
+        XCTAssertEqual(result.translatedText, "夜晚很安静。")
+        XCTAssertEqual(sent.map { $0.value(forHTTPHeaderField: "Authorization") }, ["Bearer plan-a1", "Bearer plan-a2"])
+        XCTAssertEqual(refreshes.count, 1)
+        XCTAssertEqual(store.value?.refreshToken, "plan-r2")
+    }
+
+    func testPlanRefusedTwiceAsksToSignInAgain() async {
+        let server = PlanServerStub()
+        await server.queue(responsesPath, 401, "{}")
+        await server.queue(tokenPath, 200, #"{"access_token":"plan-a2"}"#)
+        await server.queue(responsesPath, 401, "{}")
+        let service = Self.service(server: server, store: PlanStoreStub(Self.credential(access: "plan-a1")))
+
+        await assertTranslation(service, throws: .planSignInRequired)
+    }
+
+    func testPlanUsageLimitStopsWithoutRetrying() async {
+        let server = PlanServerStub()
+        await server.queue(responsesPath, 429, #"{"error":{"code":"subscription_sharing_usage_limit_exceeded","message":"m"}}"#)
+        let service = Self.service(server: server, store: PlanStoreStub(Self.credential(access: "plan-a1")))
+
+        await assertTranslation(service, throws: .planUsageLimitReached)
+        let sent = await server.requests(to: responsesPath)
+        let refreshes = await server.requests(to: tokenPath)
+        XCTAssertEqual(sent.count, 1)
+        XCTAssertTrue(refreshes.isEmpty)
+    }
+
+    func testPlanUsageUnavailableOnForbiddenIsAUsageLimit() async {
+        let server = PlanServerStub()
+        await server.queue(responsesPath, 403, #"{"detail":"subscription_sharing_usage_unavailable"}"#)
+        let service = Self.service(server: server, store: PlanStoreStub(Self.credential(access: "plan-a1")))
+
+        await assertTranslation(service, throws: .planUsageLimitReached)
+    }
+
+    func testOrdinaryRateLimitIsTemporary() async {
+        let server = PlanServerStub()
+        await server.queue(responsesPath, 429, #"{"error":{"code":"rate_limit_exceeded"}}"#)
+        let service = Self.service(server: server, store: PlanStoreStub(Self.credential(access: "plan-a1")))
+
+        await assertTranslation(service, throws: .temporarilyUnavailable)
+    }
+
+    func testFailedStreamWithUsageCodeIsAUsageLimit() async {
+        let server = PlanServerStub()
+        await server.queue(responsesPath, 200, """
+        event: response.failed
+        data: {"type":"response.failed","response":{"error":{"code":"subscription_sharing_usage_limit_exceeded"}}}
+
+
+        """)
+        let service = Self.service(server: server, store: PlanStoreStub(Self.credential(access: "plan-a1")))
+
+        await assertTranslation(service, throws: .planUsageLimitReached)
+    }
+
+    func testIncompleteOrCutOffAnswersAreNeverShown() async {
+        let incomplete = PlanServerStub()
+        await incomplete.queue(responsesPath, 200, """
+        data: {"type":"response.output_text.delta","delta":"夜晚"}
+
+        data: {"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}
+
+
+        """)
+        await assertTranslation(
+            Self.service(server: incomplete, store: PlanStoreStub(Self.credential(access: "plan-a1"))),
+            throws: .resultNotFound
+        )
+
+        // Deltas without `response.completed` are a cut-off stream.
+        let interrupted = PlanServerStub()
+        await interrupted.queue(responsesPath, 200, #"data: {"type":"response.output_text.delta","delta":"夜晚"}"# + "\n\n")
+        await assertTranslation(
+            Self.service(server: interrupted, store: PlanStoreStub(Self.credential(access: "plan-a1"))),
+            throws: .temporarilyUnavailable
+        )
+
+        // A completed answer that is only whitespace is not an answer.
+        let blank = PlanServerStub()
+        await blank.queue(responsesPath, 200, Self.completedStream("  \n "))
+        await assertTranslation(
+            Self.service(server: blank, store: PlanStoreStub(Self.credential(access: "plan-a1"))),
+            throws: .resultNotFound
+        )
+    }
+
+    func testSignedOutPlanSendsNothing() async {
+        let server = PlanServerStub()
+        let service = Self.service(server: server, store: PlanStoreStub(nil))
+
+        await assertTranslation(service, throws: .planSignInRequired)
+        let sent = await server.allRequests()
+        XCTAssertTrue(sent.isEmpty)
+    }
+
+    func testDeadRefreshGrantSignsThePlanOut() async {
+        let server = PlanServerStub()
+        await server.queue(tokenPath, 400, #"{"error":"invalid_grant"}"#)
+        let store = PlanStoreStub(Self.credential(access: "plan-a1", expiresIn: 30))
+        let service = Self.service(server: server, store: store)
+
+        await assertTranslation(service, throws: .planSignInRequired)
+        XCTAssertNil(store.value)
+        let sent = await server.requests(to: responsesPath)
+        XCTAssertTrue(sent.isEmpty)
+    }
+
+    func testPlanExplanationUsesTheSamePath() async throws {
+        let server = PlanServerStub()
+        await server.queue(responsesPath, 200, Self.completedStream("这里的 quiet 是形容词。"))
+        let service = Self.service(server: server, store: PlanStoreStub(Self.credential(access: "plan-a1")))
+
+        let result = try await service.explain(
+            ContextExplanationRequest(
+                focusedText: "quiet",
+                contextText: "The night was quiet.",
+                sourceLanguage: .english,
+                responseLanguage: .simplifiedChinese
+            )
+        )
+        let sent = await server.requests(to: responsesPath)
+
+        XCTAssertEqual(result.explanation, "这里的 quiet 是形容词。")
+        XCTAssertEqual(sent.count, 1)
+        XCTAssertEqual(sent.first?.value(forHTTPHeaderField: "Authorization"), "Bearer plan-a1")
+        XCTAssertEqual(sent.first?.timeoutInterval, DirectAITranslationService.explanationRequestTimeout)
+    }
+
+    // MARK: Helpers
+
+    private static func service(server: PlanServerStub, store: PlanStoreStub) -> DirectAITranslationService {
+        DirectAITranslationService(
+            configuration: .init(
+                provider: .chatGPTPlan,
+                endpoint: URL(string: "https://api.openai.com/v1/responses")!,
+                model: "gpt-test",
+                apiKey: "chatgpt-plan"
+            ),
+            client: server,
+            planSession: ChatGPTPlanSession(store: store, client: server)
+        )
+    }
+
+    private static func translate(with service: DirectAITranslationService) async throws -> TranslationResult {
+        try await service.translate(
+            text: "The night was quiet.",
+            context: "The lamps were lit. The night was quiet.",
+            sourceLanguage: .english,
+            targetLanguage: .simplifiedChinese
+        )
+    }
+
+    private func assertTranslation(
+        _ service: DirectAITranslationService,
+        throws expected: ServiceError,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        do {
+            _ = try await Self.translate(with: service)
+            XCTFail("Expected \(expected)", file: file, line: line)
+        } catch {
+            XCTAssertEqual(error as? ServiceError, expected, file: file, line: line)
+        }
+    }
+
+    private static func credential(access: String, expiresIn: TimeInterval = 3_600) -> ChatGPTPlanCredential {
+        ChatGPTPlanCredential(
+            clientID: "issued-test-client",
+            accessToken: access,
+            refreshToken: "plan-r1",
+            idToken: nil,
+            expiresAt: Date().addingTimeInterval(expiresIn),
+            email: "reader@example.test",
+            planType: "plus",
+            signedInAt: Date()
+        )
+    }
+
+    private static func completedStream(_ text: String) -> String {
+        let escaped = String(
+            decoding: try! JSONSerialization.data(withJSONObject: [text], options: [.fragmentsAllowed]),
+            as: UTF8.self
+        ).dropFirst().dropLast()
+        return """
+        event: response.output_text.delta
+        data: {"type":"response.output_text.delta","delta":\(escaped)}
+
+        event: response.completed
+        data: {"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":\(escaped)}]}]}}
+
+
+        """
+    }
+}
+
+/// Answers by URL path from a script, for both the plan's sign-in requests
+/// and the translation requests; refuses to connect when nothing is queued.
+private actor PlanServerStub: BackendTranslationHTTPClient, ChatGPTPlanHTTPClient {
+    private var replies: [String: [(status: Int, body: String)]] = [:]
+    private var log: [URLRequest] = []
+
+    func queue(_ path: String, _ status: Int, _ body: String) {
+        replies[path, default: []].append((status, body))
+    }
+
+    func requests(to path: String) -> [URLRequest] {
+        log.filter { $0.url?.path == path }
+    }
+
+    func allRequests() -> [URLRequest] { log }
+
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        log.append(request)
+        let path = request.url?.path ?? ""
+        guard var list = replies[path], !list.isEmpty else { throw URLError(.cannotConnectToHost) }
+        let reply = list.removeFirst()
+        replies[path] = list
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: reply.status,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        return (Data(reply.body.utf8), response)
+    }
+}
+
+private final class PlanStoreStub: ChatGPTPlanCredentialStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var saved: ChatGPTPlanCredential?
+
+    init(_ credential: ChatGPTPlanCredential?) { saved = credential }
+
+    var value: ChatGPTPlanCredential? {
+        lock.lock()
+        defer { lock.unlock() }
+        return saved
+    }
+
+    func load() throws -> ChatGPTPlanCredential? { value }
+
+    func save(_ credential: ChatGPTPlanCredential?) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        saved = credential
+    }
+}

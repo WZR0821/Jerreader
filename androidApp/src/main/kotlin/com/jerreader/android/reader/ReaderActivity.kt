@@ -17,8 +17,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
 import android.widget.FrameLayout
-import android.widget.ProgressBar
-import android.widget.TextView
 import androidx.activity.ComponentDialog
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
@@ -64,6 +62,7 @@ import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.material3.Text
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.fragment.app.FragmentFactory
@@ -85,6 +84,7 @@ import com.jerreader.android.data.ReadingAnnotationEntity
 import com.jerreader.android.data.ReadingBookmarkEntity
 import com.jerreader.android.library.PublicationIntegrity
 import com.jerreader.android.library.PublicationSnapshot
+import com.jerreader.android.translation.chatgptplan.ChatGPTPlanMessages
 import com.jerreader.shared.domain.BookFormat
 import com.jerreader.shared.library.LibraryBook
 import com.jerreader.shared.library.ReaderAnnotationColor
@@ -125,7 +125,14 @@ import com.jerreader.shared.ui.ReaderChapter
 import com.jerreader.shared.ui.ReaderNavigationPanel
 import com.jerreader.shared.ui.ReaderSearchResultItem
 import com.jerreader.shared.ui.ReaderBottomChrome
+import com.jerreader.shared.ui.ReaderFailureView
+import com.jerreader.shared.ui.ReaderLoadingView
 import com.jerreader.shared.ui.ReaderTopChrome
+import com.jerreader.shared.ui.JerreaderElevation
+import com.jerreader.shared.ui.JerreaderRadius
+import com.jerreader.shared.ui.jerreaderElevation
+import com.jerreader.shared.ui.jerreaderPalette
+import com.jerreader.shared.ui.jerreaderReveal
 import com.jerreader.shared.ui.TranslationCard
 import com.jerreader.shared.ui.TranslationCardState
 import com.jerreader.shared.ui.WordLookupCard
@@ -392,6 +399,13 @@ class ReaderActivity : AppCompatActivity() {
         return intent.getStringExtra(EXTRA_PUBLICATION_PATH)?.endsWith(".pdf", true) == true
     }
 
+    /** The format the loading card names, as iOS `BookFormat.displayName` (EPUB, PDF, DOCX, TXT). */
+    private fun loadingFormatName(): String =
+        (book?.sourceFormat ?: intent.getStringExtra(EXTRA_SOURCE_FORMAT))
+            ?.takeIf(String::isNotBlank)
+            ?.uppercase()
+            ?: if (looksLikePdf()) "PDF" else "EPUB"
+
     private suspend fun resolveAndOpenPublication() {
         try {
             withTimeout(READER_OPEN_TIMEOUT_MILLIS) {
@@ -484,8 +498,14 @@ class ReaderActivity : AppCompatActivity() {
                 FrameLayout.LayoutParams.MATCH_PARENT
             )
         )
+        // iOS's loading card; attachNavigator hides it once the page is up.
         root.addView(
-            ProgressBar(this).apply { id = R.id.reader_loading },
+            readerComposeView {
+                ReaderLoadingView(
+                    title = book?.title?.let { "正在打开《$it》" } ?: "正在打开…",
+                    detail = "正在由 Readium 解析 ${loadingFormatName()} 内容"
+                )
+            }.apply { id = R.id.reader_loading },
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -505,7 +525,6 @@ class ReaderActivity : AppCompatActivity() {
                 onAppearance = ::showAppearance,
                 pageColor = pageComposeColor(),
                 transparency = appPreferences.topBarTransparency,
-                showsDivider = layoutMode == ReaderLayoutMode.IMMERSIVE,
                 topInset = with(LocalDensity.current) { systemBarTopPx.toDp() },
                 onCompanion = if (book != null) ::showReadingCompanion else null,
                 hasCompanionUpdate = hasCompanionUpdate,
@@ -543,7 +562,6 @@ class ReaderActivity : AppCompatActivity() {
                 },
                 pageColor = pageComposeColor(),
                 transparency = appPreferences.bottomBarTransparency,
-                showsDivider = layoutMode == ReaderLayoutMode.IMMERSIVE,
                 bottomInset = with(LocalDensity.current) { systemBarBottomPx.toDp() },
                 onInteraction = ::noteChromeInteraction,
                 onScrubbingChanged = ::setChromeAutoHideSuspended
@@ -787,9 +805,12 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     /**
-     * iOS fades the bars (opacity and a 0.985 scale) instead of removing them,
-     * so their measured heights, and with them the page, stay put. A hidden bar
-     * is invisible rather than gone, which also lets taps through to the page.
+     * iOS `readerChromeBar`: a bar fades while it travels 12dp towards its own
+     * edge (JerreaderMotion.chrome, 0.20 s, no bounce). Only drawing properties
+     * change, so the measured heights, and with them the page and Readium's
+     * pagination, stay put; only switching the layout re-paginates. A hidden
+     * bar is invisible rather than gone, which also lets taps through to the
+     * page. With the system animations off the bars just switch.
      */
     private fun updateChromePresentation(animated: Boolean) {
         val visible = isChromeVisible
@@ -799,7 +820,11 @@ class ReaderActivity : AppCompatActivity() {
             android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O ||
                 android.animation.ValueAnimator.areAnimatorsEnabled()
             )
-        listOfNotNull(topChromeView, bottomChromeView).forEach { bar ->
+        val travel = CHROME_TRAVEL_DP * resources.displayMetrics.density
+        listOfNotNull(
+            topChromeView?.let { it to -travel },
+            bottomChromeView?.let { it to travel }
+        ).forEach { (bar, hiddenOffset) ->
             bar.animate().cancel()
             bar.importantForAccessibility = if (visible) {
                 View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
@@ -807,21 +832,20 @@ class ReaderActivity : AppCompatActivity() {
                 View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
             }
             val alpha = if (visible) 1f else 0f
-            val scale = if (visible) 1f else CHROME_HIDDEN_SCALE
+            val offset = if (visible) 0f else hiddenOffset
             if (visible) bar.visibility = View.VISIBLE
             if (animate) {
                 bar.animate()
                     .alpha(alpha)
-                    .scaleX(scale)
-                    .scaleY(scale)
+                    .translationY(offset)
                     .setDuration(CHROME_FADE_MILLIS)
-                    .setInterpolator(android.view.animation.DecelerateInterpolator())
+                    // FastOutSlowIn, the Compose JerreaderMotion.chrome() curve.
+                    .setInterpolator(android.view.animation.PathInterpolator(0.4f, 0f, 0.2f, 1f))
                     .withEndAction { if (!isChromeVisible) bar.visibility = View.INVISIBLE }
                     .start()
             } else {
                 bar.alpha = alpha
-                bar.scaleX = scale
-                bar.scaleY = scale
+                bar.translationY = offset
                 if (!visible) bar.visibility = View.INVISIBLE
             }
         }
@@ -863,21 +887,24 @@ class ReaderActivity : AppCompatActivity() {
             // The page's outer gutter, not over the first line of every page.
             val centreX = (maxWidth - 18.dp).coerceAtLeast(18.dp)
             val centreY = minOf(maxHeight - 72.dp, maxOf(72.dp, maxHeight * 0.30f))
+            // iOS: a 44dp paper circle with a 1dp accent ring and e1.
+            val palette = jerreaderPalette
             Box(
                 modifier = Modifier
                     .offset(x = centreX - 22.dp, y = centreY - 22.dp)
                     .size(44.dp)
+                    .jerreaderElevation(JerreaderElevation.CARD, CircleShape)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.92f), CircleShape)
-                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.28f), CircleShape)
+                    .background(palette.paper, CircleShape)
+                    .border(1.dp, palette.accent.copy(alpha = 0.28f), CircleShape)
                     .semantics { contentDescription = "${unit}翻译已开启" }
                     .clickable(role = Role.Button, onClickLabel = "显示阅读控制") { showReaderControls() },
                 contentAlignment = Alignment.Center
             ) {
                 JerreaderGlyph(
                     icon = JerreaderIcon.TRANSLATION_BUBBLE_FILLED,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(17.dp)
+                    tint = palette.accent,
+                    modifier = Modifier.size(18.dp)
                 )
             }
         }
@@ -1755,6 +1782,8 @@ class ReaderActivity : AppCompatActivity() {
     @androidx.compose.runtime.Composable
     private fun ReaderFloatingLayer() {
         var grammarDraft by androidx.compose.runtime.remember { mutableStateOf<com.jerreader.android.data.GrammarNoteEntity?>(null) }
+        // iOS drops the card's shadow while it is dragged.
+        var floatingCardDragging by androidx.compose.runtime.remember { mutableStateOf(false) }
         grammarDraft?.let { draft ->
             com.jerreader.android.ui.GrammarNoteEditor(draft, graph.learningRecords) { grammarDraft = null }
         }
@@ -2049,22 +2078,37 @@ class ReaderActivity : AppCompatActivity() {
                 }
             }
             if (translation != null) {
-                FloatingSurface(cardModifier) {
+                FloatingSurface(cardModifier, dragging = floatingCardDragging) {
                     TranslationCard(
                         state = translation,
+                        // The eyebrow names the direction while it loads, from
+                        // the same choice the tap controllers send.
+                        requestSourceLanguage = translationPreferences.sourceChoice.language ?: currentBookLanguage(),
+                        requestTargetLanguage = translationPreferences.targetLanguage,
+                        loadingDetail = if (translationPreferences.providerMode ==
+                            com.jerreader.shared.translation.TranslationProviderMode.ON_DEVICE
+                        ) "正在使用 Android 本机翻译" else "正在安全请求所选 AI 服务",
                         japaneseFuriganaEnabled = interfacePreferences.japaneseFuriganaEnabled,
                         onToggleFurigana = if (translation is TranslationCardState.Success &&
                             (translation.result.sourceLanguage == LanguageCode.JAPANESE || translation.result.targetLanguage == LanguageCode.JAPANESE)) {
                             { graph.appSettings.updateJapaneseFurigana(!interfacePreferences.japaneseFuriganaEnabled) }
                         } else null,
+                        // iOS: a caption 原文注音 and the furigana above a
+                        // hairline, then the translation in body text with 5pt
+                        // of extra line spacing.
                         translationContent = { success ->
                             if (interfacePreferences.japaneseFuriganaEnabled && success.result.sourceLanguage == LanguageCode.JAPANESE) {
-                                Text("原文注音", style = androidx.compose.material3.MaterialTheme.typography.labelMedium)
+                                Text("原文注音", style = MaterialTheme.typography.labelMedium, color = jerreaderPalette.secondaryText)
                                 com.jerreader.android.ui.JapaneseFuriganaText(success.sourceText, graph.offlineDictionary, Modifier.fillMaxWidth())
+                                com.jerreader.shared.ui.JerreaderDivider(color = jerreaderPalette.line)
                             }
                             if (interfacePreferences.japaneseFuriganaEnabled && success.result.targetLanguage == LanguageCode.JAPANESE)
                                 com.jerreader.android.ui.JapaneseFuriganaText(success.result.translatedText, graph.offlineDictionary, Modifier.fillMaxWidth())
-                            else Text(success.result.translatedText, style = androidx.compose.material3.MaterialTheme.typography.bodyLarge)
+                            else Text(
+                                success.result.translatedText,
+                                modifier = Modifier.semantics { contentDescription = "译文：${success.result.translatedText}" },
+                                style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 25.5.sp)
+                            )
                         },
                         onDismiss = ::dismissTranslation,
                         onRetry = ::retryTranslation,
@@ -2101,6 +2145,7 @@ class ReaderActivity : AppCompatActivity() {
                         crossPageMessage = crossPageMessage,
                         isExpandingCrossPage = isExpandingCrossPage,
                         onDrag = ::dragFloatingCard,
+                        onDraggingChange = { floatingCardDragging = it },
                         onOpenSettings = ::openTranslationSettings
                     )
                 }
@@ -2152,17 +2197,32 @@ class ReaderActivity : AppCompatActivity() {
         cardDragY = (y + dy).coerceIn(placement.minY, placement.maxY) - restY
     }
 
+    /**
+     * The paper under the floating cards, after iOS `ReaderTranslationOverlay`:
+     * radius 20, a 0.75dp `line` hairline, an e3 shadow on light paper only and
+     * none while the card is dragged, and a single reveal when it appears. The
+     * reveal and the shadow sit after [modifier], so the frame that places the
+     * card (and that the tests read) never moves with them.
+     */
     @androidx.compose.runtime.Composable
     private fun FloatingSurface(
         modifier: Modifier,
+        dragging: Boolean = false,
         content: @androidx.compose.runtime.Composable () -> Unit
     ) {
+        val palette = jerreaderPalette
+        val shape = RoundedCornerShape(JerreaderRadius.card)
         Surface(
-            modifier = modifier,
-            shape = RoundedCornerShape(18.dp),
-            color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-            shadowElevation = 10.dp,
+            modifier = modifier
+                .jerreaderReveal(order = 0)
+                .then(
+                    if (palette.isDark || dragging) Modifier
+                    else Modifier.jerreaderElevation(JerreaderElevation.FLOATING, shape)
+                ),
+            shape = shape,
+            color = palette.paper,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            border = BorderStroke(0.75.dp, palette.line),
             content = { content() }
         )
     }
@@ -2537,7 +2597,7 @@ class ReaderActivity : AppCompatActivity() {
                     AdaptiveReadingAssistPolicy.resolve(readingSignals(), companionMode, book?.id)
                 )
             }
-            val explained = runCatching {
+            val outcome = runCatching {
                 withContext(Dispatchers.IO) { service.explain(
                     ContextExplanationRequest(
                         focusedText = state.sourceText,
@@ -2546,13 +2606,16 @@ class ReaderActivity : AppCompatActivity() {
                         lens = lens
                     )
                 ) }
-            }.getOrNull()
+            }
+            val explained = outcome.getOrNull()
             if (explained == null) {
-                crossPageMessage = if (lensMode == null) {
-                    "AI 解析不可用，请先在设置里配置 AI 服务。"
-                } else {
-                    "AI 阅读透镜不可用，请先在设置里配置 AI 服务。"
-                }
+                // A ChatGPT plan out of quota or signed out says so instead.
+                crossPageMessage = outcome.exceptionOrNull()?.takeIf { ChatGPTPlanMessages.isStop(it) }?.message
+                    ?: if (lensMode == null) {
+                        "AI 解析不可用，请先在设置里配置 AI 服务。"
+                    } else {
+                        "AI 阅读透镜不可用，请先在设置里配置 AI 服务。"
+                    }
                 return@launch
             }
             crossPageMessage = null
@@ -2895,16 +2958,20 @@ class ReaderActivity : AppCompatActivity() {
         setContent(content)
     }
 
+    /**
+     * iOS `readerFailure`. 重新打开 starts the reader again from its intent,
+     * the way the shelf opened it; 返回书架 closes it.
+     */
     private fun showError(message: String) {
         val root = rootView ?: return
         root.removeAllViews()
         root.addView(
-            TextView(this).apply {
-                text = message
-                setTextColor(Color.DKGRAY)
-                textSize = 16f
-                setPadding(48, 48, 48, 48)
-                gravity = Gravity.CENTER
+            readerComposeView {
+                ReaderFailureView(
+                    message = message,
+                    onBackToLibrary = ::finish,
+                    onReopen = ::recreate
+                )
             },
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
@@ -2963,9 +3030,10 @@ class ReaderActivity : AppCompatActivity() {
         // layer for OCR selections and persisted page rectangles.
         private const val DRAW_OWN_SELECTION_HIGHLIGHT = false
         private val GAP = 18.dp
-        /** About iOS `JerreaderMotion.stateChange` (a 0.34 s spring). */
-        private const val CHROME_FADE_MILLIS = 300L
-        private const val CHROME_HIDDEN_SCALE = 0.985f
+        /** iOS `JerreaderMotion.chrome`, the bars' 0.20 s show and hide. */
+        private const val CHROME_FADE_MILLIS = 200L
+        /** iOS `ReaderChromeMetrics.barTravel`: how far a bar moves while it fades. */
+        private const val CHROME_TRAVEL_DP = 12f
         /** iOS `ReaderQuickTranslationIndicatorTiming.standard`. */
         private const val QUICK_TRANSLATION_INDICATOR_AUTO_EXIT_MILLIS = 5_000L
         private const val ANNOTATION_DECORATION_GROUP = "jerreader-reading-annotations"

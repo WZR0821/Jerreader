@@ -101,6 +101,8 @@ class LearningUiFixtureActivity : ComponentActivity() {
                                 com.jerreader.shared.ui.JerreaderLibraryApp(
                                     state = com.jerreader.shared.ui.LibraryUiState(books = shelf, isLoading = false),
                                     onImport = {}, onOpenBook = {}, onDeleteBook = {}, bottomBar = bar,
+                                    // Show the date line, as the app and iOS do.
+                                    utcOffsetMillisAt = { java.util.TimeZone.getDefault().getOffset(it) },
                                     onPickCover = { selected -> coverSelection = selected; chooseCover.launch(arrayOf("image/*")) })
                             } else LearningScreen(graph, initialSection = "translate", bottomBar = bar)
                         }

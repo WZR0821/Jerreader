@@ -78,6 +78,10 @@ extension DirectAIProviderChoice {
 
     var isCustom: Bool { self == .openAICompatible }
 
+    /// Signed in with an account instead of an API key; its address and
+    /// request format are fixed.
+    var usesAccountSignIn: Bool { self == .chatGPTPlan }
+
     /// Who runs the service: the second line of a provider row.
     var subtitle: String {
         switch self {
@@ -91,6 +95,7 @@ extension DirectAIProviderChoice {
         case .minimax: return "稀宇科技"
         case .gemini: return "Google"
         case .openAICompatible: return "OpenAI 或 Claude 兼容接口"
+        case .chatGPTPlan: return "用 ChatGPT 账号登录 · 实验"
         }
     }
 
@@ -108,13 +113,14 @@ extension DirectAIProviderChoice {
         case .minimax: return "https://api.minimax.cn/v1"
         case .gemini: return "https://generativelanguage.googleapis.com/v1beta/openai"
         case .openAICompatible: return ""
+        case .chatGPTPlan: return "https://api.openai.com/v1"
         }
     }
 
     /// The format a newly added model of this provider uses.
     var defaultStyle: AIAPIStyle {
         switch self {
-        case .openAI: return .responses
+        case .openAI, .chatGPTPlan: return .responses
         case .anthropic: return .anthropicMessages
         default: return .chatCompletions
         }
@@ -159,7 +165,8 @@ extension DirectAIProviderChoice {
         case .gemini:
             return [.init("gemini-3.8-flash", "Gemini 3.8 Flash", "日常翻译"),
                     .init("gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite", "轻量翻译")]
-        case .openAICompatible:
+        case .openAICompatible, .chatGPTPlan:
+            // A ChatGPT plan's models come from the signed-in account.
             return []
         }
     }
@@ -179,6 +186,8 @@ extension DirectAIProviderChoice {
             return "默认是国内站的地址。国际站请把 API 地址改成 https://api.minimax.io/v1。"
         case .anthropic, .openAI, .deepSeek, .gemini, .openAICompatible:
             return "已填入官方地址，一般不用改。"
+        case .chatGPTPlan:
+            return "不用 API Key，翻译用的是这个 ChatGPT 账号的套餐额度。Plus 的 5 小时额度和 ChatGPT、Codex 等用同一套餐的应用共用；额度用完会暂停，不会改走别的计费。"
         }
     }
 
@@ -196,6 +205,7 @@ extension DirectAIProviderChoice {
         case .gemini: text = "https://ai.google.dev/gemini-api/docs/openai"
         case .openAICompatible:
             text = "https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create"
+        case .chatGPTPlan: text = "https://developers.openai.com/siwc/token-sharing-open-source"
         }
         return URL(string: text)!
     }
@@ -213,7 +223,7 @@ extension DirectAIProviderChoice {
         case .minimax: text = "https://platform.minimax.cn/user-center/basic-information/interface-key"
         case .gemini: text = "https://aistudio.google.com/apikey"
         // 通义千问's console differs by region; the documentation link covers it.
-        case .qwen, .openAICompatible: return nil
+        case .qwen, .openAICompatible, .chatGPTPlan: return nil
         }
         return URL(string: text)
     }
@@ -243,6 +253,8 @@ extension DirectAIProviderChoice {
             return "自动：翻译时对 Flash 系列用最低档（2.5 Flash 关闭思考）。Gemini 3 等无法完全关闭思考的模型，“关闭”会用最低档。"
         case .openAICompatible:
             return "自动不发送任何推理参数；其他档位按所选接口格式发送标准字段。"
+        case .chatGPTPlan:
+            return "自动：翻译时对已知模型降低推理强度，语法解释用模型默认的强度。"
         }
     }
 
@@ -346,11 +358,13 @@ enum AIProviderSettingsError: LocalizedError, Equatable {
     case invalidAddress
     case missingModel
     case missingKey(String)
+    case signInRequired(String)
     case keychainUnavailable
 
     var errorDescription: String? {
         switch self {
         case .missingKey(let provider): return "\(provider) 还没有填 API Key。"
+        case .signInRequired(let provider): return "\(provider) 还没有登录，或者登录已失效。"
         case .keychainUnavailable: return "无法将 API Key 安全保存到钥匙串。"
         case .removingActiveProvider: return "正在用的供应商不能删除。先用“换模型”换到别的供应商。"
         case .removingActiveModel: return "正在用的模型不能删除，先换到别的模型。"
@@ -366,6 +380,8 @@ enum AIProviderSettingsError: LocalizedError, Equatable {
 struct AIProviderSettings: Codable, Equatable, Sendable {
     var activeID: String
     var entries: [AIProviderEntry]
+
+    private enum CodingKeys: String, CodingKey { case activeID, entries }
 
     /// A fresh install: the default provider with its preset models, no key yet.
     static var fresh: AIProviderSettings {
@@ -492,6 +508,21 @@ struct AIProviderSettings: Codable, Equatable, Sendable {
         let wanted = (selected ?? .openAI).rawValue
         let activeID = entries.contains { $0.id == wanted } ? wanted : entries[0].id
         return AIProviderSettings(activeID: activeID, entries: entries)
+    }
+}
+
+extension AIProviderSettings {
+    /// An entry of a kind this version does not know, saved by a later
+    /// version, is left out instead of failing the whole list.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        activeID = try container.decode(String.self, forKey: .activeID)
+        entries = try container.decode([LossyEntry].self, forKey: .entries).compactMap(\.entry)
+    }
+
+    private struct LossyEntry: Decodable {
+        let entry: AIProviderEntry?
+        init(from decoder: Decoder) throws { entry = try? AIProviderEntry(from: decoder) }
     }
 }
 
@@ -713,7 +744,7 @@ enum AIRequestTuning {
                 }
             }
         }
-        if quick, kind == .openAI {
+        if quick, kind == .openAI || kind == .chatGPTPlan {
             let efforts = ["gpt-6-luna": "none", "gpt-6-sol": "none", "gpt-6.1-sol": "low", "gpt-6-astra": "low"]
             if let effort = efforts[model] {
                 if style == .responses {

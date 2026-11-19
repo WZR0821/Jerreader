@@ -207,3 +207,32 @@
   - iOS 直连 AI 的提示用 `<source>` / `<context>` 分开原文和上下文，缓存身份升为 `jerreader-direct-api-v2`，旧的整段结果不再命中。安卓的翻译请求不带上下文，不涉及这一条。
 - 导入弹层可先选格式（全部、EPUB、PDF、Word、TXT）。选定某种格式后只把它交给系统选择器（iOS 传内容类型，安卓传 MIME 类型），其他格式不能选；选“全部”时仍可选所有支持的格式。导入弹层全高显示。
 - iOS「默认阅读排版 → 间距」里的「分别设置」（上 / 下 / 左右边距）删了。这三个值（`reader.defaults.pageMarginTop` 等）只存不读，阅读器一直只用统一的「页边距」，安卓也从没有这一项。旧安装里残留的值不再读写，不影响使用。
+
+## 2.0.0 AI 套餐与「纸墨」界面（2026-11-19）
+
+### 套餐（AI 大模型 → 添加供应商 → 套餐）
+
+只放供应商条款允许第三方阅读应用使用的两种：
+
+- **ChatGPT 套餐（实验）**：OpenAI 为开源应用提供的 Sign in with ChatGPT（[说明](https://developers.openai.com/siwc/token-sharing-open-source)）。用户在系统浏览器里登录 ChatGPT，App 拿到只属于本机的令牌，翻译走用户 ChatGPT 套餐的额度，不需要 API Key。手机端的回调方式 OpenAI 还没写进文档，所以标“实验”。
+- **Claude 套餐额度**：Claude Max / Ultra 每月附带的 API 额度挂在 Console 组织上，用法和普通 API Key 相同，所以不新增供应商，只引导用户去 Console 建 Key、再用现有的 Claude 供应商。
+- Coding Plan、Token Plan 一类编程套餐的条款只许在编程工具里用，阅读翻译不在其列，页脚说明不提供。
+
+登录流程（两端相同）：
+
+- 首次登录用 `client_id=dynamic_agent_client`，带 `agent_name_hint=Jerreader` 和本机随机的 `ext_agent_host_id=urn:uuid:…`；授权服务器在回调里发正式的 `client_id`，之后刷新和再次登录都用它。
+- 授权地址 `https://auth.openai.com/api/accounts/authorize`，令牌 `/api/accounts/oauth/token`，吊销地址从 OpenID 发现文档读。scope 为 `openid profile email offline_access resource.invoke chatgpt.tokens.use.direct`，resource 为 `https://api.openai.com/v1`。PKCE S256，另带 state 和 nonce，回调时逐项核对。
+- 回调地址是 `http://127.0.0.1:<随机端口>/auth/callback`：App 在本机回环地址上临时开一个只接受这一条路径的监听，收到授权码后把浏览器转回 App，监听随即关闭。
+  - iOS：`NWListener` + `ASWebAuthenticationSession`，转到 `jerreader://chatgpt-auth/done`（会话的回调 scheme 是 `jerreader`，页面随之关闭）。
+  - 安卓：`ServerSocket`（`ChatGPTPlanLoopback.kt`）+ 默认浏览器的 Custom Tab（按包名指定浏览器，免得别的 App 截走 OpenAI 的链接；不依赖 androidx.browser）。监听回 302 到 `intent://chatgpt-auth/done#Intent;scheme=jerreader;package=<包名>;end`，页面里另有一个同样的链接，浏览器没自动跳时可以点。这个地址由 `ChatGPTAuthRedirectActivity`（无界面）接住，把发起登录的页面带回前台并关掉 Custom Tab。浏览器在前台时，`ChatGPTPlanSignInService` 前台服务让进程不被冻结：安卓 14 起是 `shortService`，系统最多给约 3 分钟；更早的系统是普通前台服务。没收到回调就回到 App（离开后再回来 1.5 秒内没有回调）算取消，最长等 10 分钟。
+- 令牌只存本机：iOS 钥匙串（service `Jerreader.translation-backend`、account `chatgpt-plan-credential`，`ThisDeviceOnly`）；安卓用原有的 `AndroidKeystoreCredentialStore`（系统密钥库加密），单独一个账户 `chatgpt-plan-credential`。本机 host id 和正式 client_id 存普通偏好设置。**都不进备份**；从备份恢复到另一台设备要重新登录。
+- 刷新：过期前 120 秒内的令牌视为过期；刷新不带 scope；同时发起的多个请求只刷新一次（后到的请求拿到刷新好的令牌）；刷新令牌轮换后保存新的。刷新令牌失效（`invalid_grant` 等）就清掉账号，提示重新登录。
+- 退出登录先删本机令牌，再尽力吊销刷新令牌；吊销失败不影响本机状态。
+
+翻译请求：
+
+- `POST https://api.openai.com/v1/responses`，`store: false`、`stream: true`，带 `instructions` 和 `input`。整段收完再解析事件流，**只有收到 `response.completed` 才算成功**，半截结果不显示、不缓存。
+- 请求被 401 拒绝时换新令牌重试一次；还被拒就提示重新登录。
+- 额度用完（错误码 `subscription_sharing_usage_limit_exceeded` / `subscription_sharing_usage_unavailable`）直接停下，不自动重试，提示去 <https://chatgpt.com/settings/usage> 查看；这两种错误和“需要重新登录”都不提供“重试”按钮。
+- 模型列表来自 `GET /v1/models`，只列 `visibility` 为 `list` 的模型，显示账号给的名字，存的是模型 id。
+- 测试全部用 Mock：iOS `scripts/test_chatgpt_plan.swift`（host-test 的 `chatgpt-plan` 组，回环监听在本机真实运行，不出本机）和 XCTest `ChatGPTPlanTranslationTests`；安卓是 JVM 单元测试 `ChatGPTPlanProtocolTest`、`ChatGPTPlanSessionTest`、`ChatGPTPlanCompletionTest`、`ChatGPTPlanSettingsTest`（假的 HTTP 客户端；回环监听同样在 127.0.0.1 真实运行）。没有用真实 ChatGPT 账号验证过。
