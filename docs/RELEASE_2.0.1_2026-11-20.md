@@ -159,4 +159,5 @@ Android（构建都是 `JERREADER_ANDROID_PACKAGE_VARIANT=release scripts/safe_a
 - 外观模式和背景光晕：截图看过 iOS 浅色、Android 浅色和深色下的主题页；“跟随系统”时系统切换深浅色的那一下没有自动化验证。动效同 2.0.0，只核对了参数。
 - iOS UI 测试里要真实注音 EPUB 的 10 项和 iPad 的 1 项照旧跳过；iPad 版已暂停，不验收。
 - 第 3.4 节列的遗留问题这次都没改。
+- 写这份记录时还没提交 git；后来已提交（`a5cc71d`），11-20 推到 GitHub 并发了 [v2.0.1 Release](https://github.com/WZR0821/Jerreader/releases/tag/v2.0.1)（附双端安装包，下载回来核对过 SHA-256）。
 - 模拟器上的一处痕迹：`20261119-201614-jliwbyn4` 里失败的那次测试，把 iPhone 16 Pro Max 模拟器里那本自放的真实 EPUB 的纸张改成了“护眼”。只影响这台模拟器里那本书的显示，不影响任何测试的断言。
