@@ -79,4 +79,4 @@ Android（构建都是 `JERREADER_ANDROID_PACKAGE_VARIANT=release scripts/safe_a
 - Android 本机翻译：修好 ML Kit 后，Release 冒烟确认了组件都能创建、文字识别模块能加载、PDF 能打开；下载中日翻译模型要联网，测试不连外网，所以没有真的下载模型翻一句。
 - iOS UI 测试里要真实注音 EPUB 的 10 项和 iPad 的 1 项照旧跳过；iPad 版已暂停，不验收。
 - GitHub 上 v1.7.0 的发布说明写着 Release 包“能打开 EPUB 和 PDF”，那是当时冒烟的假通过（见第 5 节）。那份说明没有改，2.0.0 的发布说明里写明了这个问题已修复。
-- 写这份记录时还没提交 git，没有推送，没有发 GitHub Release，议题 #2 没有回复。
+- 写这份记录时还没提交 git；后来已提交（`ea323c6`），11-19 推到 GitHub 并发了 [v2.0.0 Release](https://github.com/WZR0821/Jerreader/releases/tag/v2.0.0)（附双端安装包，下载回来核对过 SHA-256），在议题 #2 下回复后关闭为已完成。
