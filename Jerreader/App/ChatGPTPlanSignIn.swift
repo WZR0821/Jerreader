@@ -122,6 +122,11 @@ enum ChatGPTPlanActions {
         if let modelsError = outcome.modelsError {
             return "已登录 ChatGPT\(who)，但没能取到模型列表：\(AIProviderRequests.message(for: modelsError)) 到“ChatGPT 套餐”页面点“刷新模型”重试。"
         }
+        // The plan becomes the AI model in use, but reading only calls it when
+        // the translation service is the AI one; say which case this is.
+        guard store.provider == .directAPI else {
+            return "已登录 ChatGPT\(who)。翻译服务还不是“AI 大模型”，到“AI 大模型”页点“用它翻译”后，才会用套餐额度翻译。"
+        }
         return "已登录 ChatGPT\(who)，现在用套餐额度翻译。"
     }
 

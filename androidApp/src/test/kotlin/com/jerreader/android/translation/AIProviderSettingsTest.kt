@@ -117,6 +117,29 @@ class AIProviderSettingsTest {
         }
     }
 
+    // 2.0.1: signing in to the plan forced it into use by saying the provider
+    // in use had no key, which also dropped a default the user had keyed.
+    @Test fun aPlanTakingOverKeepsADefaultThatHasAKey() {
+        val defaultID = AIProviderKind.defaultProvider.raw
+        val plan = AIProviderEntry.preset(AIProviderKind.OPENAI).copy(id = "chatGPTPlan")
+
+        val (kept, keptInUse) = AIProviderSettings.fresh.adding(plan, activeHasKey = true, takesOver = true)
+        assertTrue(keptInUse)
+        assertEquals("chatGPTPlan", kept.activeID)
+        assertEquals(listOf(defaultID, "chatGPTPlan"), kept.entries.map { it.id })
+
+        // With no key the untouched default still gives way, as before.
+        val (replaced, replacedInUse) = AIProviderSettings.fresh.adding(plan, activeHasKey = false, takesOver = true)
+        assertTrue(replacedInUse)
+        assertEquals(listOf("chatGPTPlan"), replaced.entries.map { it.id })
+
+        // Not taking over, a keyed provider in use stays in use.
+        val (waiting, waitingInUse) = AIProviderSettings.fresh.adding(plan, activeHasKey = true)
+        assertFalse(waitingInUse)
+        assertEquals(defaultID, waiting.activeID)
+        assertEquals(listOf(defaultID, "chatGPTPlan"), waiting.entries.map { it.id })
+    }
+
     @Test fun editingTheListKeepsTheProviderInUse() {
         // A provider added while the default has no key takes the default's place.
         val (replaced, replacedInUse) = AIProviderSettings.fresh.adding(AIProviderEntry.preset(AIProviderKind.ANTHROPIC), activeHasKey = false)

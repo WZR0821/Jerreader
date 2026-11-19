@@ -182,6 +182,12 @@ enum ReaderInterfaceDefaults {
     /// Readium's own default (62pt on a phone, on top of the safe area the
     /// SwiftUI container already leaves out) was most of the old dead band.
     static let contentEdgeInset: CGFloat = 14
+    /// 上下边距 (2.0.1): a multiple of `contentEdgeInset`, shared by every
+    /// reflowable book like the layout mode is. 1 is the gap 2.0.0 shipped, so
+    /// nothing moves for a reader who never touches the slider. Android stores
+    /// the same number under the same key.
+    static let verticalMarginsKey = "reader.verticalMargins"
+    static let verticalMarginsRange = 0.0 ... 4.0
     /// How long the immersive layout keeps the bars after the last touch.
     static let immersiveChromeAutoHideDelay: Duration = .seconds(4)
 
@@ -191,6 +197,30 @@ enum ReaderInterfaceDefaults {
 
     static func layoutMode(defaults: UserDefaults = .standard) -> ReaderLayoutMode {
         ReaderLayoutMode(rawValue: defaults.string(forKey: layoutModeKey) ?? "") ?? .standard
+    }
+
+    static func clampedVerticalMargins(_ value: Double) -> Double {
+        guard value.isFinite else { return 1 }
+        return min(max(value, verticalMarginsRange.lowerBound), verticalMarginsRange.upperBound)
+    }
+
+    static func verticalMargins(defaults: UserDefaults = .standard) -> Double {
+        guard defaults.object(forKey: verticalMarginsKey) != nil else { return 1 }
+        return clampedVerticalMargins(defaults.double(forKey: verticalMarginsKey))
+    }
+
+    /// The gap above and below a reflowable page for a 上下边距 setting.
+    static func pageEdgeInset(verticalMargins: Double) -> CGFloat {
+        (contentEdgeInset * CGFloat(clampedVerticalMargins(verticalMargins))).rounded()
+    }
+
+    /// 窄 / 标准 / 宽, as 左右边距 reads.
+    static func verticalMarginsLabel(_ value: Double) -> String {
+        switch clampedVerticalMargins(value) {
+        case ..<0.8: return "窄"
+        case 0.8 ..< 1.6: return "标准"
+        default: return "宽"
+        }
     }
 }
 

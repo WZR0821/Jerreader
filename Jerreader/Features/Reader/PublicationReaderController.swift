@@ -47,6 +47,8 @@ protocol PublicationReaderController: AnyObject {
     func setQuickTranslationUnit(_ unit: ReaderQuickTranslationUnit)
     func setQuickSentenceTapPageTurnsDisabled(_ disabled: Bool)
     func setPDFPaperModeEnabled(_ enabled: Bool)
+    /// 上下边距 changed: lay the page out with the new gap now.
+    func refreshContentInsets()
     func applyPreferences(
         fontSize: Double,
         theme: ReaderThemeChoice,
@@ -64,6 +66,9 @@ protocol PublicationReaderController: AnyObject {
 extension PublicationReaderController {
     /// EPUB and converted reflowable publications do not use PDF paper mode.
     func setPDFPaperModeEnabled(_ enabled: Bool) {}
+
+    /// A PDF page is fitted to the screen, so 上下边距 does not apply to it.
+    func refreshContentInsets() {}
 }
 
 extension PublicationReaderController where Self: UIViewController {

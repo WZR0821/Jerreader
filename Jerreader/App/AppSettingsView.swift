@@ -305,12 +305,30 @@ private struct SettingsHairline: View {
     }
 }
 
-/// 界面主题: the five colours as a row of round swatches, as in the reader's
-/// settings sheet. The chosen one carries a 2 pt ring in its own colour and a
-/// check; the switch springs (`stateChange`) and ticks (selection haptic).
+/// 界面主题 (2.0.1). The page used to be one row of five swatches; it now
+/// covers everything the app's own pages can be set to:
+///
+/// 1. 预览 — a small continue-reading card and two buttons in the chosen
+///    colours, so a change shows before the reader leaves the page;
+/// 2. 外观模式 — follow the system, or hold light or dark;
+/// 3. 主题色系 — eight colours, four to a row. The chosen one carries a 2 pt
+///    ring in its own colour and a check; the switch springs (`stateChange`)
+///    and ticks (selection haptic);
+/// 4. 背景光晕 — the faint accent wash at the top of every page;
+/// 5. 阅读纸张 — a way to 默认阅读排版, where the reader's paper is set. It is
+///    a link rather than a control so that page's 同步应用到现有书籍 rule
+///    stays the only way a paper reaches the books.
+///
+/// Android: `SettingsRoute.THEME` in `SettingsScreen.kt`, the same five blocks.
 private struct AppThemeColorSettingsView: View {
     @AppStorage(JerreaderThemePreferences.storageKey)
     private var selectedRawValue = JerreaderThemeColorChoice.ocean.rawValue
+    @AppStorage(JerreaderThemePreferences.appearanceModeKey)
+    private var appearanceModeRawValue = JerreaderAppearanceMode.system.rawValue
+    @AppStorage(JerreaderThemePreferences.backdropGlowKey)
+    private var backdropGlow = true
+    @AppStorage(ReaderAppearanceDefaults.themeKey)
+    private var readerThemeRawValue = ReaderThemeChoice.light.rawValue
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -318,8 +336,54 @@ private struct AppThemeColorSettingsView: View {
         JerreaderThemeColorChoice(rawValue: selectedRawValue) ?? .ocean
     }
 
+    private var appearanceMode: Binding<JerreaderAppearanceMode> {
+        Binding(
+            get: { JerreaderAppearanceMode(rawValue: appearanceModeRawValue) ?? .system },
+            set: { appearanceModeRawValue = $0.rawValue }
+        )
+    }
+
+    private static let swatchColumns = Array(repeating: GridItem(.flexible(), spacing: 0), count: 4)
+
     var body: some View {
         Form {
+            Section {
+                ThemePreviewCard(choice: selected)
+                    .listRowInsets(EdgeInsets(top: 14, leading: 14, bottom: 14, trailing: 14))
+            } header: {
+                Text("预览").settingsHeader()
+            }
+
+            Section {
+                if typeSize.isAccessibilitySize {
+                    // Large text: one row per mode, as the system lists them.
+                    Picker("外观模式", selection: appearanceMode) {
+                        ForEach(JerreaderAppearanceMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                } else {
+                    JerreaderPillPicker(
+                        options: JerreaderAppearanceMode.allCases.map { mode in
+                            JerreaderPillPicker<JerreaderAppearanceMode>.Option(
+                                value: mode,
+                                title: mode.title,
+                                identifier: "appearanceMode-\(mode.rawValue)"
+                            )
+                        },
+                        selection: appearanceMode
+                    )
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("外观模式")
+                }
+            } header: {
+                Text("外观模式").settingsHeader()
+            } footer: {
+                Text("只影响书架、学习和设置等页面。阅读页的明暗跟随所选的阅读纸张。")
+            }
+
             Section {
                 if typeSize.isAccessibilitySize {
                     // Large text: one row per colour, so every name and detail fits.
@@ -327,7 +391,7 @@ private struct AppThemeColorSettingsView: View {
                         listRow(choice)
                     }
                 } else {
-                    HStack(spacing: 0) {
+                    LazyVGrid(columns: Self.swatchColumns, spacing: 14) {
                         ForEach(JerreaderThemeColorChoice.allCases) { choice in
                             swatch(choice)
                         }
@@ -342,11 +406,36 @@ private struct AppThemeColorSettingsView: View {
                     }
                     .padding(.vertical, 4)
                     .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("themeSelectedSummary")
                 }
             } header: {
                 Text("主题色系").settingsHeader()
             } footer: {
-                Text("色系会同时调整强调色、按钮、卡片与背景，并自动适配系统深色/浅色外观。阅读页的纸张主题仍在“默认阅读排版”中单独设置。")
+                Text("色系会同时调整强调色、按钮和卡片上的点缀。")
+            }
+
+            Section {
+                Toggle("背景光晕", isOn: $backdropGlow)
+                    .accessibilityIdentifier("themeBackdropGlow")
+            } header: {
+                Text("背景").settingsHeader()
+            } footer: {
+                Text("在每页顶部铺一层很淡的主题色。关闭后页面是纯净的纸色。")
+            }
+
+            Section {
+                NavigationLink {
+                    GlobalReaderDefaultsView()
+                } label: {
+                    LabeledContent("阅读纸张") {
+                        Text((ReaderThemeChoice(rawValue: readerThemeRawValue) ?? .light).title)
+                    }
+                }
+                .accessibilityIdentifier("themeReaderPaperLink")
+            } header: {
+                Text("阅读页").settingsHeader()
+            } footer: {
+                Text("阅读页的纸张、字体和间距不随界面主题变化，在“默认阅读排版”里单独设置。")
             }
         }
         .scrollContentBackground(.hidden)
@@ -355,6 +444,7 @@ private struct AppThemeColorSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .tint(JerreaderTheme.accent(for: selected))
         .sensoryFeedback(.selection, trigger: selectedRawValue)
+        .sensoryFeedback(.selection, trigger: backdropGlow)
     }
 
     /// A 44 pt colour circle inside a 54 pt ring, with the colour's name under it.
@@ -432,6 +522,97 @@ private struct AppThemeColorSettingsView: View {
     }
 }
 
+/// The preview at the top of 界面主题: the continue-reading hero card and the
+/// two kinds of button, drawn in `choice`'s colours. Every colour is taken
+/// from `choice` rather than from the stored theme, so the card follows the
+/// swatch the moment it is tapped. Nothing here can be pressed; VoiceOver
+/// reads it as one description.
+private struct ThemePreviewCard: View {
+    let choice: JerreaderThemeColorChoice
+
+    private static let sampleProgress = 0.42
+
+    var body: some View {
+        let accent = JerreaderTheme.accent(for: choice)
+        VStack(alignment: .leading, spacing: 12) {
+            hero
+            HStack(spacing: 8) {
+                Text("开始练习")
+                    .foregroundStyle(JerreaderTheme.onPrimaryAction)
+                    .padding(.horizontal, 16)
+                    .frame(minHeight: 34)
+                    .background(accent, in: Capsule())
+                Text("加入生词本")
+                    .foregroundStyle(accent)
+                    .padding(.horizontal, 16)
+                    .frame(minHeight: 34)
+                    .background(JerreaderTheme.accentFill(for: choice), in: Capsule())
+                Spacer(minLength: 0)
+            }
+            .font(.subheadline.weight(.semibold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(choice.title)主题的界面预览")
+        .accessibilityIdentifier("themePreview")
+    }
+
+    private var hero: some View {
+        let shape = RoundedRectangle(cornerRadius: JerreaderRadius.control, style: .continuous)
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("继续阅读")
+                .font(.caption.weight(.semibold))
+                .tracking(0.6)
+                .foregroundStyle(Color.white.opacity(0.76))
+            Text("こころ")
+                .font(.system(.title3, design: .serif).weight(.semibold))
+                .foregroundStyle(Color.white)
+            HStack(spacing: 10) {
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.white.opacity(0.22))
+                        Capsule().fill(Color.white)
+                            .frame(width: proxy.size.width * Self.sampleProgress)
+                    }
+                }
+                .frame(height: 4)
+                Text("42%")
+                    .font(.caption.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(Color.white.opacity(0.86))
+            }
+            .padding(.top, 4)
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            // The hero gradient of 继续阅读 and 今日练习, in this colour.
+            shape
+                .fill(
+                    LinearGradient(
+                        colors: [JerreaderTheme.accentDeep(for: choice), JerreaderTheme.ink],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .overlay {
+                    shape.fill(
+                        RadialGradient(
+                            colors: [Color.white.opacity(0.16), Color.white.opacity(0)],
+                            center: .topLeading,
+                            startRadius: 0,
+                            endRadius: 260
+                        )
+                    )
+                }
+        }
+    }
+}
+
 private struct GlobalReaderDefaultsView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var books: [BookRecord]
@@ -449,6 +630,8 @@ private struct GlobalReaderDefaultsView: View {
     private var paragraphSpacing = 0.0
     @AppStorage(ReaderAppearanceDefaults.pageMarginsKey)
     private var pageMargins = 1.0
+    @AppStorage(ReaderInterfaceDefaults.verticalMarginsKey)
+    private var verticalMargins = 1.0
     @AppStorage(ReaderAppearanceDefaults.customBackgroundHexKey)
     private var customBackgroundHex = ""
     @AppStorage(ReaderAppearanceDefaults.customSelectionColorHexKey)
@@ -558,13 +741,27 @@ private struct GlobalReaderDefaultsView: View {
                         .monospacedDigit()
                 }
                 Slider(value: $paragraphSpacing, in: 0 ... 2, step: 0.1)
-                LabeledContent("页边距") {
+                LabeledContent("左右边距") {
                     Text(pageMargins.formatted(.number.precision(.fractionLength(1))))
                         .monospacedDigit()
                 }
                 Slider(value: $pageMargins, in: 0.5 ... 2, step: 0.1)
+                    .accessibilityLabel("左右边距")
+                LabeledContent("上下边距") {
+                    Text(verticalMargins.formatted(.number.precision(.fractionLength(1))))
+                        .monospacedDigit()
+                }
+                Slider(
+                    value: $verticalMargins,
+                    in: ReaderInterfaceDefaults.verticalMarginsRange,
+                    step: 0.1
+                )
+                .accessibilityLabel("上下边距")
+                .accessibilityIdentifier("readerDefaultsVerticalMargins")
             } header: {
                 Text("间距").settingsHeader()
+            } footer: {
+                Text("上下边距是正文离屏幕上下两端的留白，对所有书立即生效，不分单本；PDF 按页面本身显示，不受影响。")
             }
 
             Section {

@@ -437,20 +437,22 @@ struct AIProviderSettings: Codable, Equatable, Sendable {
     }
 
     /// Adds a provider, or replaces a preset that was never set up. It is put
-    /// in use only when the provider in use has no key; the untouched default
-    /// then leaves the list.
+    /// in use only when the provider in use has no key, or when `takesOver`
+    /// says the user chose it outright (signing in to a plan). The untouched
+    /// default leaves the list only while it has no key: with one it is a
+    /// provider the user set up and may want to return to.
     /// - Returns: whether the new provider is now in use.
     @discardableResult
-    mutating func add(_ entry: AIProviderEntry, activeHasKey: Bool) -> Bool {
+    mutating func add(_ entry: AIProviderEntry, activeHasKey: Bool, takesOver: Bool = false) -> Bool {
         let previous = active
         if let index = entries.firstIndex(where: { $0.id == entry.id }) {
             entries[index] = entry
         } else {
             entries.append(entry)
         }
-        guard !activeHasKey || previous.id == entry.id else { return false }
+        guard !activeHasKey || takesOver || previous.id == entry.id else { return false }
         activeID = entry.id
-        if previous.id != entry.id, isUntouchedDefault(previous) {
+        if previous.id != entry.id, !activeHasKey, isUntouchedDefault(previous) {
             entries.removeAll { $0.id == previous.id }
         }
         return true

@@ -345,7 +345,16 @@ class AndroidTranslationSettingsStore(
         // Without a model the plan cannot translate yet, so the provider in
         // use stays until the models are refreshed.
         val usable = entry.model.isNotEmpty()
-        changeProviders { providers -> providers.adding(entry, activeHasKey = !usable).first }
+        val keyed = mutableKeyedProviderIDs.value
+        changeProviders { providers ->
+            // The provider in use keeps its place in the list when it has a
+            // key: the plan takes over, it does not replace what was set up.
+            providers.adding(
+                entry,
+                activeHasKey = !usable || providers.active.id in keyed,
+                takesOver = usable
+            ).first
+        }
     }
 
     /** Mirrors the session's account: `null` when the session ended by itself. */

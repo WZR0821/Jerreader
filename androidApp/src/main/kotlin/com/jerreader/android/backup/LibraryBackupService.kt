@@ -541,6 +541,9 @@ class LibraryBackupService(
             .put("layoutMode", app.layoutMode.storageValue)
             .put("growthEnabled", app.growthEnabled)
             .put("applyReaderDefaultsToExistingBooks", app.applyReaderDefaultsToExistingBooks)
+            .put("verticalMargins", app.verticalMargins.toDouble())
+            .put("appearanceMode", app.appearanceMode.storageValue)
+            .put("backdropGlow", app.backdropGlow)
             .put(
                 "readerAppearance",
                 JSONObject()

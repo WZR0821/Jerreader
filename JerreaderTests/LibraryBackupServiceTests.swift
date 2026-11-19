@@ -158,6 +158,13 @@ final class LibraryBackupServiceTests: XCTestCase {
         sourceDefaults.set(true, forKey: ReaderInterfaceDefaults.japaneseFuriganaKey)
         sourceDefaults.set(false, forKey: ReaderInterfaceDefaults.immersiveReadingKey)
         sourceDefaults.set(ReaderLayoutMode.immersive.rawValue, forKey: ReaderInterfaceDefaults.layoutModeKey)
+        sourceDefaults.set(2.3, forKey: ReaderInterfaceDefaults.verticalMarginsKey)
+        // 2.0.1: the two 界面主题 options travel with the theme colour.
+        sourceDefaults.set(
+            JerreaderAppearanceMode.dark.rawValue,
+            forKey: JerreaderThemePreferences.appearanceModeKey
+        )
+        sourceDefaults.set(false, forKey: JerreaderThemePreferences.backdropGlowKey)
         sourceDefaults.set(
             "must-not-leave-device",
             forKey: "test.secret.apiKey"
@@ -213,6 +220,12 @@ final class LibraryBackupServiceTests: XCTestCase {
         XCTAssertTrue(targetDefaults.bool(forKey: ReaderInterfaceDefaults.japaneseFuriganaKey))
         XCTAssertFalse(targetDefaults.bool(forKey: ReaderInterfaceDefaults.immersiveReadingKey))
         XCTAssertEqual(ReaderInterfaceDefaults.layoutMode(defaults: targetDefaults), .immersive)
+        XCTAssertEqual(ReaderInterfaceDefaults.verticalMargins(defaults: targetDefaults), 2.3)
+        XCTAssertEqual(JerreaderThemePreferences.appearanceMode(defaults: targetDefaults), .dark)
+        XCTAssertEqual(
+            targetDefaults.object(forKey: JerreaderThemePreferences.backdropGlowKey) as? Bool,
+            false
+        )
         XCTAssertNil(targetDefaults.object(forKey: "test.secret.apiKey"))
     }
 

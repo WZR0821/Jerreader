@@ -9,6 +9,7 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.PointF
 import android.graphics.RectF
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
@@ -291,6 +292,22 @@ class ReaderActivity : AppCompatActivity() {
     private var revealBottomView: View? = null
     private var readerContainerView: View? = null
 
+    // 上下边距 (2.0.1). Readium's own per-page padding is switched off
+    // (`readium_navigator_epub_vertical_padding` is 0dp) and the same gap is
+    // drawn here as container padding, so it can follow the setting.
+    /** The setting, a multiple of [ReaderInterfaceDefaults.CONTENT_EDGE_INSET_DP]. */
+    private var verticalMargins = 1f
+    /**
+     * A paginated or vertical EPUB page is on (or about to be on) screen.
+     * False for a PDF, which is fitted to the screen, and for horizontal text
+     * that scrolls, which runs under the edge the way Readium laid it out
+     * before.
+     */
+    private var epubPageInsetApplies = false
+    /** The part of the container's padding that is 上下边距, in pixels. */
+    private var readerContentEdgeInsetPx = 0
+    private var navigatorSettingsJob: Job? = null
+
     /** iOS `isChromeVisible`: the standard layout always shows its bars. */
     internal val isChromeVisible: Boolean
         get() = layoutMode == ReaderLayoutMode.STANDARD || controlsVisible
@@ -346,6 +363,7 @@ class ReaderActivity : AppCompatActivity() {
         }
 
         showRoot()
+        updateSystemBarAppearance()
         lifecycleScope.launch { resolveAndOpenPublication() }
     }
 
@@ -638,13 +656,11 @@ class ReaderActivity : AppCompatActivity() {
             }
         }
 
+        verticalMargins = graph.appSettings.preferences.value.verticalMargins
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
             systemBarTopPx = bars.top
             systemBarBottomPx = bars.bottom
-            val revealEdge = ((ReaderInterfaceDefaults.CONTENT_EDGE_INSET_DP - 2) * density).toInt()
-            revealTop.updateLayoutParams { height = bars.top + revealEdge }
-            revealBottom.updateLayoutParams { height = bars.bottom + revealEdge }
             // The floating layers work inside the system bars, the way the iOS
             // overlays work inside the safe area.
             highlightView.updatePadding(top = bars.top, bottom = bars.bottom)
@@ -660,6 +676,10 @@ class ReaderActivity : AppCompatActivity() {
             var lastStatusBarHidden: Boolean? = null
             graph.appSettings.preferences.collectLatest { preferences ->
                 setLayoutMode(preferences.layoutMode)
+                if (verticalMargins != preferences.verticalMargins) {
+                    verticalMargins = preferences.verticalMargins
+                    updateReaderContentPadding()
+                }
                 // The immersive layout is full screen by definition; the
                 // standard one keeps the separate 隐藏状态栏 choice, as on iOS.
                 val statusBarHidden = preferences.immersiveReading ||
@@ -728,13 +748,45 @@ class ReaderActivity : AppCompatActivity() {
             top = systemBarTopPx
             bottom = systemBarBottomPx
         }
-        if (container.paddingTop != top || container.paddingBottom != bottom) {
-            container.updatePadding(top = top, bottom = bottom)
+        val edge = if (epubPageInsetApplies) {
+            (ReaderInterfaceDefaults.CONTENT_EDGE_INSET_DP * verticalMargins * density).roundToInt()
+        } else {
+            0
         }
+        readerContentEdgeInsetPx = edge
+        if (container.paddingTop != top + edge || container.paddingBottom != bottom + edge) {
+            container.updatePadding(top = top + edge, bottom = bottom + edge)
+        }
+        updateRevealZoneHeights()
         // The floating layer already carries the system-bar padding, so the
         // page offset used for highlights and anchors excludes it. The exact
         // value is measured again from the page before each use.
-        readerContentTopPx = (top - systemBarTopPx).coerceAtLeast(0)
+        readerContentTopPx = (top + edge - systemBarTopPx).coerceAtLeast(0)
+    }
+
+    /**
+     * The blank strips that bring the bars back in the immersive layout cover
+     * the system bar and the page's own gap, never a line of text; they keep
+     * a height a finger can find when 上下边距 is set to none on a screen with
+     * no system bar at that edge.
+     */
+    private fun updateRevealZoneHeights() {
+        val density = resources.displayMetrics.density
+        val pageGap = if (epubPageInsetApplies) {
+            readerContentEdgeInsetPx
+        } else {
+            (ReaderInterfaceDefaults.CONTENT_EDGE_INSET_DP * density).roundToInt()
+        }
+        val edge = (pageGap - (2 * density).roundToInt()).coerceAtLeast(0)
+        val minimum = (12 * density).roundToInt()
+        revealTopView?.let { view ->
+            val height = maxOf(systemBarTopPx + edge, minimum)
+            if (view.layoutParams?.height != height) view.updateLayoutParams { this.height = height }
+        }
+        revealBottomView?.let { view ->
+            val height = maxOf(systemBarBottomPx + edge, minimum)
+            if (view.layoutParams?.height != height) view.updateLayoutParams { this.height = height }
+        }
     }
 
     private fun setLayoutMode(mode: ReaderLayoutMode) {
@@ -857,6 +909,70 @@ class ReaderActivity : AppCompatActivity() {
 
     /** The colour Readium paints behind the page, for the root and the bars. */
     private fun pageColorArgb(): Int = ReaderInterfaceDefaults.pageColorArgb(currentAppearance).toInt()
+
+    /**
+     * The system's own icons follow the paper, like the reader's bars: light
+     * icons over a dark page. The window theme asks for dark icons once, at
+     * start-up, so on the night paper the clock and the battery were dark on
+     * black, and the three-button navigation bar kept the system's grey
+     * contrast scrim as a band under the reader's bottom bar. That bar already
+     * runs under the navigation bar in the page's colour, so the scrim goes.
+     */
+    private fun updateSystemBarAppearance() {
+        val darkPage = ReaderInterfaceDefaults.prefersDarkChrome(currentAppearance)
+        val bars = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+        bars.isAppearanceLightStatusBars = !darkPage
+        bars.isAppearanceLightNavigationBars = !darkPage
+        // Before Android 15 the bars are opaque and take a colour of their own;
+        // API 24–25 cannot draw dark navigation icons, so a light page gets a
+        // dark bar there (as `JerreaderSystemBars` does for the other screens).
+        @Suppress("DEPRECATION")
+        fun applyLegacyBarColors() {
+            window.statusBarColor = pageColorArgb()
+            window.navigationBarColor =
+                if (Build.VERSION.SDK_INT < 26 && !darkPage) Color.DKGRAY else pageColorArgb()
+        }
+        applyLegacyBarColors()
+        if (Build.VERSION.SDK_INT >= 29) window.isNavigationBarContrastEnforced = false
+        syncAppearanceSheetBars()
+    }
+
+    /** The 阅读与翻译 sheet's window while it is open. */
+    private var appearanceSheetWindow: android.view.Window? = null
+
+    /**
+     * The sheet is its own window. Its top shows the dimmed page, so the status
+     * bar icons go by the paper; its bottom is the sheet, drawn in the app's
+     * theme, so the navigation icons go by that. The legacy translucent theme
+     * the dialog uses does not draw behind the system bars by itself, which
+     * left a black strip under the sheet.
+     */
+    private fun syncAppearanceSheetBars() {
+        val sheetWindow = appearanceSheetWindow ?: return
+        sheetWindow.addFlags(android.view.WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
+        @Suppress("DEPRECATION")
+        fun clearLegacyBarColors() {
+            sheetWindow.statusBarColor = Color.TRANSPARENT
+            sheetWindow.navigationBarColor = Color.TRANSPARENT
+        }
+        clearLegacyBarColors()
+        if (Build.VERSION.SDK_INT >= 29) sheetWindow.isNavigationBarContrastEnforced = false
+        val darkPage = ReaderInterfaceDefaults.prefersDarkChrome(currentAppearance)
+        val systemDark = (resources.configuration.uiMode and
+            android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+        val darkSheet = graph.appSettings.preferences.value.appearanceMode.isDark(systemDark)
+        val sheetBars = androidx.core.view.WindowCompat.getInsetsController(sheetWindow, sheetWindow.decorView)
+        sheetBars.isAppearanceLightStatusBars = !darkPage
+        // API 24–25 always draws light navigation icons, which the transparent
+        // bar over a light sheet would hide; those two releases keep a grey bar.
+        if (Build.VERSION.SDK_INT < 26 && !darkSheet) {
+            @Suppress("DEPRECATION")
+            fun keepLegacyNavigationBar() { sheetWindow.navigationBarColor = Color.DKGRAY }
+            keepLegacyNavigationBar()
+        }
+        sheetBars.isAppearanceLightNavigationBars = !darkSheet
+    }
 
     private fun pageComposeColor(): androidx.compose.ui.graphics.Color =
         androidx.compose.ui.graphics.Color(pageColorArgb())
@@ -987,6 +1103,7 @@ class ReaderActivity : AppCompatActivity() {
         basePreferences = stored.epub
         currentAppearance = stored.appearance
         rootView?.setBackgroundColor(pageColorArgb())
+        updateSystemBarAppearance()
 
         when {
             openedPublication.conformsTo(Publication.Profile.EPUB) -> {
@@ -1059,10 +1176,12 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     /**
-     * Readium pads each reflowable page by `readium_navigator_epub_vertical_padding`
-     * (14dp here, iOS's content inset) and, by default, by the display cutout
-     * as well. The container's own padding already keeps clear of the cutout,
-     * so Readium adding it again only widened the blank margins.
+     * Readium pads each paginated page by `readium_navigator_epub_vertical_padding`
+     * and, by default, by the display cutout as well. The first is overridden
+     * to 0dp: the gap is 上下边距 now and is drawn as the container's padding
+     * (`updateReaderContentPadding`). The container's padding already keeps
+     * clear of the cutout too, so Readium adding it again only widened the
+     * blank margins.
      *
      * While a book scrolls, Readium reads any sideways finger movement past
      * the touch slop as a page turn; a scrolling chapter is a single page
@@ -1089,6 +1208,12 @@ class ReaderActivity : AppCompatActivity() {
             .verticalText
             .effectiveValue
         scrollPageTurnsDisabled = !laysOutVerticalText
+        // Decided before the page exists, so it is laid out once at its final
+        // height instead of being paginated and then resized.
+        setEpubPageInsetApplies(
+            scroll = navigatorFactory.createPreferencesEditor(preferences).scroll.effectiveValue,
+            verticalText = laysOutVerticalText
+        )
         return EpubNavigatorFragment.Configuration(
             selectionActionModeCallback = tapController.selectionActionModeCallback,
             shouldApplyInsetsPadding = false
@@ -1105,12 +1230,31 @@ class ReaderActivity : AppCompatActivity() {
         return scrollPageTurnsDisabled && epubNavigator.settings.value.scroll
     }
 
+    /**
+     * 上下边距 belongs to a page with a top and a bottom: a paginated one, or
+     * vertical text, whose columns run the height of the screen. Horizontal
+     * text that scrolls keeps running under the edge.
+     */
+    private fun setEpubPageInsetApplies(scroll: Boolean, verticalText: Boolean) {
+        val applies = !scroll || verticalText
+        if (epubPageInsetApplies == applies) return
+        epubPageInsetApplies = applies
+        updateReaderContentPadding()
+    }
+
     private fun attachEpubNavigator(factory: FragmentFactory) {
         attachNavigator(factory, EpubNavigatorFragment::class.java)
         val epubNavigator = supportFragmentManager.findFragmentByTag(NAVIGATOR_TAG)
             as? EpubNavigatorFragment
             ?: return
         navigator = epubNavigator
+        // 翻页方式 can change while the book is open; follow what Readium resolved.
+        navigatorSettingsJob?.cancel()
+        navigatorSettingsJob = lifecycleScope.launch {
+            epubNavigator.settings.collectLatest { settings ->
+                setEpubPageInsetApplies(scroll = settings.scroll, verticalText = settings.verticalText)
+            }
+        }
         // Quick translation owns the tap while enabled. When it is disabled,
         // the same native tap path becomes direct word lookup instead of being
         // silently dropped; the two listeners never consume the same tap.
@@ -1162,16 +1306,21 @@ class ReaderActivity : AppCompatActivity() {
         removePdfGeometryListeners()
         val scrollListener = ViewTreeObserver.OnScrollChangedListener {
             latestLocator?.let(::refreshPdfAnnotationRects)
+            refreshPdfSelectionRect()
         }
         val layoutListener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             latestLocator?.let(::refreshPdfAnnotationRects)
+            refreshPdfSelectionRect()
         }
         val touchListener = View.OnTouchListener { touchedView, event ->
             if (event.actionMasked == android.view.MotionEvent.ACTION_UP ||
                 event.actionMasked == android.view.MotionEvent.ACTION_CANCEL
             ) {
                 touchedView.postDelayed(
-                    { latestLocator?.let(::refreshPdfAnnotationRects) },
+                    {
+                        latestLocator?.let(::refreshPdfAnnotationRects)
+                        refreshPdfSelectionRect()
+                    },
                     PDF_GEOMETRY_REFRESH_DELAY_MILLIS
                 )
             }
@@ -1214,7 +1363,11 @@ class ReaderActivity : AppCompatActivity() {
                 val locatorJson = locator.toJSON().toString()
                 latestLocator = locator
                 latestLocatorJson = locatorJson
-                currentProgress = locator.locations.totalProgression ?: currentProgress
+                currentProgress = PdfLocatorFormat.readingProgress(
+                    reported = locator.locations.totalProgression ?: currentProgress,
+                    position = locator.locations.position,
+                    pageCount = if (pdfPublicationOpen) positions.size else 0
+                )
                 val previousChapterIndex = currentChapterIndex
                 val previousChapterName = currentChapterName
                 currentChapterIndex = readingOrder.indexOfFirst {
@@ -1300,7 +1453,11 @@ class ReaderActivity : AppCompatActivity() {
 
     private fun goToProgress(progress: Double) {
         val clamped = progress.coerceIn(0.0, 1.0)
-        currentProgress = clamped
+        // `currentProgress` is left to the position the book reports. Setting
+        // it here told the bar the seek had already landed, so the chapter
+        // name flashed back to the old chapter until the page arrived — and
+        // while the position table was still being built the percentage
+        // changed without the page moving at all.
         if (positions.isEmpty()) return
         val index = ((positions.size - 1) * clamped).toInt().coerceIn(0, positions.lastIndex)
         val target = positions[index]
@@ -1357,13 +1514,25 @@ class ReaderActivity : AppCompatActivity() {
             ?: "阅读位置"
 
     internal fun applyAppearance(appearance: ReaderAppearance) {
-        val previousOrientation = currentAppearance.orientation
+        val previous = currentAppearance
+        val previousOrientation = previous.orientation
         currentAppearance = appearance
         rootView?.setBackgroundColor(pageColorArgb())
+        updateSystemBarAppearance()
         val updated = appearance.toEpubPreferences(basePreferences)
         basePreferences = updated
         navigator?.submitPreferences(updated)
         tapTranslationController?.refreshSelectionAppearance()
+        // The sentence marker is painted once, in the colours of that moment.
+        // On new paper or with a new selection colour it would keep the old
+        // ones, so it leaves together with its card.
+        if (currentTranslationState != null &&
+            (previous.theme != appearance.theme ||
+                previous.customBackgroundHex != appearance.customBackgroundHex ||
+                previous.customSelectionColorHex != appearance.customSelectionColorHex)
+        ) {
+            dismissTranslation()
+        }
         applyWritingModeOverride()
 
         // Readium resolves the EPUB layout when the navigator is created and
@@ -1590,10 +1759,9 @@ class ReaderActivity : AppCompatActivity() {
             sheetWindow.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             sheetWindow.setBackgroundDrawable(Color.TRANSPARENT.toDrawable())
             androidx.core.view.WindowCompat.setDecorFitsSystemWindows(sheetWindow, false)
-            val readerBars = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
             val sheetBars = androidx.core.view.WindowCompat.getInsetsController(sheetWindow, sheetWindow.decorView)
-            sheetBars.isAppearanceLightStatusBars = readerBars.isAppearanceLightStatusBars
-            sheetBars.isAppearanceLightNavigationBars = readerBars.isAppearanceLightNavigationBars
+            appearanceSheetWindow = sheetWindow
+            syncAppearanceSheetBars()
             val preferences = graph.appSettings.preferences.value
             if (preferences.immersiveReading || preferences.layoutMode == ReaderLayoutMode.IMMERSIVE) {
                 sheetBars.systemBarsBehavior =
@@ -1601,6 +1769,7 @@ class ReaderActivity : AppCompatActivity() {
                 sheetBars.hide(WindowInsetsCompat.Type.statusBars())
             }
         }
+        dialog.setOnDismissListener { appearanceSheetWindow = null }
         dialog.show()
     }
 
@@ -1704,6 +1873,39 @@ class ReaderActivity : AppCompatActivity() {
                 pdfAnnotationRects = mapped
             }
         }
+    }
+
+    /**
+     * Puts the PDF selection back on its sentence after the page was dragged
+     * or zoomed, as the saved annotations are. Only the paint moves: the card
+     * stays where it is, since the reader may have dragged it there.
+     */
+    private fun refreshPdfSelectionRect() {
+        if (selectionRects.isEmpty()) return
+        val controller = pdfTranslationController ?: return
+        val view = pdfNavigator?.publicationView ?: return
+        val geometry = controller.selectionGeometry() ?: return
+        val pageIndex = controller.selectionPageIndex() ?: return
+        if (view.width <= 0 || view.height <= 0) return
+        lifecycleScope.launch {
+            val mapped = controller.mapPageGeometryToView(geometry, pageIndex, view.width, view.height)
+                ?: return@launch
+            // The selection may have been dismissed or replaced meanwhile.
+            if (selectionRects.isNotEmpty() && controller.selectionGeometry() == geometry) {
+                selectionRects = listOf(mapped)
+            }
+        }
+    }
+
+    /**
+     * The page a PDF selection sits on, when it is not the page Readium calls
+     * current: in continuous scroll a sentence can be tapped on the page before
+     * or after it, and a note saved from the card belongs to that page.
+     */
+    private fun pdfSelectionLocator(): Locator? {
+        val pageIndex = pdfTranslationController?.selectionPageIndex() ?: return null
+        if (pageIndex == (latestLocator?.locations?.position ?: 1) - 1) return null
+        return positions.getOrNull(pageIndex)?.let(PdfLocatorFormat::mark)
     }
 
     private fun parseGeometry(json: String?): List<RectF>? {
@@ -2348,6 +2550,11 @@ class ReaderActivity : AppCompatActivity() {
         crossPageMessage = null
         popupAvoidanceX = 0f
         popupAvoidanceY = 0f
+        // Where the reader dragged this card says nothing about the next one.
+        if (currentWordLookupState == null) {
+            cardDragX = 0f
+            cardDragY = 0f
+        }
         setFloatingLayerVisible(currentWordLookupState != null)
     }
 
@@ -2386,6 +2593,13 @@ class ReaderActivity : AppCompatActivity() {
         if (state is WordLookupCardState.Success) recordReaderLookup(state.explanation)
         popupAvoidanceX = 0f
         popupAvoidanceY = 0f
+        // A new card starts at its own place. The answer arriving for a card
+        // already on screen must not undo the reader's drag, so only the
+        // first state of a lookup resets it.
+        if (currentWordLookupState == null && currentTranslationState == null) {
+            cardDragX = 0f
+            cardDragY = 0f
+        }
         currentWordLookupState = state
         setFloatingLayerVisible(true)
         updateFloatingAnchor()
@@ -2791,7 +3005,7 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     private fun annotateTranslatedText(text: String) {
-        val locator = latestLocator ?: return
+        val pageLocator = pdfSelectionLocator() ?: latestLocator ?: return
         val geometryJson = pdfTranslationController?.selectionGeometry()?.let { geometry ->
             JSONArray().put(
                 JSONObject()
@@ -2801,14 +3015,28 @@ class ReaderActivity : AppCompatActivity() {
                     .put("h", geometry.height())
             ).toString()
         }
-        dismissTranslation()
-        showAnnotationEditor(
-            PendingAnnotation(
-                selectedText = text,
-                locator = locator,
-                geometryJson = geometryJson
+        lifecycleScope.launch {
+            // An EPUB note is drawn from the selection's own locator — the
+            // sentence and the text around it. The page position alone marks
+            // nothing, so a note added from the card was listed under 批注
+            // but never underlined on the page, and could not be tapped to
+            // edit. The card keeps its selection until it is dismissed, so it
+            // is read first.
+            val selected = if (pdfPublicationOpen) {
+                null
+            } else {
+                navigator?.currentSelection()?.locator
+                    ?.takeIf { !it.text.highlight.isNullOrBlank() }
+            }
+            dismissTranslation()
+            showAnnotationEditor(
+                PendingAnnotation(
+                    selectedText = text,
+                    locator = selected ?: pageLocator,
+                    geometryJson = geometryJson
+                )
             )
-        )
+        }
     }
 
     private fun openTranslationSettings() {
@@ -2823,6 +3051,10 @@ class ReaderActivity : AppCompatActivity() {
     private fun dismissWordLookup() {
         wordInteractionController?.clearSelection()
         currentWordLookupState = null
+        if (currentTranslationState == null) {
+            cardDragX = 0f
+            cardDragY = 0f
+        }
         setFloatingLayerVisible(currentTranslationState != null)
     }
 
@@ -2880,9 +3112,16 @@ class ReaderActivity : AppCompatActivity() {
         return frame(topChromeView) to frame(bottomChromeView)
     }
 
-    /** The page container's top and bottom padding, in pixels. */
+    /**
+     * The space the page container keeps clear of the bars, top and bottom,
+     * in pixels. 上下边距 comes on top of it, see [readerContentEdgeInsetForTesting].
+     */
     internal fun readerContentPaddingForTesting(): Pair<Int, Int> =
-        (readerContainerView?.paddingTop ?: 0) to (readerContainerView?.paddingBottom ?: 0)
+        ((readerContainerView?.paddingTop ?: 0) - readerContentEdgeInsetPx) to
+            ((readerContainerView?.paddingBottom ?: 0) - readerContentEdgeInsetPx)
+
+    /** 上下边距 as drawn: the gap above and below the page, in pixels. */
+    internal fun readerContentEdgeInsetForTesting(): Int = readerContentEdgeInsetPx
 
     internal fun systemBarInsetsForTesting(): Pair<Int, Int> = systemBarTopPx to systemBarBottomPx
 
@@ -2930,7 +3169,12 @@ class ReaderActivity : AppCompatActivity() {
     @androidx.compose.runtime.Composable
     private fun ReaderTheme(content: @androidx.compose.runtime.Composable () -> Unit) {
         val preferences by graph.appSettings.preferences.collectAsState()
-        JerreaderTheme(accent = preferences.theme, content = content)
+        JerreaderTheme(
+            accent = preferences.theme,
+            dark = preferences.appearanceMode.isDark(androidx.compose.foundation.isSystemInDarkTheme()),
+            backdropGlow = preferences.backdropGlow,
+            content = content
+        )
     }
 
     /**
@@ -2944,6 +3188,7 @@ class ReaderActivity : AppCompatActivity() {
         JerreaderTheme(
             accent = preferences.theme,
             dark = ReaderInterfaceDefaults.prefersDarkChrome(currentAppearance),
+            backdropGlow = preferences.backdropGlow,
             content = content
         )
     }

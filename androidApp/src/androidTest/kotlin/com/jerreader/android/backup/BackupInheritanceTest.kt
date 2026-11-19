@@ -240,6 +240,8 @@ class BackupInheritanceTest {
             val settings = JSONObject().put("topBarTransparency", 0.35).put("bottomBarTransparency", 0.75)
                 .put("japaneseFuriganaEnabled", true).put("immersiveReading", false)
                 .put("layoutMode", "immersive")
+                // 2.0.1: 上下边距 and the two 界面主题 options.
+                .put("verticalMargins", 2.3).put("appearanceMode", "dark").put("backdropGlow", false)
             val archive = writeEntries(listOf("manifest.json" to validManifest(100).toString().toByteArray(),
                 "settings/preferences.json" to settings.toString().toByteArray()))
             service.restore(Uri.fromFile(archive))
@@ -250,6 +252,9 @@ class BackupInheritanceTest {
                 assertTrue(loaded.japaneseFuriganaEnabled)
                 assertEquals(false, loaded.immersiveReading)
                 assertEquals(com.jerreader.shared.library.ReaderLayoutMode.IMMERSIVE, loaded.layoutMode)
+                assertEquals(2.3f, loaded.verticalMargins, 0.0001f)
+                assertEquals(com.jerreader.shared.ui.JerreaderAppearanceMode.DARK, loaded.appearanceMode)
+                assertEquals(false, loaded.backdropGlow)
             }
             assertOptions()
             val old = writeEntries(listOf("manifest.json" to validManifest(200).toString().toByteArray(),
@@ -263,6 +268,9 @@ class BackupInheritanceTest {
                 updateJapaneseFurigana(original.japaneseFuriganaEnabled)
                 updateImmersiveReading(original.immersiveReading)
                 updateLayoutMode(original.layoutMode)
+                updateVerticalMargins(original.verticalMargins)
+                updateAppearanceMode(original.appearanceMode)
+                updateBackdropGlow(original.backdropGlow)
             }
         }
     }

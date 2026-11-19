@@ -410,8 +410,11 @@ final class TranslationSettingsStore: ObservableObject {
         // Without a model the plan cannot translate yet, so the provider in
         // use stays until the models are refreshed.
         let usable = !entry.model.isEmpty
+        let keyed = keyedProviderIDs
         changeProviders { providers in
-            providers.add(entry, activeHasKey: !usable)
+            // The provider in use keeps its place in the list when it has a
+            // key: the plan takes over, it does not replace what was set up.
+            providers.add(entry, activeHasKey: !usable || keyed.contains(providers.active.id), takesOver: usable)
         }
     }
 
@@ -610,7 +613,13 @@ final class TranslationSettingsStore: ObservableObject {
         )
         let keys = Self.readKeys(for: aiProviders, credentialStore: credentialStore)
         apiKeys = keys.keys
-        keyedProviderIDs = Set(keys.keys.filter { !$0.value.isEmpty }.keys)
+        var keyed = Set(keys.keys.filter { !$0.value.isEmpty }.keys)
+        // The ChatGPT plan has no API key; it counts as ready while its
+        // account is known, exactly as at start-up. Leaving it out here made
+        // a restored backup show a signed-in plan as 未设置 until the app was
+        // restarted, and let the next provider added take 正在用 from it.
+        if chatGPTPlanAccount != nil { keyed.insert(Self.chatGPTPlanID) }
+        keyedProviderIDs = keyed
         if keys.failed {
             credentialErrorMessage = "无法从钥匙串读取 API Key。"
         }

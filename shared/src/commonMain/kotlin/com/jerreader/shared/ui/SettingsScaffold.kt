@@ -78,6 +78,8 @@ fun SettingsPage(
     title: String,
     onBack: (() -> Unit)? = null,
     bottomBar: @Composable () -> Unit = {},
+    /** The page [onBack] returns to, named beside the back chevron as iOS does. */
+    backTitle: String = "设置",
     content: @Composable () -> Unit
 ) {
     // A pushed page is a plain iOS `Form`, spaced as measured there.
@@ -93,7 +95,7 @@ fun SettingsPage(
                     Spacer(Modifier.heightIn(min = 44.dp))
                     Text(title, style = MaterialTheme.typography.displaySmall, modifier = Modifier.padding(bottom = 8.dp))
                 }
-            } else JerreaderNavigationBar(title, "设置", onBack)
+            } else JerreaderNavigationBar(title, backTitle, onBack)
         },
         bottomBar = bottomBar
     ) { padding ->

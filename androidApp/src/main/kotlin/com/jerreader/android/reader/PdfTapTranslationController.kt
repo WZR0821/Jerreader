@@ -2,6 +2,7 @@ package com.jerreader.android.reader
 
 import androidx.core.graphics.createBitmap
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.graphics.PointF
 import android.graphics.RectF
 import android.graphics.pdf.PdfRenderer
@@ -83,6 +84,8 @@ class PdfTapTranslationController(
     private var requestToken = 0L
     private var lastTapPoint: PointF? = null
     private var lastSelectionGeometry: RectF? = null
+    /** The page the selection sits on; not always the page Readium calls current. */
+    private var lastSelectionPageIndex: Int? = null
     private val lastRetryAtMillis = mutableMapOf<String, Long>()
     private val ocrCache = linkedMapOf<OcrCacheKey, PageOcr>()
 
@@ -153,6 +156,7 @@ class PdfTapTranslationController(
         lastRequest = null
         lastTapPoint = null
         lastSelectionGeometry = null
+        lastSelectionPageIndex = null
         onHighlightChanged?.invoke(emptyList())
     }
 
@@ -182,19 +186,32 @@ class PdfTapTranslationController(
         val token = ++requestToken
         val navigator = navigator ?: return null
         lastTapPoint = PointF(point.x, point.y)
-        val pageIndex = currentPageIndex().coerceIn(0, (renderer.pageCount - 1).coerceAtLeast(0))
-        val pageRect = withContext(Dispatchers.Main.immediate) {
-            pageRectFor(pageIndex, navigator.publicationView.width, navigator.publicationView.height)
+        val viewWidth = navigator.publicationView.width
+        val viewHeight = navigator.publicationView.height
+        val current = currentPageIndex().coerceIn(0, (renderer.pageCount - 1).coerceAtLeast(0))
+        // The PDF scrolls continuously, so the end of the page before the
+        // current one, or the start of the next, is usually on screen as well.
+        // Only the current page used to be looked at: a tap on the others did
+        // nothing but toggle the bars, after recognizing the wrong page.
+        val (pageIndex, pageRect) = withContext(Dispatchers.Main.immediate) {
+            listOf(current, current - 1, current + 1)
+                .filter { it in 0 until renderer.pageCount }
+                .firstNotNullOfOrNull { index ->
+                    pageRectFor(index, viewWidth, viewHeight)
+                        ?.takeIf { it.contains(point.x, point.y) }
+                        ?.let { index to it }
+                }
         } ?: return null
         val extracted = extractText(
             pageIndex = pageIndex,
             point = point,
-            viewWidth = navigator.publicationView.width,
-            viewHeight = navigator.publicationView.height,
+            viewWidth = viewWidth,
+            viewHeight = viewHeight,
             pageRect = pageRect,
             unit = settings.preferences.value.quickTranslationUnit
         ) ?: return null
         lastSelectionGeometry = RectF(extracted.normalizedBounds)
+        lastSelectionPageIndex = pageIndex
         onHighlightChanged?.invoke(listOf(extracted.bounds))
         val preferences = settings.preferences.value
         val request = TranslationRequest(
@@ -209,6 +226,9 @@ class PdfTapTranslationController(
 
     /** Returns the last OCR selection in page-normalized coordinates. */
     fun selectionGeometry(): RectF? = lastSelectionGeometry?.let(::RectF)
+
+    /** The zero-based page of the last OCR selection. */
+    fun selectionPageIndex(): Int? = lastSelectionPageIndex
 
     /** Maps a normalized page rectangle into the current PDF navigator view. */
     suspend fun mapPageGeometryToView(
@@ -250,6 +270,7 @@ class PdfTapTranslationController(
         lastRequest = null
         lastTapPoint = null
         lastSelectionGeometry = null
+        lastSelectionPageIndex = null
         onHighlightChanged?.invoke(emptyList())
     }
 
@@ -262,6 +283,7 @@ class PdfTapTranslationController(
         lastRequest = null
         lastTapPoint = null
         lastSelectionGeometry = null
+        lastSelectionPageIndex = null
         onHighlightChanged?.invoke(emptyList())
         if (hadVisibleState) onSelectionInvalidated?.invoke()
     }
@@ -275,7 +297,7 @@ class PdfTapTranslationController(
     suspend fun crossPageContext(sourceText: String): String? {
         val source = ReaderTextNormalizer.normalized(sourceText)
         if (source.isEmpty() || renderer.pageCount <= 0) return null
-        val pageIndex = currentPageIndex().coerceIn(0, renderer.pageCount - 1)
+        val pageIndex = (lastSelectionPageIndex ?: currentPageIndex()).coerceIn(0, renderer.pageCount - 1)
         val documentIdentity = "pdf"
         val current = recognizePage(pageIndex) ?: return null
         val previous = if (pageIndex > 0) recognizePage(pageIndex - 1) else null
@@ -322,6 +344,11 @@ class PdfTapTranslationController(
                     val width = (page.width * scale).toInt().coerceAtLeast(1)
                     val height = (page.height * scale).toInt().coerceAtLeast(1)
                     createBitmap(width, height, Bitmap.Config.ARGB_8888).also { bitmap ->
+                        // A new bitmap is transparent and PdfRenderer does not
+                        // paint a page background. Pages without their own fill
+                        // (most exported documents) would reach the recognizer
+                        // as black text on transparent black.
+                        bitmap.eraseColor(Color.WHITE)
                         page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                     }
                 }
@@ -689,8 +716,11 @@ class PdfTapTranslationController(
         synchronized(ocrCache) { ocrCache.clear() }
         latinRecognizer.close()
         japaneseRecognizer.close()
-        renderer.close()
-        descriptor.close()
+        // Cancelling does not wait for a page still being rendered on the IO
+        // dispatcher, and PdfRenderer refuses to close with a page open.
+        // Leaving the reader in that instant must not crash it.
+        runCatching { renderer.close() }
+        runCatching { descriptor.close() }
     }
 
     private suspend fun <T> Task<T>.await(): T = suspendCancellableCoroutine { continuation ->

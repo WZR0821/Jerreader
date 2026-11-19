@@ -95,7 +95,7 @@ struct PlanOptionsList: View {
         }
         // The welcome closes first; then the whole 添加供应商 sheet does.
         .sheet(isPresented: $showWelcome, onDismiss: { if let pendingNotice { finish(pendingNotice) } }) {
-            ChatGPTPlanWelcomeView()
+            ChatGPTPlanWelcomeView(translatesWithPlan: store.provider == .directAPI)
         }
         .onDisappear { job?.cancel() }
     }
@@ -310,6 +310,9 @@ struct ContinueWithChatGPTButton: View {
 /// whose mark springs in (`hero`), then the three facts on paper, revealed in
 /// turn, and a success haptic.
 struct ChatGPTPlanWelcomeView: View {
+    /// Whether reading already translates with the AI model in use. When the
+    /// translation service is another one, the page must not claim it does.
+    var translatesWithPlan = true
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var appeared = false
@@ -360,7 +363,9 @@ struct ChatGPTPlanWelcomeView: View {
                 .scaleEffect(appeared || reduceMotion ? 1 : 0.6).opacity(appeared ? 1 : 0)
             VStack(alignment: .leading, spacing: 8) {
                 Text("已连接 ChatGPT 套餐").font(.title2.weight(.bold)).foregroundStyle(.white)
-                Text("Jerreader 现在用你的 ChatGPT 套餐翻译和讲解语法。")
+                Text(translatesWithPlan
+                     ? "Jerreader 现在用你的 ChatGPT 套餐翻译和讲解语法。"
+                     : "套餐已经是 Jerreader 的 AI 模型。到“AI 大模型”页点“用它翻译”，阅读时就用它翻译。")
                     .font(.body).foregroundStyle(Color.white.opacity(0.82))
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -481,7 +486,7 @@ struct ChatGPTPlanDetailView: View {
             Text("会退出登录，并从本机移除它的模型设置。")
         }
         .sheet(isPresented: $showWelcome, onDismiss: { notice = pendingNotice }) {
-            ChatGPTPlanWelcomeView()
+            ChatGPTPlanWelcomeView(translatesWithPlan: store.provider == .directAPI)
         }
         .task { await ChatGPTPlanActions.sync(store: store) }
         .onDisappear { job?.cancel() }

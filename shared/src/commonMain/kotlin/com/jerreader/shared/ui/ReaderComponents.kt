@@ -511,7 +511,7 @@ fun ReaderAppearancePanel(
                 NumericAppearanceRow("段间距", appearance.paragraphSpacing, 0.0, 2.0) {
                     onChange(appearance.copy(paragraphSpacing = it))
                 }
-                NumericAppearanceRow("页边距", appearance.pageMargins, 0.5, 2.0) {
+                NumericAppearanceRow("左右边距", appearance.pageMargins, 0.5, 2.0) {
                     onChange(appearance.copy(pageMargins = it))
                 }
                 JerreaderRow("字体") {

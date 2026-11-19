@@ -13,6 +13,7 @@ import com.jerreader.android.JerreaderApplication
 import com.jerreader.android.library.PublicationIntegrity
 import com.jerreader.android.test.createSyntheticEpub
 import com.jerreader.shared.library.ReaderLayoutMode
+import com.jerreader.shared.library.ReaderThemeOption
 import com.jerreader.shared.translation.MockTranslationService
 import com.jerreader.shared.translation.QuickTranslationUnit
 import com.jerreader.shared.ui.TranslationCardState
@@ -88,6 +89,7 @@ class ReaderTapTranslationTest {
                 fromDeviceTap as TranslationCardState.Success
                 assertEquals("She went home.", fromDeviceTap.sourceText)
                 captureReader("android-reader-translation")
+                verifySelectionFillAcrossThemes(activity, point)
                 verifyOverlayMatrix(activity)
                 verifyCrampedOverlayAndDrag(activity)
                 verifyReaderInterfaceControls(activity)
@@ -101,6 +103,89 @@ class ReaderTapTranslationTest {
             graph.translationSettings.updateQuickTranslationUnit(QuickTranslationUnit.SENTENCE)
             graph.bookService.delete(book.id)
             source.delete()
+        }
+    }
+
+    /**
+     * 2.0.1: the highlight lives in the book's own document, where ReadiumCSS
+     * forces `background-color: transparent !important` on every element in
+     * sepia, at night and under any explicit page colour. Only plain white
+     * showed the fill; everywhere else the selection was an empty outline.
+     */
+    private suspend fun verifySelectionFillAcrossThemes(activity: ReaderActivity, point: PointF) {
+        val original = withContext(Dispatchers.Main) { activity.currentAppearance }
+        val cases = listOf(
+            ReaderThemeOption.SEPIA to "readium-sepia-on",
+            ReaderThemeOption.DARK to "readium-night-on",
+            ReaderThemeOption.COOL_GRAY to "--USER__backgroundColor"
+        )
+        try {
+            for ((theme, rootMarker) in cases) {
+                withContext(Dispatchers.Main) { activity.applyAppearance(original.copy(theme = theme)) }
+                suspend fun evaluate(script: String): String? = withContext(Dispatchers.Main) {
+                    activity.supportFragmentManager.fragments
+                        .filterIsInstance<EpubNavigatorFragment>()
+                        .first()
+                        .evaluateJavascript(script)
+                }
+                // Readium applies a theme by rewriting the root style.
+                var themed = false
+                repeat(80) {
+                    if (themed) return@repeat
+                    themed = evaluate(
+                        "(document.documentElement.getAttribute('style') || '').includes('$rootMarker')"
+                    ) == "true"
+                    if (!themed) SystemClock.sleep(100)
+                }
+                assertTrue("Readium never applied $theme to the page", themed)
+
+                val state = withContext(Dispatchers.Main) { activity.translateAtForTesting(point) }
+                assertTrue("Expected a translation under $theme, got $state", state is TranslationCardState.Success)
+                var paint: JSONObject? = null
+                repeat(40) {
+                    if (paint != null) return@repeat
+                    paint = evaluate(
+                        """
+                        (() => {
+                          const marker = document.getElementById(
+                            'jerreader-quick-selection-highlight'
+                          )?.firstElementChild;
+                          if (!marker) return null;
+                          const style = getComputedStyle(marker);
+                          return JSON.stringify({
+                            fill: style.backgroundColor,
+                            border: style.borderTopColor,
+                            text: getComputedStyle(document.body).color
+                          });
+                        })()
+                        """.trimIndent()
+                    )?.let(::decodeJsonObject)
+                    if (paint == null) SystemClock.sleep(100)
+                }
+                val resolved = checkNotNull(paint) { "No selection highlight was painted under $theme" }
+                val fill = resolved.getString("fill")
+                assertTrue(
+                    "The selection fill was forced transparent under $theme: $fill",
+                    cssAlpha(fill) > 0.25
+                )
+                assertTrue(
+                    "The selection outline took the text colour under $theme: $resolved",
+                    resolved.getString("border") != resolved.getString("text")
+                )
+                captureReader("android-reader-selection-" + theme.name.lowercase())
+            }
+        } finally {
+            withContext(Dispatchers.Main) { activity.applyAppearance(original) }
+        }
+    }
+
+    /** Alpha of a computed `rgb(r, g, b)` / `rgba(r, g, b, a)` colour. */
+    private fun cssAlpha(css: String): Double {
+        val parts = css.substringAfter('(', "").substringBefore(')').split(',').map(String::trim)
+        return when (parts.size) {
+            4 -> parts[3].toDoubleOrNull() ?: 0.0
+            3 -> 1.0
+            else -> 0.0
         }
     }
 

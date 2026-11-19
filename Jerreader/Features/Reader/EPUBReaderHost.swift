@@ -788,9 +788,33 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
     /// would add the window's safe area again (62pt a side on a phone for
     /// reflowable books), which was most of the empty band above and below
     /// the text, so it only gets the small gap from `ReaderInterfaceDefaults`.
+    ///
+    /// 2.0.1: that gap follows 上下边距. Fixed-layout pages are fitted to the
+    /// screen, so they keep the plain one.
     func navigatorContentInset(_ navigator: VisualNavigator) -> UIEdgeInsets? {
-        let inset = ReaderInterfaceDefaults.contentEdgeInset
+        let inset = isFixedLayout
+            ? ReaderInterfaceDefaults.contentEdgeInset
+            : ReaderInterfaceDefaults.pageEdgeInset(
+                verticalMargins: ReaderInterfaceDefaults.verticalMargins()
+            )
         return UIEdgeInsets(top: inset, left: 0, bottom: inset, right: 0)
+    }
+
+    /// Readium asks for the inset when a document loads and when the safe
+    /// area or the traits change — not when a preference does. Its spread
+    /// view re-reads it from `safeAreaInsetsDidChange()`, so that is the one
+    /// public hook that applies a new 上下边距 to the page already on screen
+    /// without reloading it.
+    func refreshContentInsets() {
+        guard !isFixedLayout else { return }
+        for webView in navigator.view.descendantWebViews {
+            webView.superview?.safeAreaInsetsDidChange()
+        }
+        navigator.view.setNeedsLayout()
+        enforceVerticalPaginationPolicy()
+#if DEBUG
+        updateLayoutUITestDiagnosticAfterSettling()
+#endif
     }
 
     func navigator(_ navigator: VisualNavigator, didTapAt point: CGPoint) {

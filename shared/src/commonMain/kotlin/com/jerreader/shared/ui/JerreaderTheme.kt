@@ -36,7 +36,11 @@ enum class JerreaderAccent(val title: String, val detail: String) {
     FOREST("森林", "柔和的青绿色系"),
     WISTERIA("紫藤", "克制的紫罗兰色系"),
     AMBER("琥珀", "温暖的黄金与棕色系"),
-    BERRY("莓红", "清晰的玫红色系");
+    BERRY("莓红", "清晰的玫红色系"),
+    // 2.0.1. Appended, never reordered: the stored value is the name.
+    TEAL("松石", "清透的青碧色系"),
+    TERRACOTTA("赤陶", "沉稳的陶土红色系"),
+    GRAPHITE("石墨", "中性的墨灰色系");
 
     /** `0xRRGGBB` of the accent in light or dark mode. */
     internal fun hex(dark: Boolean): Long = when (this) {
@@ -45,6 +49,9 @@ enum class JerreaderAccent(val title: String, val detail: String) {
         WISTERIA -> if (dark) 0xB7A9F0 else 0x5B4C9C
         AMBER -> if (dark) 0xEBB56A else 0x94601C
         BERRY -> if (dark) 0xEE91B6 else 0x9A3A62
+        TEAL -> if (dark) 0x7CCAD6 else 0x1F6E7A
+        TERRACOTTA -> if (dark) 0xEFA088 else 0x9C4A32
+        GRAPHITE -> if (dark) 0xB9C2D0 else 0x47505E
     }
 
     internal fun rgb(dark: Boolean): Triple<Float, Float, Float> {
@@ -56,6 +63,33 @@ enum class JerreaderAccent(val title: String, val detail: String) {
         )
     }
 }
+
+/**
+ * 外观模式 (2.0.1): whether the app's own pages follow the system's light or
+ * dark setting or hold one of them. The reader page is not governed by this —
+ * it takes light or dark from the paper the book is read on.
+ *
+ * iOS stores the same raw values under `appearance.mode`.
+ */
+enum class JerreaderAppearanceMode(val title: String, val storageValue: String) {
+    SYSTEM("跟随系统", "system"),
+    LIGHT("浅色", "light"),
+    DARK("深色", "dark");
+
+    fun isDark(systemDark: Boolean): Boolean = when (this) {
+        SYSTEM -> systemDark
+        LIGHT -> false
+        DARK -> true
+    }
+
+    companion object {
+        fun fromStorage(raw: String?): JerreaderAppearanceMode =
+            entries.firstOrNull { it.storageValue == raw } ?: SYSTEM
+    }
+}
+
+/** Whether the canvas carries its faint accent wash (界面主题 → 背景光晕). */
+val LocalJerreaderBackdropGlow = staticCompositionLocalOf { true }
 
 /** Tokens that Material's `ColorScheme` has no slot for. */
 data class JerreaderColors(
@@ -262,6 +296,7 @@ private val jerreaderShapes = Shapes(
 fun JerreaderTheme(
     accent: JerreaderAccent = JerreaderAccent.OCEAN,
     dark: Boolean = isSystemInDarkTheme(),
+    backdropGlow: Boolean = true,
     content: @Composable () -> Unit
 ) {
     val colors = jerreaderColors(accent, dark)
@@ -271,7 +306,11 @@ fun JerreaderTheme(
     val interfaceDensity = Density(systemDensity.density,
         systemDensity.fontScale.coerceIn(0.5f, 19f / 17f))
     val scheme = jerreaderColorScheme(accent, dark)
-    CompositionLocalProvider(LocalJerreaderColors provides colors, LocalDensity provides interfaceDensity) {
+    CompositionLocalProvider(
+        LocalJerreaderColors provides colors,
+        LocalDensity provides interfaceDensity,
+        LocalJerreaderBackdropGlow provides backdropGlow
+    ) {
         MaterialTheme(
             colorScheme = scheme,
             shapes = jerreaderShapes,

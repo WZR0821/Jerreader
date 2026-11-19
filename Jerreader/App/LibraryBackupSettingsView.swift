@@ -493,7 +493,8 @@ struct LibraryBackupSettingsView: View {
     @MainActor
     private func exportManualBackup() async {
         state = .exporting
-        defer { state = .idle }
+        LibraryBackupActivity.begin()
+        defer { state = .idle; LibraryBackupActivity.end() }
         let destination = FileManager.default.temporaryDirectory
             .appendingPathComponent(
                 "Jerreader备份-\(backupFileStamp(for: Date()))-\(UUID().uuidString.prefix(6))."
@@ -529,7 +530,8 @@ struct LibraryBackupSettingsView: View {
             return
         }
         state = .creatingManual
-        defer { state = .idle }
+        LibraryBackupActivity.begin()
+        defer { state = .idle; LibraryBackupActivity.end() }
         do {
             let output = try await operationCoordinator.perform(.creatingManual) {
                 let vault = LibraryBackupVault()
@@ -558,7 +560,8 @@ struct LibraryBackupSettingsView: View {
     @MainActor
     private func restoreBackup(from url: URL, folder: URL? = nil) async {
         state = .importing
-        defer { state = .idle; restoreFolderAccess = nil }
+        LibraryBackupActivity.begin()
+        defer { state = .idle; restoreFolderAccess = nil; LibraryBackupActivity.end() }
         do {
             let directoryAccess = folder != nil ? restoreFolderAccess : try LibraryBackupDirectoryStore()
                 .accessIfNeeded(for: url)
@@ -1066,4 +1069,21 @@ private func byteCount(_ bytes: Int64) -> String {
         fromByteCount: max(bytes, 0),
         countStyle: .file
     )
+}
+
+/// Counts the backup and restore runs this page has in progress.
+///
+/// Leaving 设置 rebuilds that tab so it opens on its home page again
+/// (`ContentView.settingsVisit`). While a run is in progress the page is kept
+/// instead: it is the one that reports how the run ended, and a rebuilt page
+/// would never show that.
+@MainActor
+enum LibraryBackupActivity {
+    private static var runs = 0
+
+    static var isBusy: Bool { runs > 0 }
+
+    static func begin() { runs += 1 }
+
+    static func end() { runs = max(0, runs - 1) }
 }

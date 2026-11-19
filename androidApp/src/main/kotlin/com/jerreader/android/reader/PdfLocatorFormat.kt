@@ -51,6 +51,17 @@ object PdfLocatorFormat {
         )
     }
 
+    /**
+     * Readium places a PDF page at the progression of its top edge, so the
+     * last page of an N-page file reads (N−1)/N. A ten-page PDF read to the
+     * end stopped at 90% and never counted as finished, and a one-page PDF
+     * stayed at 0%, which the shelf shows as not started. On the last page
+     * the book is read. [pageCount] is 0 for other formats and while the
+     * position list is still loading.
+     */
+    fun readingProgress(reported: Double, position: Int?, pageCount: Int): Double =
+        if (position != null && pageCount > 0 && position >= pageCount) 1.0 else reported
+
     /** Index into `positions()` of the page an old, shifted [storedPosition] meant. */
     fun legacyPositionIndex(storedPosition: Int?, positionCount: Int): Int? {
         val stored = storedPosition ?: return null

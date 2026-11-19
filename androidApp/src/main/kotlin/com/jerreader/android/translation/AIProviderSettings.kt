@@ -434,18 +434,24 @@ data class AIProviderSettings(val activeID: String, val entries: List<AIProvider
 
     /**
      * Adds a provider, or replaces a preset that was never set up. It is put
-     * in use only when the provider in use has no key; the untouched default
-     * then leaves the list.
+     * in use only when the provider in use has no key, or when [takesOver]
+     * says the user chose it outright (signing in to a plan). The untouched
+     * default leaves the list only while it has no key: with one it is a
+     * provider the user set up and may want to return to.
      *
      * @return the new settings, and whether the new provider is now in use.
      */
-    fun adding(entry: AIProviderEntry, activeHasKey: Boolean): Pair<AIProviderSettings, Boolean> {
+    fun adding(
+        entry: AIProviderEntry,
+        activeHasKey: Boolean,
+        takesOver: Boolean = false
+    ): Pair<AIProviderSettings, Boolean> {
         val previous = active
         val index = entries.indexOfFirst { it.id == entry.id }
         val list = if (index >= 0) entries.toMutableList().also { it[index] = entry } else entries + entry
         val added = copy(entries = list)
-        if (activeHasKey && previous.id != entry.id) return added to false
-        val remaining = if (previous.id != entry.id && isUntouchedDefault(previous)) {
+        if (activeHasKey && !takesOver && previous.id != entry.id) return added to false
+        val remaining = if (previous.id != entry.id && !activeHasKey && isUntouchedDefault(previous)) {
             list.filterNot { it.id == previous.id }
         } else {
             list

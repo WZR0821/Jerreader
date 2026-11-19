@@ -8,6 +8,22 @@ import com.jerreader.shared.translation.TranslationResult
 import kotlinx.coroutines.flow.Flow
 import java.security.MessageDigest
 
+/**
+ * 保存到语法知识库 makes a new draft, with a new id, each time it is tapped, so
+ * saving the same explanation twice used to leave two identical notes. A draft
+ * that is not in the notebook yet takes the place of the note it repeats.
+ */
+internal fun grammarNoteToSave(
+    note: com.jerreader.android.data.GrammarNoteEntity,
+    existing: List<com.jerreader.android.data.GrammarNoteEntity>
+): com.jerreader.android.data.GrammarNoteEntity {
+    if (existing.any { it.id == note.id }) return note
+    val same = existing.firstOrNull {
+        it.title == note.title && it.sentence == note.sentence && it.explanation == note.explanation
+    } ?: return note
+    return note.copy(id = same.id)
+}
+
 class LearningRecordRepository(
     private val dao: LearningDao,
     private val now: () -> Long = System::currentTimeMillis
@@ -15,7 +31,7 @@ class LearningRecordRepository(
     fun observeGrammarNotes() = dao.observeGrammarNotes()
     suspend fun saveGrammarNote(note: com.jerreader.android.data.GrammarNoteEntity) {
         require(note.title.isNotBlank() && note.sentence.isNotBlank() && note.explanation.isNotBlank())
-        dao.upsertGrammarNote(note)
+        dao.upsertGrammarNote(grammarNoteToSave(note, dao.allGrammarNotes()))
     }
     suspend fun deleteGrammarNote(id: String) = dao.deleteGrammarNote(id)
 

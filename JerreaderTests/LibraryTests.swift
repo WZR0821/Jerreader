@@ -1327,6 +1327,93 @@ final class LibraryTests: XCTestCase {
         publication.close()
     }
 
+    /// 2.0.1. Highlights saved in a PDF are handed to the reader as the book
+    /// opens, which is before Readium has put the document into its PDF view.
+    /// Nothing could be drawn at that moment and nothing drew them later, so a
+    /// reopened PDF showed none of its highlights until one of them changed.
+    func testPDFHighlightsGivenBeforeTheDocumentLoadsAreDrawnOnceItDoes() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let sourceURL = root.appendingPathComponent("highlighted.pdf")
+        try UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 320, height: 480))
+            .pdfData { context in
+                context.beginPage()
+                NSString(string: "Highlighted PDF page")
+                    .draw(at: CGPoint(x: 24, y: 44), withAttributes: [
+                        .font: UIFont.systemFont(ofSize: 20),
+                    ])
+            }
+            .write(to: sourceURL)
+
+        let imported = try await EPUBImportService(rootDirectoryURL: root)
+            .importBook(from: sourceURL, existingFingerprints: [])
+        let book = BookRecord(
+            title: imported.title,
+            author: imported.author,
+            language: imported.language,
+            sourceFormat: imported.sourceFormat.rawValue,
+            localFileName: imported.localFileName,
+            coverFileName: imported.coverFileName,
+            fileFingerprint: imported.fileFingerprint
+        )
+        let publication = try await EPUBPublicationService(rootDirectoryURL: root).open(book: book)
+        var controller: PDFReaderViewController? = try PDFReaderViewController(
+            publication: publication,
+            initialLocation: nil,
+            theme: .light,
+            bookLanguage: nil
+        )
+
+        let highlight = ReadingAnnotationRecord(
+            annotationKey: "highlight-before-document",
+            bookID: book.id,
+            bookTitle: book.title,
+            locatorJSON: #"{"href":"highlighted.pdf"}"#,
+            anchorJSON: ReaderPDFAnnotationAnchor(
+                pageIndex: 0,
+                coordinateSpace: .pdfPage,
+                rectangles: [CGRect(x: 0.07, y: 0.86, width: 0.6, height: 0.06)]
+            ).jsonString,
+            selectedText: "Highlighted PDF page",
+            chapterTitle: "",
+            progress: 0
+        )
+        // As the reader does: the saved highlights arrive first, the view and
+        // its document after.
+        controller?.applyAnnotations([ReaderAnnotationPresentation(highlight)])
+
+        controller?.loadViewIfNeeded()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+
+        var drawn: [PDFAnnotation] = []
+        for _ in 0 ..< 120 {
+            let page = controller?.view.flatMap(firstPDFView)?.document?.page(at: 0)
+            drawn = page?.annotations.filter { $0.userName == "Jerreader:\(highlight.id.uuidString)" } ?? []
+            if !drawn.isEmpty { break }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+
+        XCTAssertEqual(drawn.count, 1, "the saved highlight must be on its page once the PDF is shown")
+
+        // A second pass over the same document must not stack a copy on top.
+        controller?.applyAnnotations([ReaderAnnotationPresentation(highlight)])
+        let page = controller?.view.flatMap(firstPDFView)?.document?.page(at: 0)
+        XCTAssertEqual(
+            page?.annotations.filter { $0.userName?.hasPrefix("Jerreader:") == true }.count,
+            1
+        )
+
+        window.rootViewController = nil
+        window.isHidden = true
+        controller = nil
+        publication.close()
+    }
+
     func testVisionOCRRecognizesRenderedEnglishSentence() async throws {
         let renderer = UIGraphicsImageRenderer(
             size: CGSize(width: 900, height: 360)

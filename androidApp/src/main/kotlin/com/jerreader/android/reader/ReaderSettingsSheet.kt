@@ -48,8 +48,10 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsIgnoringVisibility
+import androidx.compose.foundation.layout.tappableElement
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsBottomHeight
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -242,7 +244,7 @@ internal fun ReaderSettingsSheet(
                             InteractionSection(graph, isReflowable = !isPdf)
                             if (!isPdf) {
                                 TypographySection(appearance, onAppearanceChange)
-                                SpacingSection(appearance, onAppearanceChange)
+                                SpacingSection(appearance, onAppearanceChange, graph.appSettings)
                             }
                             BackgroundSection(appearance, onAppearanceChange)
                             TranslationSection(onOpen = { page = ReaderSettingsPage.TRANSLATION })
@@ -301,6 +303,17 @@ internal fun ReaderSettingsSheet(
                         .size(36.dp, 5.dp)
                         .clip(RoundedCornerShape(2.5.dp))
                         .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f))
+                )
+                // Three-button navigation: the buttons sit on the canvas rather
+                // than on whichever row has scrolled under them. With gesture
+                // navigation nothing there can be tapped, so the strip has no
+                // height and the rows run to the edge of the screen.
+                Box(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .windowInsetsBottomHeight(WindowInsets.tappableElement)
+                        .background(jerreaderPalette.canvas)
                 )
             }
         }
@@ -576,7 +589,8 @@ internal fun ReaderSheetSliderRow(
     range: ClosedFloatingPointRange<Float>,
     steps: Int,
     onValueChange: (Float) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    detail: String? = null
 ) {
     Column(modifier.readerSheetRow(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -602,6 +616,7 @@ internal fun ReaderSheetSliderRow(
                 valueRange = range
             )
         }
+        if (detail != null) ReaderSheetDetail(detail)
     }
 }
 
@@ -762,16 +777,26 @@ private fun ReadingModeSection(
                 ReaderSheetDivider()
                 ReaderSheetPillRow(
                     title = "文字方向",
-                    options = listOf(
-                        JerreaderPillOption(ReaderTextOrientation.PUBLICATION, "原版"),
-                        JerreaderPillOption(ReaderTextOrientation.HORIZONTAL, "横排")
-                    ),
+                    options = buildList {
+                        add(JerreaderPillOption(ReaderTextOrientation.PUBLICATION, "原版"))
+                        add(JerreaderPillOption(ReaderTextOrientation.HORIZONTAL, "横排"))
+                        // 1.7 also offered 竖排. A book still set to it keeps
+                        // the option, so the row shows what is in effect
+                        // instead of two unselected choices and the wrong
+                        // description.
+                        if (appearance.orientation == ReaderTextOrientation.VERTICAL) {
+                            add(JerreaderPillOption(ReaderTextOrientation.VERTICAL, "竖排"))
+                        }
+                    },
                     selected = appearance.orientation,
                     onSelect = { onChange(appearance.copy(orientation = it)) },
-                    detail = if (appearance.orientation == ReaderTextOrientation.HORIZONTAL) {
-                        "将日文竖排转为横排，并统一按从左向右的方向逐页阅读。"
-                    } else {
-                        "保留书籍原有的横竖排与翻页方向；日文竖排书通常会从右向左翻页。"
+                    detail = when (appearance.orientation) {
+                        ReaderTextOrientation.HORIZONTAL ->
+                            "将日文竖排转为横排，并统一按从左向右的方向逐页阅读。"
+                        ReaderTextOrientation.VERTICAL ->
+                            "这本书此前被设为强制竖排。改选“原版”或“横排”后，这一项不再提供。"
+                        ReaderTextOrientation.PUBLICATION ->
+                            "保留书籍原有的横竖排与翻页方向；日文竖排书通常会从右向左翻页。"
                     }
                 )
             }
@@ -1045,7 +1070,12 @@ private fun oneDecimal(value: Double): String {
 }
 
 @Composable
-private fun SpacingSection(appearance: ReaderAppearance, onChange: (ReaderAppearance) -> Unit) {
+private fun SpacingSection(
+    appearance: ReaderAppearance,
+    onChange: (ReaderAppearance) -> Unit,
+    appSettings: com.jerreader.android.settings.AndroidAppSettingsStore
+) {
+    val verticalMargins = appSettings.preferences.collectAsState().value.verticalMargins
     ReaderSheetCard("版面") {
         ReaderSheetSliderRow(
             title = "行间距",
@@ -1066,7 +1096,7 @@ private fun SpacingSection(appearance: ReaderAppearance, onChange: (ReaderAppear
         )
         ReaderSheetDivider()
         ReaderSheetSliderRow(
-            title = "页边距",
+            title = "左右边距",
             valueText = when {
                 appearance.pageMargins < 0.8 -> "窄"
                 appearance.pageMargins < 1.3 -> "标准"
@@ -1076,6 +1106,18 @@ private fun SpacingSection(appearance: ReaderAppearance, onChange: (ReaderAppear
             range = 0.5f..2f,
             steps = 14,
             onValueChange = { onChange(appearance.copy(pageMargins = roundedTenth(it))) }
+        )
+        ReaderSheetDivider()
+        // 2.0.1. Shared by every book, like 界面布局, so it is the app's own
+        // setting rather than part of this book's appearance.
+        ReaderSheetSliderRow(
+            title = "上下边距",
+            valueText = com.jerreader.android.settings.verticalMarginsLabel(verticalMargins),
+            value = verticalMargins,
+            range = com.jerreader.android.settings.VERTICAL_MARGINS_RANGE,
+            steps = 39,
+            onValueChange = appSettings::updateVerticalMargins,
+            detail = "正文离屏幕上下两端（标准布局下是上下栏）的留白，对所有书生效；PDF 按页面本身显示，不受影响。"
         )
     }
 }

@@ -97,7 +97,10 @@ fun WordReviewScreen(
     val prepared by produceState<Pair<List<Pair<String, String?>>, WordReviewSnapshot>?>(null, inputs) {
         value = inputs to withContext(Dispatchers.Default) { WordReviewSnapshot.create(inputs, checkpoint = { ensureActive() }) }
     }
-    val snapshot = prepared?.takeIf { it.first == inputs }?.second
+    // The last snapshot stays in use while the next one is worked out, as on
+    // iOS. Dropping it the moment a grade or a pause was saved blanked the card
+    // to 正在准备复习… and emptied 管理复习, which lost its scroll position.
+    val snapshot = prepared?.second
     val current = queue.firstNotNullOfOrNull { key ->
         byKey[key]?.takeIf { snapshot?.states?.get(key)?.paused == false }
     }

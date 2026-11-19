@@ -11,6 +11,9 @@ final class ReaderSearchModel {
     private(set) var isSearching = false
     private(set) var errorMessage: String?
     private(set) var lastQuery = ""
+    /// The last search was stopped before it answered, so its empty result
+    /// list says nothing about the book.
+    private(set) var wasInterrupted = false
 
     @ObservationIgnored private var task: Task<Void, Never>?
 
@@ -23,6 +26,7 @@ final class ReaderSearchModel {
         task = nil
         errorMessage = nil
         lastQuery = normalized
+        wasInterrupted = false
         results = []
 
         guard !normalized.isEmpty else {
@@ -60,6 +64,9 @@ final class ReaderSearchModel {
     }
 
     func cancel() {
+        if task != nil {
+            wasInterrupted = true
+        }
         task?.cancel()
         task = nil
         isSearching = false

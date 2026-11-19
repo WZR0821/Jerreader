@@ -110,9 +110,15 @@ fun GrammarNotebookScreen(graph: AppGraph) {
                     if (bookId != null) {
                         LearningButton(onClick = {
                             scope.launch {
-                                if (graph.repository.book(bookId) == null) error = "原书已不在书架，已保存的内容仍可阅读。"
+                                val source = graph.repository.book(bookId)
+                                if (source == null) error = "原书已不在书架，已保存的内容仍可阅读。"
+                                // The reader picks its PDF or EPUB fragment factory from the
+                                // declared format before it has loaded the book. Without it a
+                                // PDF opened from here was restored as an EPUB after the system
+                                // reclaimed the process, and crashed.
                                 else context.startActivity(Intent(context, ReaderActivity::class.java)
                                     .putExtra(ReaderActivity.EXTRA_BOOK_ID, bookId)
+                                    .putExtra(ReaderActivity.EXTRA_SOURCE_FORMAT, source.sourceFormat)
                                     .putExtra(ReaderActivity.EXTRA_INITIAL_LOCATOR, note.locatorJson))
                             }
                         }, kind = LearningButtonKind.TINTED) { Text("回到原书原句") }

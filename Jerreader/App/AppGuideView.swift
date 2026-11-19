@@ -95,8 +95,8 @@ struct AppGuideView: View {
 
     private var featureSection: some View {
         Section {
-            GuideItem(title: "界面主题", detail: "设置 → 界面主题用一排色板选择海蓝、森林、紫藤、琥珀或莓红色系，轻点即换；按钮、卡片和背景会一起变化，并自动适配系统浅色或深色外观。", systemImage: "paintpalette.fill", tint: JerreaderTheme.accent)
-            GuideItem(title: "阅读设置与选区色", detail: "每本书可独立保存字体、字号、背景、页边距、行距、段距、翻页模式和选区颜色。浅色、护眼、冷灰、深色会自动采用适配的选区色；自定义背景可另选选区色。设置 → 默认阅读排版可决定新书样式，并用开关持续同步或立即应用到现有全部书籍。", systemImage: "textformat.size", tint: SettingsTint.reading)
+            GuideItem(title: "界面主题", detail: "设置 → 界面主题有八套色系（海蓝、森林、紫藤、琥珀、莓红、松石、赤陶、石墨），轻点即换，页面顶部的预览会马上跟着变。外观模式可以跟随系统，也可以固定为浅色或深色；背景光晕可以关掉，换成纯净的纸色。阅读页的纸张仍在默认阅读排版里单独设置。", systemImage: "paintpalette.fill", tint: JerreaderTheme.accent)
+            GuideItem(title: "阅读设置与选区色", detail: "每本书可独立保存字体、字号、背景、左右边距、行距、段距、翻页模式和选区颜色。浅色、护眼、冷灰、深色会自动采用适配的选区色；自定义背景可另选选区色。设置 → 默认阅读排版可决定新书样式，并用开关持续同步或立即应用到现有全部书籍。", systemImage: "textformat.size", tint: SettingsTint.reading)
             GuideItem(title: "目录、进度与书签", detail: "阅读器顶部的目录按钮集中提供章节目录、全文搜索、书签和批注；底部进度条可直接拖到整本书的任意位置。", systemImage: "list.bullet.rectangle", tint: SettingsTint.reading)
             GuideItem(title: "悬浮译文", detail: "译文框会与完整选区留出安全距离，框内则按实际译文收紧，不会为了段落模式强行留出大块空白；长译文达到高度上限后可在框内上下滑动。原版竖排时优先放在原文左侧或右侧；也可拖动顶部手柄手动调整。", systemImage: "rectangle.inset.filled.and.person.filled", tint: SettingsTint.translation)
             GuideItem(title: "词典与生词本", detail: "“学习 → 翻译”的词语模式已合并词典功能。翻译日语或英语词语后，会继续显示词典形、读音、词性、释义和例句，自动记入历史，并可直接收藏到生词本。阅读正文中长按完整词语，翻译后也可直接加入。", systemImage: "character.book.closed.fill", tint: JerreaderTheme.jade)

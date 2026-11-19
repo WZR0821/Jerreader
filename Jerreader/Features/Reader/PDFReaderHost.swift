@@ -51,6 +51,8 @@ final class PDFReaderViewController: UIViewController, PDFNavigatorDelegate,
     private var installedPDFAnnotations: [(annotation: PDFAnnotation, page: PDFPage)] = []
     private var annotationIDs: [ObjectIdentifier: UUID] = [:]
     private var annotationPresentations: [ReaderAnnotationPresentation] = []
+    /// The document the saved highlights were last drawn on.
+    private weak var annotatedDocument: PDFKit.PDFDocument?
     private var selectionGestureGate = EPUBSelectionGestureGate()
 
     init(
@@ -147,6 +149,7 @@ final class PDFReaderViewController: UIViewController, PDFNavigatorDelegate,
         pendingOCRMenuPoint = nil
         selectionGestureGate.reset()
         clearTranslationHighlight()
+        installAnnotationsIfDocumentChanged()
         onLocationChange?(locator)
         onPaginationModeChange?(true)
         Task { @MainActor [weak self] in
@@ -174,6 +177,9 @@ final class PDFReaderViewController: UIViewController, PDFNavigatorDelegate,
         lastHighlightLayoutSignature = nil
         lastHighlightFrameInWindow = nil
         if let oldView = pdfView {
+            NotificationCenter.default.removeObserver(
+                self, name: .PDFViewDocumentChanged, object: oldView
+            )
             oldView.highlightedSelections = nil
             if let ocrEditMenuInteraction {
                 oldView.removeInteraction(ocrEditMenuInteraction)
@@ -204,6 +210,25 @@ final class PDFReaderViewController: UIViewController, PDFNavigatorDelegate,
         view.addGestureRecognizer(longPress)
         ocrLongPressGesture = longPress
         updateOCRLongPressAvailability()
+        // Readium hands the view over before it has loaded the document, so
+        // there is usually nothing to draw the saved highlights on yet. They
+        // are drawn when the document arrives; without this a reopened or
+        // rotated PDF showed none of them until an annotation was edited.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(pdfDocumentDidChange),
+            name: .PDFViewDocumentChanged,
+            object: view
+        )
+        renderInstalledAnnotations()
+    }
+
+    @objc private func pdfDocumentDidChange() {
+        installAnnotationsIfDocumentChanged()
+    }
+
+    private func installAnnotationsIfDocumentChanged() {
+        guard let document = pdfView?.document, annotatedDocument !== document else { return }
         renderInstalledAnnotations()
     }
 
@@ -225,6 +250,13 @@ final class PDFReaderViewController: UIViewController, PDFNavigatorDelegate,
         if selectionGestureGate.shouldSuppressTap(
             at: ProcessInfo.processInfo.systemUptime
         ) {
+            return
+        }
+
+        // A tap on one of the reader's own highlights opens it, as it does in
+        // an EPUB, whether or not tap translation is on and wherever on the
+        // page the highlight sits.
+        if activateOwnAnnotation(at: point) {
             return
         }
 
@@ -402,7 +434,9 @@ final class PDFReaderViewController: UIViewController, PDFNavigatorDelegate,
 
     private func renderInstalledAnnotations() {
         removeInstalledPDFAnnotations()
+        annotatedDocument = nil
         guard let document = pdfView?.document else { return }
+        annotatedDocument = document
 
         for item in annotationPresentations {
             guard let anchor = ReaderPDFAnnotationAnchor(jsonString: item.anchorJSON),
@@ -564,10 +598,11 @@ final class PDFReaderViewController: UIViewController, PDFNavigatorDelegate,
             return
         }
         let pagePoint = pdfView.convert(point, to: page)
-        if let annotation = page.annotation(at: pagePoint) {
-            if let id = annotationIDs[ObjectIdentifier(annotation)] {
-                onAnnotationActivated?(id)
-            }
+        // Annotations other apps left in the file (their highlights, stamps,
+        // link areas) are not the reader's to open, and used to swallow the
+        // tap: the sentence under them could not be translated at all.
+        if let id = ownAnnotationID(on: page, at: pagePoint) {
+            onAnnotationActivated?(id)
             return
         }
 
@@ -590,6 +625,24 @@ final class PDFReaderViewController: UIViewController, PDFNavigatorDelegate,
             pointInPDFView: point,
             pdfView: pdfView
         )
+    }
+
+    private func activateOwnAnnotation(at navigatorPoint: CGPoint) -> Bool {
+        guard let pdfView else { return false }
+        let point = pdfView.convert(navigatorPoint, from: navigator.view)
+        guard let page = pdfView.page(for: point, nearest: false),
+              let id = ownAnnotationID(on: page, at: pdfView.convert(point, to: page))
+        else { return false }
+        onAnnotationActivated?(id)
+        return true
+    }
+
+    /// The saved highlight under a point, looked up among the ones this
+    /// reader drew so another app's annotation on top cannot hide it.
+    private func ownAnnotationID(on page: PDFPage, at pagePoint: CGPoint) -> UUID? {
+        installedPDFAnnotations
+            .last { $0.page === page && $0.annotation.bounds.contains(pagePoint) }
+            .flatMap { annotationIDs[ObjectIdentifier($0.annotation)] }
     }
 
     private func translateTextLayerSentence(
@@ -909,17 +962,20 @@ final class PDFReaderViewController: UIViewController, PDFNavigatorDelegate,
                     cgImage: cgImage,
                     languages: languages
                 )
-                guard !Task.isCancelled,
-                      ocrRequestID == requestID,
-                      let pdfView,
-                      let page,
-                      pdfView.currentPage === page
-                else { return }
+                guard !Task.isCancelled, ocrRequestID == requestID else { return }
 
+                // The recognition is done whatever page is showing now. With
+                // two pages side by side `currentPage` is only one of them,
+                // and returning early for the other left 正在识别本页文字…
+                // up for good and threw the result away on every tap.
                 cacheOCR(observations, forPage: pageIndex)
                 ocrRequestID = nil
                 ocrTask = nil
                 onReaderActivityChange?(nil)
+                guard let pdfView,
+                      let page,
+                      pdfView.currentPage === page || pdfView.visiblePages.contains(where: { $0 === page })
+                else { return }
                 guard !observations.isEmpty else {
                     onReaderError?("本页没有识别出可翻译文字，请确认扫描内容清晰。")
                     return

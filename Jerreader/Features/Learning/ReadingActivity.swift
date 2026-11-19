@@ -9,12 +9,22 @@ struct ReadingActivity: Codable, Equatable, Sendable {
     static let enabledKey = "jerreader.growth.enabled"
     var days: [String: ReadingDay] = [:]
 
-    static func key(_ date: Date, calendar: Calendar = .current) -> String {
+    /// Day keys are always Gregorian. `Calendar.current` follows the device's
+    /// calendar setting; under the Japanese, Buddhist or ROC calendar it wrote
+    /// years like 0008, 2569 or 0115, which the report (it reads ISO weeks)
+    /// never found, so every reading time showed as zero.
+    static var dayCalendar: Calendar {
+        var value = Calendar(identifier: .iso8601)
+        value.timeZone = .current
+        return value
+    }
+
+    static func key(_ date: Date, calendar: Calendar = ReadingActivity.dayCalendar) -> String {
         let parts = calendar.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
     }
 
-    mutating func record(from start: Date, to end: Date, calendar: Calendar = .current) {
+    mutating func record(from start: Date, to end: Date, calendar: Calendar = ReadingActivity.dayCalendar) {
         guard end.timeIntervalSince(start).isFinite, end > start else { return }
         var cursor = max(start, end.addingTimeInterval(-21_600))
         while cursor < end {
@@ -26,7 +36,7 @@ struct ReadingActivity: Codable, Equatable, Sendable {
         trim()
     }
 
-    mutating func query(at date: Date, calendar: Calendar = .current) {
+    mutating func query(at date: Date, calendar: Calendar = ReadingActivity.dayCalendar) {
         days[Self.key(date, calendar: calendar), default: ReadingDay()].queries += 1
         trim()
     }
@@ -36,7 +46,36 @@ struct ReadingActivity: Codable, Equatable, Sendable {
     }
 
     static func decode(_ data: Data?) -> Self {
-        data.flatMap { try? JSONDecoder().decode(Self.self, from: $0) } ?? Self()
+        var value = data.flatMap { try? JSONDecoder().decode(Self.self, from: $0) } ?? Self()
+        value.repairNonGregorianKeys()
+        return value
+    }
+
+    /// Brings back the days written under another calendar before 2.0.1. The
+    /// app dates from 2026, so the year alone says which calendar wrote it:
+    /// Reiwa counts from 2018, the ROC calendar from 1911, the Buddhist one
+    /// runs 543 ahead. Their months and days are the Gregorian ones; calendars
+    /// with other months cannot be mapped back and are left as they are.
+    private mutating func repairNonGregorianKeys() {
+        for (key, day) in days {
+            guard let fixed = Self.gregorianKey(key), fixed != key else { continue }
+            days.removeValue(forKey: key)
+            days[fixed, default: ReadingDay()].seconds += day.seconds
+            days[fixed, default: ReadingDay()].queries += day.queries
+        }
+    }
+
+    static func gregorianKey(_ key: String) -> String? {
+        let parts = key.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 3, let year = Int(parts[0]) else { return nil }
+        let offset: Int
+        switch year {
+        case 1..<100: offset = 2018
+        case 100..<1000: offset = 1911
+        case 2500..<3200: offset = -543
+        default: return key
+        }
+        return String(format: "%04d", year + offset) + "-\(parts[1])-\(parts[2])"
     }
 }
 

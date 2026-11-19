@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -65,6 +66,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.selected
@@ -92,6 +94,7 @@ import com.jerreader.shared.translation.TranslationSourceChoice
 import com.jerreader.android.settings.AndroidAppPreferences
 import com.jerreader.android.settings.AppThemeChoice
 import com.jerreader.shared.ui.AppGuideScreen
+import com.jerreader.shared.ui.JerreaderAppearanceMode
 import com.jerreader.shared.ui.JerreaderGlyph
 import com.jerreader.shared.ui.JerreaderIcon
 import com.jerreader.shared.ui.JerreaderIconTile
@@ -151,6 +154,9 @@ enum class SettingsRoute {
     ROOT,
     THEME,
     READER_DEFAULTS,
+
+    /** 默认阅读排版, opened from 界面主题 → 阅读纸张: back returns there. */
+    THEME_READER_DEFAULTS,
     TRANSLATION,
 
     /** AI 大模型, opened from the settings home. */
@@ -193,6 +199,9 @@ fun SettingsScreen(
     BackHandler(enabled = route == SettingsRoute.OFFLINE || route == SettingsRoute.TRANSLATION_AI_MODELS) {
         onRouteChanged(SettingsRoute.TRANSLATION)
     }
+    BackHandler(enabled = route == SettingsRoute.THEME_READER_DEFAULTS) {
+        onRouteChanged(SettingsRoute.THEME)
+    }
     val context = LocalContext.current
     val versionName = remember(context) {
         runCatching {
@@ -212,18 +221,72 @@ fun SettingsScreen(
             bottomBar = bottomBar
         )
 
+        // 界面主题 (2.0.1), the same five blocks as iOS `AppThemeColorSettingsView`:
+        // a live preview, 外观模式, the eight colours, 背景光晕, and a way to
+        // the reader's paper. The paper is a link rather than a control so
+        // that 默认阅读排版's 同步应用到现有书籍 rule stays the only way a
+        // paper reaches the books.
         SettingsRoute.THEME -> SettingsPage(title = "界面主题", onBack = back, bottomBar = bottomBar) {
+            SettingsGroup(title = "预览", icon = JerreaderIcon.PALETTE) {
+                ThemePreviewCard(themeTitle = appPreferences.theme.title)
+            }
+            SettingsGroup(
+                title = "外观模式",
+                icon = JerreaderIcon.PALETTE,
+                footer = "只影响书架、学习和设置等页面。阅读页的明暗跟随所选的阅读纸张。"
+            ) {
+                SettingsPillRow(
+                    title = "外观模式",
+                    options = JerreaderAppearanceMode.entries.map { it to it.title },
+                    selected = appPreferences.appearanceMode,
+                    onSelect = graph.appSettings::updateAppearanceMode,
+                    showDivider = false
+                )
+            }
             SettingsGroup(
                 title = "主题色系",
                 icon = JerreaderIcon.PALETTE,
-                footer = "色系会同时调整强调色、按钮、卡片与背景，并自动适配系统深色/浅色外观。" +
-                    "阅读页的纸张主题仍在“默认阅读排版”中单独设置。"
+                footer = "色系会同时调整强调色、按钮和卡片上的点缀。"
             ) {
                 ThemeSwatches(selected = appPreferences.theme, onSelect = onThemeChanged)
             }
+            SettingsGroup(
+                title = "背景",
+                icon = JerreaderIcon.PALETTE,
+                footer = "在每页顶部铺一层很淡的主题色。关闭后页面是纯净的纸色。"
+            ) {
+                SettingsToggleRow(
+                    "背景光晕",
+                    appPreferences.backdropGlow,
+                    graph.appSettings::updateBackdropGlow,
+                    modifier = Modifier.testTag("themeBackdropGlow"),
+                    showDivider = false
+                )
+            }
+            SettingsGroup(
+                title = "阅读页",
+                icon = JerreaderIcon.BOOKS,
+                footer = "阅读页的纸张、字体和间距不随界面主题变化，在“默认阅读排版”里单独设置。"
+            ) {
+                SettingsLinkRow(
+                    "阅读纸张",
+                    readerThemeTitle(appPreferences.defaultReaderAppearance.theme),
+                    { onRouteChanged(SettingsRoute.THEME_READER_DEFAULTS) },
+                    showDivider = false
+                )
+            }
         }
 
-        SettingsRoute.READER_DEFAULTS -> SettingsPage(title = "默认阅读排版", onBack = back, bottomBar = bottomBar) {
+        SettingsRoute.READER_DEFAULTS, SettingsRoute.THEME_READER_DEFAULTS -> SettingsPage(
+            title = "默认阅读排版",
+            onBack = if (route == SettingsRoute.THEME_READER_DEFAULTS) {
+                { onRouteChanged(SettingsRoute.THEME) }
+            } else {
+                back
+            },
+            bottomBar = bottomBar,
+            backTitle = if (route == SettingsRoute.THEME_READER_DEFAULTS) "界面主题" else "设置"
+        ) {
             var confirmingApply by remember { mutableStateOf(false) }
             var didApply by remember { mutableStateOf(false) }
             // iOS asks before overwriting every book's own layout, then says so.
@@ -289,7 +352,9 @@ fun SettingsScreen(
                 onChange = onDefaultReaderChanged,
                 appliesToExistingBooks = appPreferences.applyReaderDefaultsToExistingBooks,
                 showsProgress = appPreferences.showReadingProgress,
-                onShowProgressChanged = onShowProgressChanged
+                onShowProgressChanged = onShowProgressChanged,
+                verticalMargins = appPreferences.verticalMargins,
+                onVerticalMarginsChanged = graph.appSettings::updateVerticalMargins
             )
         }
 
@@ -379,7 +444,9 @@ private fun ReaderDefaultsSections(
     onChange: (ReaderAppearance) -> Unit,
     appliesToExistingBooks: Boolean,
     showsProgress: Boolean,
-    onShowProgressChanged: (Boolean) -> Unit
+    onShowProgressChanged: (Boolean) -> Unit,
+    verticalMargins: Float,
+    onVerticalMarginsChanged: (Float) -> Unit
 ) {
     SettingsGroup(
         title = "翻页与导航",
@@ -426,7 +493,11 @@ private fun ReaderDefaultsSections(
         )
     }
 
-    SettingsGroup(title = "间距", icon = JerreaderIcon.SORT) {
+    SettingsGroup(
+        title = "间距",
+        icon = JerreaderIcon.SORT,
+        footer = "上下边距是正文离屏幕上下两端的留白，对所有书立即生效，不分单本；PDF 按页面本身显示，不受影响。"
+    ) {
         SettingsValueRow("行间距", oneDecimal(appearance.lineHeight), compact = false)
         SettingsBareSliderRow(
             value = appearance.lineHeight.toFloat().coerceIn(1f, 2.2f),
@@ -443,13 +514,25 @@ private fun ReaderDefaultsSections(
             onValueChange = { onChange(appearance.copy(paragraphSpacing = roundedTenth(it))) },
             accessibilityLabel = "段间距"
         )
-        SettingsValueRow("页边距", oneDecimal(appearance.pageMargins), compact = false)
+        SettingsValueRow("左右边距", oneDecimal(appearance.pageMargins), compact = false)
         SettingsBareSliderRow(
             value = appearance.pageMargins.toFloat().coerceIn(0.5f, 2f),
             range = 0.5f..2f,
             steps = 14,
             onValueChange = { onChange(appearance.copy(pageMargins = roundedTenth(it))) },
-            accessibilityLabel = "页边距",
+            accessibilityLabel = "左右边距"
+        )
+        // 2.0.1: the app's own setting, shared by every book (see the footer).
+        SettingsValueRow("上下边距", oneDecimal(verticalMargins.toDouble()), compact = false)
+        SettingsBareSliderRow(
+            value = verticalMargins.coerceIn(
+                com.jerreader.android.settings.VERTICAL_MARGINS_RANGE.start,
+                com.jerreader.android.settings.VERTICAL_MARGINS_RANGE.endInclusive
+            ),
+            range = com.jerreader.android.settings.VERTICAL_MARGINS_RANGE,
+            steps = 39,
+            onValueChange = onVerticalMarginsChanged,
+            accessibilityLabel = "上下边距",
             showDivider = false
         )
     }
@@ -526,19 +609,29 @@ private fun ThemeSwatches(
 ) {
     val haptics = LocalHapticFeedback.current
     Column(modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 14.dp)) {
-            AppThemeChoice.entries.forEach { choice ->
-                ThemeSwatch(
-                    choice = choice,
-                    isSelected = choice == selected,
-                    onClick = {
-                        if (choice != selected) {
-                            haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                            onSelect(choice)
-                        }
-                    },
-                    modifier = Modifier.weight(1f)
-                )
+        // Eight colours, four to a row, as on iOS.
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            AppThemeChoice.entries.chunked(THEME_SWATCH_COLUMNS).forEach { rowChoices ->
+                Row(Modifier.fillMaxWidth()) {
+                    rowChoices.forEach { choice ->
+                        ThemeSwatch(
+                            choice = choice,
+                            isSelected = choice == selected,
+                            onClick = {
+                                if (choice != selected) {
+                                    haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                                    onSelect(choice)
+                                }
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    // A short last row keeps the columns of the rows above it.
+                    repeat(THEME_SWATCH_COLUMNS - rowChoices.size) { Spacer(Modifier.weight(1f)) }
+                }
             }
         }
         JerreaderRowSeparator(start = 20.dp)
@@ -556,6 +649,117 @@ private fun ThemeSwatches(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+    }
+}
+
+private const val THEME_SWATCH_COLUMNS = 4
+
+/**
+ * The preview at the top of 界面主题: the continue-reading hero card and the
+ * two kinds of button in the current colours, which follow a swatch the
+ * moment it is tapped. Nothing here can be pressed; TalkBack reads it as one
+ * description.
+ */
+@Composable
+private fun ThemePreviewCard(themeTitle: String, modifier: Modifier = Modifier) {
+    val colors = jerreaderPalette
+    val heroShape = RoundedCornerShape(JerreaderRadius.control)
+    Column(
+        modifier
+            .fillMaxWidth()
+            .padding(14.dp)
+            .clearAndSetSemantics { contentDescription = "${themeTitle}主题的界面预览" }
+            .testTag("themePreview"),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(heroShape)
+                // The hero gradient of 继续阅读 and 今日练习.
+                .background(
+                    Brush.linearGradient(
+                        colors = listOf(colors.accentDeep, colors.ink),
+                        start = Offset.Zero,
+                        end = Offset.Infinite
+                    )
+                )
+                .drawWithContent {
+                    drawRect(
+                        Brush.radialGradient(
+                            colors = listOf(Color.White.copy(alpha = 0.16f), Color.White.copy(alpha = 0f)),
+                            center = Offset.Zero,
+                            radius = maxOf(size.width * 0.9f, 1f)
+                        )
+                    )
+                    drawContent()
+                }
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                "继续阅读",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 0.6.sp,
+                color = Color.White.copy(alpha = 0.76f),
+                maxLines = 1
+            )
+            Text(
+                "こころ",
+                style = MaterialTheme.typography.titleLarge,
+                fontFamily = FontFamily.Serif,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White,
+                maxLines = 1
+            )
+            Row(
+                Modifier.padding(top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .height(4.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.22f))
+                ) {
+                    Box(Modifier.fillMaxWidth(0.42f).fillMaxHeight().background(Color.White, CircleShape))
+                }
+                Text(
+                    "42%",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White.copy(alpha = 0.86f),
+                    maxLines = 1
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ThemePreviewPill("开始练习", background = colors.accent, content = colors.onAccent)
+            ThemePreviewPill("加入生词本", background = colors.accentFill, content = colors.accent)
+        }
+    }
+}
+
+/** A 34dp capsule of the preview: the filled action, or the tinted one. */
+@Composable
+private fun ThemePreviewPill(text: String, background: Color, content: Color) {
+    Box(
+        Modifier
+            .heightIn(min = 34.dp)
+            .background(background, CircleShape)
+            .padding(horizontal = 16.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = content,
+            maxLines = 1
+        )
     }
 }
 

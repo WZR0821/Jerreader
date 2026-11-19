@@ -351,7 +351,15 @@ class ReaderTapTranslationController(
         )
         onHighlightChanged?.invoke(merged.map(::toDeviceRect))
 
-        val selection = navigator.currentSelection() ?: return null
+        val selection = navigator.currentSelection()
+        if (selection == null) {
+            // The page selected the sentence but Readium has no selection to
+            // hand back (the two are not updated together). Without a card
+            // the marker would be left on the page with nothing to close it.
+            navigator.evaluateJavascript(clearHighlightScript())
+            onHighlightChanged?.invoke(emptyList())
+            return null
+        }
         return translateSelection(selection)
     }
 
@@ -829,8 +837,8 @@ class ReaderTapTranslationController(
               const marker = document.createElement('span');
               marker.style.cssText =
                 'position:absolute;pointer-events:none;border-radius:3px;' +
-                'box-sizing:border-box;border:0.75px solid $stroke;' +
-                'background:$tint;' +
+                'box-sizing:border-box;' +
+                '${selectionMarkerPaintCss(fill = tint, stroke = stroke)}' +
                 'left:' + (tile.x - origin.left) + 'px;' +
                 'top:' + (tile.y - origin.top) + 'px;' +
                 'width:' + tile.w + 'px;height:' + tile.h + 'px;';
@@ -1086,8 +1094,8 @@ class ReaderTapTranslationController(
               const marker = document.createElement('span');
               marker.style.cssText =
                 'position:absolute;pointer-events:none;border-radius:3px;' +
-                'box-sizing:border-box;border:0.75px solid $stroke;' +
-                'background:$fill;' +
+                'box-sizing:border-box;' +
+                '${selectionMarkerPaintCss(fill = fill, stroke = stroke)}' +
                 'left:' + (rect.left - origin.left) + 'px;' +
                 'top:' + (rect.top - origin.top) + 'px;' +
                 'width:' + rect.width + 'px;height:' + rect.height + 'px;';
@@ -1514,3 +1522,21 @@ class ReaderTapTranslationController(
         const val RETRY_KEY_LIMIT = 128
     }
 }
+
+/**
+ * The fill and outline of one highlight tile, as inline CSS the page's own
+ * styles cannot override.
+ *
+ * ReadiumCSS declares `background-color: transparent !important` for every
+ * element under the sepia and night themes and under any explicit page colour
+ * (cool grey, a custom background), and `border-color: currentColor !important`
+ * at night. A plain inline declaration loses to those rules, which is why the
+ * selection showed only its outline — in the text colour — and no fill on
+ * every page but plain white. An inline `!important` is the one declaration
+ * that outranks them. `background-image: none` keeps a publisher rule from
+ * painting a pattern over the tint.
+ */
+internal fun selectionMarkerPaintCss(fill: String, stroke: String): String =
+    "background-color:$fill !important;" +
+        "background-image:none !important;" +
+        "border:0.75px solid $stroke !important;"

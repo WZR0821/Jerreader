@@ -295,6 +295,15 @@ struct LibraryView: View {
         .onChange(of: incomingBookURL) {
             importIncomingBookIfNeeded()
         }
+        // The folder being filtered on can lose its last book (moved, renamed
+        // or deleted). The folder row and the folder menu disappear with the
+        // last folder, so the filter stayed on with nothing left to clear it:
+        // an empty shelf saying “切换文件夹” and no way to do so.
+        .onChange(of: categories) { _, current in
+            if let selectedCategory, !current.contains(selectedCategory) {
+                self.selectedCategory = nil
+            }
+        }
         .onChange(of: isImporting) {
             if !isImporting {
                 importIncomingBookIfNeeded()
@@ -548,9 +557,10 @@ struct LibraryView: View {
     /// Opens a book for reader layout and tap-translation checks through the
     /// normal importer. A tester may first copy a DRM-free EPUB of their own
     /// into this app's `tmp/JerreaderUITestBook.epub` on the simulator; that
-    /// copy is imported (a second launch reopens it). Without one, a short
-    /// original Japanese text is imported as TXT. No book or host path is kept
-    /// in the project, and the hook is compiled out of Release builds.
+    /// copy is imported (a second launch reopens it). Without one, or with
+    /// `--jerreader-sample-text-ui-test`, a short original Japanese text is
+    /// imported as TXT. No book or host path is kept in the project, and the
+    /// hook is compiled out of Release builds.
     @MainActor
     private func startSampleBookUITestImportIfNeeded() {
         guard ProcessInfo.processInfo.arguments.contains("--jerreader-sample-book-ui-test"),
@@ -558,12 +568,19 @@ struct LibraryView: View {
         else { return }
 
         didStartSelectionUITestImport = true
+        // Every run starts from the shipped 上下边距, whatever the run before
+        // it left on the simulator.
+        UserDefaults.standard.removeObject(forKey: ReaderInterfaceDefaults.verticalMarginsKey)
         let fileManager = FileManager.default
         let temporary = fileManager.temporaryDirectory
         let placedBook = temporary.appendingPathComponent("JerreaderUITestBook.epub")
         let url: URL
         do {
-            if fileManager.fileExists(atPath: placedBook.path) {
+            // A check that taps a sentence needs text on the first page, and
+            // a placed book usually opens on its cover.
+            let wantsWrittenText = ProcessInfo.processInfo.arguments
+                .contains("--jerreader-sample-text-ui-test")
+            if !wantsWrittenText, fileManager.fileExists(atPath: placedBook.path) {
                 // Import a copy so the placed book survives for the next launch.
                 url = temporary.appendingPathComponent("JerreaderUITestBook-import.epub")
                 try? fileManager.removeItem(at: url)
@@ -1009,7 +1026,9 @@ private struct BatchBookManagementView: View {
     let existingFolders: [String]
 
     @State private var selectedBookIDs = Set<UUID>()
-    @State private var changesFolder = true
+    // Off, like the other three: with it on and the field empty, applying a
+    // batch that only added tags also moved every chosen book out of its folder.
+    @State private var changesFolder = false
     @State private var folder = ""
     @State private var changesSeries = false
     @State private var series = ""

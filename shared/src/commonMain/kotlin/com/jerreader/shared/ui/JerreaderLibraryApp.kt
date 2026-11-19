@@ -68,6 +68,10 @@ import androidx.compose.ui.unit.dp
 import com.jerreader.shared.library.LibraryBook
 import kotlinx.coroutines.delay
 import kotlin.time.Clock
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.text.style.TextAlign
+import com.jerreader.shared.library.LibraryNaturalOrder
 
 data class LibraryUiState(
     val books: List<LibraryBook> = emptyList(),
@@ -171,8 +175,8 @@ fun JerreaderLibraryApp(
                 LibrarySortOrder.RECENT -> books.sortedByDescending {
                     it.lastOpenedAtEpochMillis ?: it.importedAtEpochMillis
                 }
-                LibrarySortOrder.TITLE -> books.sortedBy { it.title.lowercase() }
-                LibrarySortOrder.AUTHOR -> books.sortedBy { it.author.orEmpty().lowercase() }
+                LibrarySortOrder.TITLE -> books.sortedWith(compareBy(LibraryNaturalOrder) { it.title })
+                LibrarySortOrder.AUTHOR -> books.sortedWith(compareBy(LibraryNaturalOrder) { it.author.orEmpty() })
             }
         } }
 
@@ -255,13 +259,33 @@ fun JerreaderLibraryApp(
                                 isBatchEditing = true; isLibraryMenuExpanded = false
                             })
                             if (state.books.isNotEmpty()) {
-                                DropdownMenuItem(text = { Text("全部书籍") }, onClick = { selectedCategory = null; isLibraryMenuExpanded = false })
-                                categories.forEach { category ->
-                                    DropdownMenuItem(text = { Text(category) }, onClick = { selectedCategory = category; isLibraryMenuExpanded = false })
+                                // The filter in effect is ticked, like the sort order above.
+                                val filterMark: @Composable (Boolean) -> Unit = { chosen ->
+                                    if (chosen) JerreaderGlyph(JerreaderIcon.CHECK, MaterialTheme.colorScheme.primary, Modifier.size(18.dp))
                                 }
-                                DropdownMenuItem(text = { Text("全部格式") }, onClick = { selectedFormat = null; isLibraryMenuExpanded = false })
+                                DropdownMenuItem(
+                                    text = { Text("全部书籍") },
+                                    onClick = { selectedCategory = null; isLibraryMenuExpanded = false },
+                                    trailingIcon = { filterMark(selectedCategory == null) }
+                                )
+                                categories.forEach { category ->
+                                    DropdownMenuItem(
+                                        text = { Text(category) },
+                                        onClick = { selectedCategory = category; isLibraryMenuExpanded = false },
+                                        trailingIcon = { filterMark(selectedCategory == category) }
+                                    )
+                                }
+                                DropdownMenuItem(
+                                    text = { Text("全部格式") },
+                                    onClick = { selectedFormat = null; isLibraryMenuExpanded = false },
+                                    trailingIcon = { filterMark(selectedFormat == null) }
+                                )
                                 state.books.map { it.sourceFormat.lowercase() }.distinct().sorted().forEach { format ->
-                                    DropdownMenuItem(text = { Text(format.uppercase()) }, onClick = { selectedFormat = format; isLibraryMenuExpanded = false })
+                                    DropdownMenuItem(
+                                        text = { Text(format.uppercase()) },
+                                        onClick = { selectedFormat = format; isLibraryMenuExpanded = false },
+                                        trailingIcon = { filterMark(selectedFormat == format) }
+                                    )
                                 }
                             }
                         }
@@ -406,6 +430,38 @@ fun JerreaderLibraryApp(
                                 )
                             }
                         }
+                    }
+                }
+            }
+
+            // iOS `importingOverlay`. Until 2.0.1 the plus button merely
+            // greyed out, so importing a large book looked like nothing was
+            // happening. Purely a notice: it takes no touches.
+            if (state.isImporting) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.16f))
+                        .semantics(mergeDescendants = true) {},
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .padding(32.dp)
+                            .widthIn(max = 280.dp)
+                            .jerreaderPaperCard(raised = true)
+                            .padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        ReaderChromeLoadingGlyph(JerreaderIcon.BOOKS, 62.dp)
+                        Text("正在整理这本书…", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "正在校验格式，并把阅读副本与封面保存到本机",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
                     }
                 }
             }
@@ -589,7 +645,8 @@ private fun BookEditDialog(
                 TextButton(onClick = {
                     pendingCover?.let(onSaveCover)
                     onSave(title.trim(), author.ifBlank { null }, language.ifBlank { null }, category, series,
-                        tags.split(',', '，').map(String::trim).filter(String::isNotBlank))
+                        // The same separators as iOS: both commas, 、 and a new line.
+                        tags.split(',', '，', '、', '\n').map(String::trim).filter(String::isNotBlank))
                 }, enabled = title.isNotBlank(),
                     modifier = Modifier.align(Alignment.CenterEnd).padding(end = 8.dp)) {
                     Text("保存", style = MaterialTheme.typography.bodyLarge)
@@ -685,7 +742,7 @@ private fun BatchBookEditDialog(
                 OutlinedTextField(category, { category = it }, label = { Text("统一文件夹（留空不改）") })
                 OutlinedTextField(series, { series = it }, label = { Text("统一系列（留空不改）") })
                 OutlinedTextField(language, { language = it }, label = { Text("统一语言代码（留空不改）") })
-                OutlinedTextField(tags, { tags = it }, label = { Text("追加标签（逗号分隔）") })
+                OutlinedTextField(tags, { tags = it }, label = { Text("追加标签（逗号或顿号分隔）") })
             }
         },
         confirmButton = {

@@ -214,7 +214,16 @@ class LearningUiParityTest {
             setInput("practice draft")
             tap("设置"); waitFor("默认阅读排版"); capture("android-settings"); assertOneScreen("默认阅读排版", last = "Jerry Wong")
             tap("界面主题"); waitFor("海蓝"); waitFor("学习"); capture("android-settings-theme")
-            tap("森林"); tap("海蓝"); back()
+            // 2.0.1: the page also carries 外观模式, eight colours and 背景光晕.
+            waitFor("外观模式"); waitFor("跟随系统"); waitFor("松石"); waitFor("石墨")
+            tap("森林"); tap("海蓝")
+            reveal("背景光晕"); capture("android-settings-theme-lower")
+            tap("深色"); capture("android-settings-theme-dark"); tap("跟随系统")
+            // 2.0.1: leaving 设置 from a sub-page and coming back lands on
+            // its first page, as on iOS, rather than on the page left open.
+            tap("学习"); waitFor("practice draft")
+            tap("设置"); waitFor("默认阅读排版"); settleScreen()
+            check(find("主题色系") == null) { "设置 must reopen on its first page" }
             tap("默认阅读排版"); waitFor("字体与字号"); waitFor("学习"); capture("android-settings-reader")
             reveal("日文原版排版"); capture("android-settings-reader-lower"); back()
             tap("数据与隐私"); waitFor("写出副本"); waitFor("学习"); capture("android-settings-privacy"); back()

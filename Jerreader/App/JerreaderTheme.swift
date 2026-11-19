@@ -7,6 +7,11 @@ enum JerreaderThemeColorChoice: String, CaseIterable, Identifiable, Sendable {
     case wisteria
     case amber
     case berry
+    // 2.0.1. Appended, never reordered: the stored value is the name, and
+    // Android keeps the same eight in the same order.
+    case teal
+    case terracotta
+    case graphite
 
     var id: Self { self }
 
@@ -17,6 +22,9 @@ enum JerreaderThemeColorChoice: String, CaseIterable, Identifiable, Sendable {
         case .wisteria: return "紫藤"
         case .amber: return "琥珀"
         case .berry: return "莓红"
+        case .teal: return "松石"
+        case .terracotta: return "赤陶"
+        case .graphite: return "石墨"
         }
     }
 
@@ -27,6 +35,39 @@ enum JerreaderThemeColorChoice: String, CaseIterable, Identifiable, Sendable {
         case .wisteria: return "克制的紫罗兰色系"
         case .amber: return "温暖的黄金与棕色系"
         case .berry: return "清晰的玫红色系"
+        case .teal: return "清透的青碧色系"
+        case .terracotta: return "沉稳的陶土红色系"
+        case .graphite: return "中性的墨灰色系"
+        }
+    }
+}
+
+/// 外观模式 (2.0.1): whether the app's own pages follow the system's light or
+/// dark setting or hold one of them. The reader page is not governed by this —
+/// it takes light or dark from the paper the book is read on
+/// (`prefersDarkReaderChrome`).
+///
+/// Android mirrors this in `JerreaderAppearanceMode` (same raw values, titles).
+enum JerreaderAppearanceMode: String, CaseIterable, Identifiable, Sendable {
+    case system
+    case light
+    case dark
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .system: return "跟随系统"
+        case .light: return "浅色"
+        case .dark: return "深色"
+        }
+    }
+
+    var interfaceStyle: UIUserInterfaceStyle {
+        switch self {
+        case .system: return .unspecified
+        case .light: return .light
+        case .dark: return .dark
         }
     }
 }
@@ -34,10 +75,46 @@ enum JerreaderThemeColorChoice: String, CaseIterable, Identifiable, Sendable {
 enum JerreaderThemePreferences {
     static let storageKey = "appearance.theme-color"
 
+    static let appearanceModeKey = "appearance.mode"
+    /// 背景光晕: the faint accent wash at the top of every page. On by default.
+    static let backdropGlowKey = "appearance.backdrop-glow"
+
     static func current(defaults: UserDefaults = .standard) -> JerreaderThemeColorChoice {
         JerreaderThemeColorChoice(
             rawValue: defaults.string(forKey: storageKey) ?? ""
         ) ?? .ocean
+    }
+
+    static func appearanceMode(defaults: UserDefaults = .standard) -> JerreaderAppearanceMode {
+        JerreaderAppearanceMode(
+            rawValue: defaults.string(forKey: appearanceModeKey) ?? ""
+        ) ?? .system
+    }
+
+    /// Holds every window of the app to `mode`, or hands them back to the
+    /// system. Set on the windows rather than with `preferredColorScheme`, so
+    /// going back to 跟随系统 takes effect at once and the reader's own
+    /// light-or-dark choice (made on its cover) still wins for that page.
+    @MainActor
+    static func applyAppearanceMode(_ mode: JerreaderAppearanceMode, animated: Bool = false) {
+        let style = mode.interfaceStyle
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene else { continue }
+            for window in windowScene.windows where window.overrideUserInterfaceStyle != style {
+                guard animated, !UIAccessibility.isReduceMotionEnabled else {
+                    window.overrideUserInterfaceStyle = style
+                    continue
+                }
+                // A short cross-fade instead of the page snapping to the other mode.
+                UIView.transition(
+                    with: window,
+                    duration: 0.24,
+                    options: [.transitionCrossDissolve, .allowUserInteraction]
+                ) {
+                    window.overrideUserInterfaceStyle = style
+                }
+            }
+        }
     }
 }
 
@@ -80,6 +157,12 @@ enum JerreaderTheme {
         case (.amber, true): return RGB(hex: 0xEBB56A)
         case (.berry, false): return RGB(hex: 0x9A3A62)
         case (.berry, true): return RGB(hex: 0xEE91B6)
+        case (.teal, false): return RGB(hex: 0x1F6E7A)
+        case (.teal, true): return RGB(hex: 0x7CCAD6)
+        case (.terracotta, false): return RGB(hex: 0x9C4A32)
+        case (.terracotta, true): return RGB(hex: 0xEFA088)
+        case (.graphite, false): return RGB(hex: 0x47505E)
+        case (.graphite, true): return RGB(hex: 0xB9C2D0)
         }
     }
 
@@ -192,6 +275,9 @@ struct JerreaderCanvasBackground: View {
     @AppStorage(JerreaderThemePreferences.storageKey)
     private var themeColorRawValue = JerreaderThemeColorChoice.ocean.rawValue
 
+    @AppStorage(JerreaderThemePreferences.backdropGlowKey)
+    private var backdropGlow = true
+
     private var themeColor: JerreaderThemeColorChoice {
         JerreaderThemeColorChoice(rawValue: themeColorRawValue) ?? .ocean
     }
@@ -203,8 +289,9 @@ struct JerreaderCanvasBackground: View {
             ZStack {
                 JerreaderTheme.canvas(for: themeColor)
                 // A faint, static wash of the accent at the top left, so the
-                // paper colour does not read as flat grey.
-                RadialGradient(
+                // paper colour does not read as flat grey. 界面主题 → 背景光晕
+                // turns it off.
+                if backdropGlow { RadialGradient(
                     colors: [
                         JerreaderTheme.accent(for: themeColor)
                             .opacity(colorScheme == .dark ? 0.10 : 0.06),
@@ -213,7 +300,7 @@ struct JerreaderCanvasBackground: View {
                     center: UnitPoint(x: 0.2, y: 0),
                     startRadius: 0,
                     endRadius: max(proxy.size.width * 1.1, 1)
-                )
+                ) }
             }
         }
         .ignoresSafeArea()

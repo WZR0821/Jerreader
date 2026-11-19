@@ -6,13 +6,32 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var selectedTab: AppTab
+    /// Changes each time the reader leaves 设置, which rebuilds that tab's
+    /// navigation stack. Tabs keep their stacks by default, so after an hour
+    /// in a book 设置 still showed whichever sub-page had been open before;
+    /// coming back now always starts from the settings home page.
+    @State private var settingsVisit = 0
     @State private var incomingBookURL: URL?
     @StateObject private var translationSettings = TranslationSettingsStore()
     @AppStorage(JerreaderThemePreferences.storageKey)
     private var themeColorRawValue = JerreaderThemeColorChoice.ocean.rawValue
+    @AppStorage(JerreaderThemePreferences.appearanceModeKey)
+    private var appearanceModeRawValue = JerreaderAppearanceMode.system.rawValue
 
     private var themeColor: JerreaderThemeColorChoice {
         JerreaderThemeColorChoice(rawValue: themeColorRawValue) ?? .ocean
+    }
+
+    /// 外观模式. The UI-test fixtures pin light or dark themselves
+    /// (`JerreaderApp`), so they are left alone.
+    private func applyAppearanceMode(animated: Bool = false) {
+#if DEBUG
+        guard !ProcessInfo.processInfo.arguments.contains("--jerreader-learning-ui-fixture") else { return }
+#endif
+        JerreaderThemePreferences.applyAppearanceMode(
+            JerreaderAppearanceMode(rawValue: appearanceModeRawValue) ?? .system,
+            animated: animated
+        )
     }
 
     init() {
@@ -46,6 +65,7 @@ struct ContentView: View {
                 .tag(AppTab.learning)
 
             AppSettingsView(translationSettings: translationSettings)
+                .id(settingsVisit)
                 .jerreaderTabSurface(themeColor)
                 .tabItem {
                     Label { Text("设置") } icon: { Image(uiImage: JerreaderIconImage.image("gearshape.fill")) }
@@ -56,6 +76,13 @@ struct ContentView: View {
         .tint(JerreaderTheme.accent(for: themeColor))
         .background(JerreaderCanvasBackground())
         .sensoryFeedback(.selection, trigger: selectedTab)
+        .onChange(of: selectedTab) { previous, _ in
+            // A backup or restore still running reports its result on the
+            // page that started it, so that page is not rebuilt under it.
+            if previous == .settings, !LibraryBackupActivity.isBusy { settingsVisit += 1 }
+        }
+        .onAppear { applyAppearanceMode() }
+        .onChange(of: appearanceModeRawValue) { applyAppearanceMode(animated: true) }
         .onOpenURL { url in
             selectedTab = .library
             incomingBookURL = url
@@ -72,6 +99,8 @@ struct ContentView: View {
 #if DEBUG
             guard !ProcessInfo.processInfo.arguments.contains("--jerreader-learning-ui-fixture") else { return }
 #endif
+            // A window the system made since (a second scene) takes the mode too.
+            if phase == .active { applyAppearanceMode() }
             guard phase == .active || phase == .background else { return }
             Task {
                 await LibraryBackupAutomation.shared.performIfDue(

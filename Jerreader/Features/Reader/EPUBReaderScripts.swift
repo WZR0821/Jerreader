@@ -284,6 +284,26 @@ extension EPUBReaderViewController {
         return json
     }
 
+    /// The fill and outline of one highlight tile, as inline CSS that the
+    /// page's own styles cannot override.
+    ///
+    /// ReadiumCSS declares `background-color: transparent !important` for every
+    /// element under the sepia and night themes and under any explicit page
+    /// colour, and `border-color: currentColor !important` at night. An inline
+    /// `!important` is the only declaration that outranks those, so both
+    /// properties carry it. `background-image: none` keeps a publisher rule
+    /// from painting a pattern over the tint.
+    static func markerPaintCSS(fill: String, stroke: String?) -> String {
+        var css = "background-color:\(fill) !important;"
+            + "background-image:none !important;"
+        if let stroke {
+            css += "border:0.75px solid \(stroke) !important;"
+        } else {
+            css += "border:0 none transparent !important;"
+        }
+        return css
+    }
+
     static func quickSentenceHighlightScript(
         at point: CGPoint,
         utf16Range: Range<Int>,
@@ -353,14 +373,22 @@ extension EPUBReaderViewController {
           // sentence produced no visible highlight at all while the
           // translation itself was correct. Measuring is writing-mode,
           // direction and pagination agnostic.
+          //
+          // The paint is `!important` on purpose. ReadiumCSS forces
+          // `background-color: transparent !important` on every element in
+          // the sepia and night themes and whenever a page colour is set
+          // (cool grey, any custom background), and `border-color:
+          // currentColor !important` at night. A plain inline declaration
+          // loses to those rules, which left only the outline — in the text
+          // colour — and no fill in every theme but plain white. Only an
+          // inline `!important` outranks an `!important` stylesheet rule.
           const origin = overlay.getBoundingClientRect();
           rects.slice(0, 160).forEach((rect) => {
             const marker = document.createElement('span');
             marker.style.cssText =
               'position:absolute;pointer-events:none;border-radius:3px;' +
               'box-sizing:border-box;' +
-              'border:0.75px solid \(palette.strokeCSS);' +
-              'background:\(palette.fillCSS);' +
+              '\(markerPaintCSS(fill: palette.fillCSS, stroke: palette.strokeCSS))' +
               `left:${rect.left - origin.left}px;` +
               `top:${rect.top - origin.top}px;` +
               `width:${rect.width}px;height:${rect.height}px;`;
@@ -492,7 +520,7 @@ extension EPUBReaderViewController {
             const marker = document.createElement('span');
             marker.style.cssText =
               'position:absolute;pointer-events:none;border-radius:3px;' +
-              'background:\(palette.spokenFillCSS);' +
+              '\(markerPaintCSS(fill: palette.spokenFillCSS, stroke: nil))' +
               `left:${rect.left - origin.left}px;` +
               `top:${rect.top - origin.top}px;` +
               `width:${rect.width}px;height:${rect.height}px;`;

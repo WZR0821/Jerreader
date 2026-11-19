@@ -14,6 +14,8 @@ struct EPUBReaderScreen: View {
     @State private var navigationSection: ReaderNavigationSection = .contents
     @State private var isShowingSettings = false
     @State private var scrubbedProgress: Double?
+    @State private var isScrubbing = false
+    @State private var scrubSettleTask: Task<Void, Never>?
     @AppStorage(ReaderAppearanceDefaults.showsProgressKey)
     private var showsReadingProgress = true
     @AppStorage(ReaderInterfaceDefaults.immersiveReadingKey)
@@ -24,6 +26,8 @@ struct EPUBReaderScreen: View {
     private var bottomBarTransparency = ReaderInterfaceDefaults.barTransparency
     @AppStorage(ReaderInterfaceDefaults.layoutModeKey)
     private var layoutModeRawValue = ReaderLayoutMode.standard.rawValue
+    @AppStorage(ReaderInterfaceDefaults.verticalMarginsKey)
+    private var verticalMargins = 1.0
     /// Measured, so the page sits exactly between the bars in the standard
     /// layout whatever the text size or the progress-row setting.
     @State private var topChromeHeight: CGFloat = 44
@@ -209,6 +213,9 @@ struct EPUBReaderScreen: View {
         .onChange(of: layoutModeRawValue) {
             model.setLayoutMode(ReaderLayoutMode(rawValue: layoutModeRawValue) ?? .standard)
         }
+        .onChange(of: verticalMargins) {
+            model.controller?.refreshContentInsets()
+        }
         .onDisappear {
             model.close()
         }
@@ -282,15 +289,23 @@ struct EPUBReaderScreen: View {
     /// line of text.
     private var immersiveRevealZones: some View {
         GeometryReader { geometry in
-            let edge = ReaderInterfaceDefaults.contentEdgeInset - 2
+            // The strip follows 上下边距 so it never reaches a line of text, but
+            // keeps a height a finger can find when the margin is set to none
+            // on a phone with no safe area at that edge.
+            let edge = max(
+                (model.isReflowableBook
+                    ? ReaderInterfaceDefaults.pageEdgeInset(verticalMargins: verticalMargins)
+                    : ReaderInterfaceDefaults.contentEdgeInset) - 2,
+                0
+            )
             VStack(spacing: 0) {
                 immersiveRevealZone(
-                    height: geometry.safeAreaInsets.top + edge,
+                    height: max(geometry.safeAreaInsets.top + edge, 12),
                     identifier: "reader-reveal-top"
                 )
                 Spacer(minLength: 0)
                 immersiveRevealZone(
-                    height: geometry.safeAreaInsets.bottom + edge,
+                    height: max(geometry.safeAreaInsets.bottom + edge, 12),
                     identifier: "reader-reveal-bottom"
                 )
             }
@@ -430,6 +445,9 @@ struct EPUBReaderScreen: View {
                             handleProgressEditing(isEditing)
                         }
                     )
+                    .onChange(of: model.progress) {
+                        releaseScrubbedProgress()
+                    }
 
                     Text(progressLabel)
                         .font(.caption.monospacedDigit().weight(.semibold))
@@ -601,6 +619,9 @@ struct EPUBReaderScreen: View {
 
     private func handleProgressEditing(_ isEditing: Bool) {
         model.setChromeAutoHideSuspended(isEditing)
+        isScrubbing = isEditing
+        scrubSettleTask?.cancel()
+        scrubSettleTask = nil
         if isEditing {
             if scrubbedProgress == nil {
                 scrubbedProgress = model.progress
@@ -609,6 +630,22 @@ struct EPUBReaderScreen: View {
         }
         guard let target = scrubbedProgress else { return }
         model.seek(to: target)
+        // The new page arrives a moment after the finger lifts. The thumb
+        // stays where it was dropped until then; letting go of it at once
+        // sent it back to the old position first and then forward again.
+        scrubSettleTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(1200))
+            guard !Task.isCancelled, !isScrubbing else { return }
+            scrubbedProgress = nil
+        }
+    }
+
+    /// The page the drag asked for has been reported, so the slider can
+    /// follow the book again.
+    private func releaseScrubbedProgress() {
+        guard !isScrubbing, scrubbedProgress != nil else { return }
+        scrubSettleTask?.cancel()
+        scrubSettleTask = nil
         scrubbedProgress = nil
     }
 
@@ -2060,6 +2097,9 @@ private struct ReaderNavigationSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var section: ReaderNavigationSection = .contents
     @State private var query = ""
+    /// Edited on top of this sheet. The reader screen has its own editor
+    /// sheet, but it cannot open while this one is up.
+    @State private var editingDraft: ReaderAnnotationEditorDraft?
 
     var body: some View {
         NavigationStack {
@@ -2105,9 +2145,26 @@ private struct ReaderNavigationSheet: View {
         .onAppear {
             section = initialSection
             query = model.lastSearchQuery
+            model.resumeInterruptedSearch()
         }
         .onDisappear {
             model.cancelSearch()
+        }
+        .sheet(item: $editingDraft) { draft in
+            ReaderAnnotationEditor(
+                draft: draft,
+                onSave: { note, color in
+                    model.saveAnnotation(draft, noteText: note, color: color)
+                },
+                onDelete: {
+                    guard let annotation = model.annotations.first(where: {
+                        $0.id == draft.annotationID
+                    }) else { return }
+                    model.deleteAnnotation(annotation)
+                }
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
     }
 
@@ -2385,7 +2442,7 @@ private struct ReaderNavigationSheet: View {
                     .buttonStyle(.plain)
                     .swipeActions(edge: .leading, allowsFullSwipe: false) {
                         Button {
-                            model.editAnnotation(annotation)
+                            editingDraft = model.annotationDraft(for: annotation)
                         } label: {
                             Label("编辑", systemImage: "pencil")
                         }
@@ -2400,7 +2457,7 @@ private struct ReaderNavigationSheet: View {
                     }
                     .contextMenu {
                         Button {
-                            model.editAnnotation(annotation)
+                            editingDraft = model.annotationDraft(for: annotation)
                         } label: {
                             Label("编辑批注", systemImage: "pencil")
                         }

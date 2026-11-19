@@ -277,6 +277,10 @@ class ConfiguredTranslationService(
                     throw TranslationFailure.ServiceUnavailable
                 }
                 return translated
+            } catch (error: CancellationException) {
+                // A cancelled or timed-out request must reach the caller as
+                // that, not as 服务不可用.
+                throw error
             } catch (error: TranslationFailure) {
                 throw error
             } catch (error: IOException) {

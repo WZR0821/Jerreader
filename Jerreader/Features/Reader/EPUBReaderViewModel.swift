@@ -603,6 +603,7 @@ final class EPUBReaderViewModel {
             // Chapter boundaries are only needed once the book is on screen,
             // so they must never delay the first paint.
             Task { @MainActor [weak self] in
+                await self?.resolvePDFPageCount()
                 await self?.resolveOutlineProgressions()
                 await self?.repairMeaninglessOutlineTitles()
             }
@@ -685,7 +686,51 @@ final class EPUBReaderViewModel {
     func go(to item: ReaderOutlineItem) {
         guard let controller else { return }
         dismissTranslation()
+        outlineJump = OutlineJump(itemID: item.id, startedAt: Date(), landing: nil)
         controller.navigate(to: item.link)
+        // A jump inside the page already on screen moves nothing, so no new
+        // position arrives to relabel the bars.
+        if let locator = currentLocator {
+            chapterTitle = ReaderChapterTitle.display(
+                outlineTitle: currentOutlineItem?.title,
+                locatorTitle: locator.title,
+                bookTitle: book.title
+            )
+        }
+    }
+
+    /// The entry the reader last jumped to through the contents list or the
+    /// chapter buttons. A section that starts halfway down a page shares that
+    /// page with the end of the one before it, and a page's position is its
+    /// top, so by position alone the jump would land "in" the previous
+    /// section: the wrong row marked, and 下一章 stuck on the same page.
+    /// The jumped-to entry stays current until the reader moves on.
+    private struct OutlineJump {
+        let itemID: UUID
+        let startedAt: Date
+        var landing: Locator?
+    }
+
+    @ObservationIgnored private var outlineJump: OutlineJump?
+    /// A PDF's page count, known shortly after it opens; nil for other books.
+    @ObservationIgnored private var pdfPageCount: Int?
+
+    /// Keeps the jumped-to entry while the navigator settles (it may report
+    /// more than once on the way) and drops it at the first move after that.
+    private func settleOutlineJump(at locator: Locator) {
+        guard var jump = outlineJump else { return }
+        if Date().timeIntervalSince(jump.startedAt) < 2 {
+            jump.landing = locator
+            outlineJump = jump
+        } else if let landing = jump.landing,
+                  landing.href.string == locator.href.string,
+                  abs((landing.locations.progression ?? 0)
+                      - (locator.locations.progression ?? 0)) < 0.000_001,
+                  landing.locations.position == locator.locations.position {
+            return
+        } else {
+            outlineJump = nil
+        }
     }
 
     /// The outline entry the reader is currently inside, used to highlight and
@@ -694,18 +739,19 @@ final class EPUBReaderViewModel {
         guard !outline.isEmpty else { return nil }
         if let locator = currentLocator {
             let key = ReaderOutlineItem.resourceKey(for: locator.href.string)
-            // A resource can hold several entries (`chapter.xhtml#part2`).
-            // Prefer the last one that starts at or before the position.
+            // A resource can hold several entries (`chapter.xhtml#part2`, or
+            // every chapter of a PDF).
             let matches = outline.filter { $0.resourceKey == key }
             if !matches.isEmpty {
-                let progression = locator.locations.totalProgression
-                if let progression {
-                    let started = matches.filter {
-                        ($0.startProgression ?? 0) <= progression + 0.0005
-                    }
-                    if let last = started.last { return last }
+                if let jump = outlineJump,
+                   let target = matches.first(where: { $0.id == jump.itemID }) {
+                    return target
                 }
-                return matches.first
+                return ReaderOutlinePosition.current(
+                    among: matches,
+                    resourceProgression: locator.locations.progression,
+                    totalProgression: locator.locations.totalProgression
+                )
             }
         }
         return outlineItem(atProgression: progress)
@@ -737,9 +783,9 @@ final class EPUBReaderViewModel {
         guard let index = currentOutlineIndex else { return }
         // Land on the start of the current chapter first; only step back when
         // already at its beginning, which is how page-based readers behave.
-        let atChapterStart = (currentOutlineItem?.startProgression).map {
-            progress <= $0 + 0.005
-        } ?? false
+        let current = currentOutlineItem
+        let atChapterStart = (current != nil && outlineJump?.itemID == current?.id)
+            || (current?.startProgression).map { progress <= $0 + 0.005 } ?? false
         let target = atChapterStart ? index - 1 : index
         guard outline.indices.contains(target) else { return }
         go(to: outline[target])
@@ -801,14 +847,20 @@ final class EPUBReaderViewModel {
     /// Resolves where each outline entry begins in the whole publication.
     ///
     /// Readium exposes positions per reading-order resource, so the first
-    /// position of a resource is the start of every entry pointing at it. This
-    /// runs once per opened book; the service caches its own computation.
+    /// position of a resource is the start of an entry pointing at the whole
+    /// of it. Entries that share a resource are placed inside it: a PDF
+    /// chapter by its page, an EPUB section by where its anchor sits in the
+    /// document. This runs once per opened book; the service caches its own
+    /// computation.
     private func resolveOutlineProgressions() async {
         guard let publication, !outline.isEmpty else { return }
         guard let positions = await publication.positionsByReadingOrder().getOrNil()
         else { return }
 
         var startByResource: [String: Double] = [:]
+        var endByResource: [String: Double] = [:]
+        var positionsByResource: [String: [Locator]] = [:]
+        var previousKey: String?
         for (index, resourcePositions) in positions.enumerated() {
             guard let first = resourcePositions.first else { continue }
             let key = ReaderOutlineItem.resourceKey(for: first.href.string)
@@ -816,13 +868,53 @@ final class EPUBReaderViewModel {
                 ?? (positions.isEmpty ? 0 : Double(index) / Double(positions.count))
             if startByResource[key] == nil {
                 startByResource[key] = progression
+                positionsByResource[key] = resourcePositions
+                if let previousKey { endByResource[previousKey] = progression }
+                previousKey = key
             }
         }
         guard !startByResource.isEmpty else { return }
 
+        // Only documents that hold more than one entry need reading.
+        var entriesPerResource: [String: Int] = [:]
+        for item in outline {
+            entriesPerResource[item.resourceKey, default: 0] += 1
+        }
+        let anchored = outline.filter { item in
+            guard let fragment = item.fragment,
+                  entriesPerResource[item.resourceKey, default: 0] > 1
+            else { return false }
+            return ReaderOutlinePosition.pdfPage(fragment: fragment) == nil
+        }
+        let anchorFractions = anchored.isEmpty
+            ? [:]
+            : await ReaderOutlineBuilder.anchorFractions(
+                in: publication,
+                links: anchored.map(\.link)
+            )
+        guard !isClosed, !Task.isCancelled else { return }
+
         var resolved = outline
         for index in resolved.indices {
-            resolved[index].startProgression = startByResource[resolved[index].resourceKey]
+            let item = resolved[index]
+            let key = item.resourceKey
+            guard let start = startByResource[key] else { continue }
+            if let page = ReaderOutlinePosition.pdfPage(fragment: item.fragment),
+               let pages = positionsByResource[key],
+               pages.count > 1 {
+                // A PDF outline entry: one position per page.
+                let target = pages[min(page, pages.count) - 1].locations
+                resolved[index].startProgression = target.totalProgression ?? start
+                resolved[index].resourceFraction = target.progression
+                    ?? Double(min(page, pages.count) - 1) / Double(pages.count)
+            } else if let fraction = anchorFractions[item.link.href] {
+                let end = max(endByResource[key] ?? 1, start)
+                resolved[index].startProgression = start + fraction * (end - start)
+                resolved[index].resourceFraction = fraction
+            } else {
+                resolved[index].startProgression = start
+                resolved[index].resourceFraction = 0
+            }
         }
         // Entries whose resource is missing from the reading order (rare, but
         // seen with stale NCX files) inherit the previous known start so the
@@ -871,6 +963,12 @@ final class EPUBReaderViewModel {
 
     func cancelSearch() {
         searchModel.cancel()
+    }
+
+    /// Runs again the search that closing the panel cut short.
+    func resumeInterruptedSearch() {
+        guard searchModel.wasInterrupted else { return }
+        searchModel.search(searchModel.lastQuery, in: controller)
     }
 
     func toggleBookmark() {
@@ -931,8 +1029,10 @@ final class EPUBReaderViewModel {
         presentedAnnotationEditor = draft
     }
 
-    func editAnnotation(_ annotation: ReadingAnnotationRecord) {
-        presentedAnnotationEditor = ReaderAnnotationEditorDraft(
+    func annotationDraft(
+        for annotation: ReadingAnnotationRecord
+    ) -> ReaderAnnotationEditorDraft {
+        ReaderAnnotationEditorDraft(
             annotationID: annotation.id,
             locatorJSON: annotation.locatorJSON,
             anchorJSON: annotation.anchorJSON,
@@ -942,6 +1042,10 @@ final class EPUBReaderViewModel {
             chapterTitle: annotation.chapterTitle,
             progress: annotation.progress
         )
+    }
+
+    func editAnnotation(_ annotation: ReadingAnnotationRecord) {
+        presentedAnnotationEditor = annotationDraft(for: annotation)
     }
 
     func saveAnnotation(
@@ -1945,6 +2049,7 @@ final class EPUBReaderViewModel {
         let previousOutlineIndex = currentOutlineIndex
         let previousChapterTitle = chapterTitle
         currentLocator = locator
+        settleOutlineJump(at: locator)
         // The outline is checked first because its titles can be repaired from
         // document headings; a raw locator title is whatever the publication's
         // navigation document happened to contain, which is sometimes just a
@@ -1954,7 +2059,7 @@ final class EPUBReaderViewModel {
             locatorTitle: locator.title,
             bookTitle: book.title
         )
-        progress = min(max(locator.locations.totalProgression ?? 0, 0), 1)
+        progress = readingProgress(at: locator, fallback: 0)
         // Reading on into the next chapter offers its 90-second loop through
         // the AI button's dot; nothing pops up over the page.
         if let previousOutlineIndex,
@@ -2009,9 +2114,29 @@ final class EPUBReaderViewModel {
         translationAnchorFrame = standardized
     }
 
+    private func readingProgress(at locator: Locator, fallback: Double) -> Double {
+        ReaderPDFProgress.adjusted(
+            min(max(locator.locations.totalProgression ?? fallback, 0), 1),
+            position: locator.locations.position,
+            pageCount: pdfPageCount
+        )
+    }
+
+    /// Runs once the PDF is on screen; see `ReaderPDFProgress`.
+    private func resolvePDFPageCount() async {
+        guard book.format == .pdf, let publication,
+              let count = await publication.positions().getOrNil()?.count,
+              count > 0, !isClosed
+        else { return }
+        pdfPageCount = count
+        if let currentLocator {
+            progress = readingProgress(at: currentLocator, fallback: progress)
+        }
+    }
+
     private func persist(locator: Locator) {
         book.lastReadLocatorJSON = locator.readerJSONString
-        book.lastReadProgress = min(max(locator.locations.totalProgression ?? progress, 0), 1)
+        book.lastReadProgress = readingProgress(at: locator, fallback: progress)
         book.lastOpenedAt = Date()
         saveModelChanges()
         activePublicationService?.reassertBookFileMetadata()
@@ -2178,6 +2303,15 @@ final class EPUBReaderViewModel {
                 (controller as? EPUBReaderViewController)?
                     .installTranslationUITestSelection(frameInWindow: frame)
             }
+            backendTranslationTask = Task { [weak self] in
+                await self?.performPendingTranslation(using: MockTranslationService())
+            }
+            return
+        }
+        // The sample-book checks tap a real sentence; the answer comes from
+        // the Mock so the run needs neither a network nor a language pack.
+        if ProcessInfo.processInfo.arguments.contains("--jerreader-mock-translation-ui-test") {
+            translationConfiguration = nil
             backendTranslationTask = Task { [weak self] in
                 await self?.performPendingTranslation(using: MockTranslationService())
             }

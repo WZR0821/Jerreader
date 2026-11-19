@@ -165,7 +165,15 @@ struct GrammarNoteEditor: View {
                     Button("保存") {
                         do {
                             let id = draft.id
-                            let existing = try context.fetch(FetchDescriptor<GrammarNoteRecord>(predicate: #Predicate { $0.id == id })).first
+                            var existing = try context.fetch(FetchDescriptor<GrammarNoteRecord>(predicate: #Predicate { $0.id == id })).first
+                            if existing == nil {
+                                // 保存到语法知识库 makes a new draft each time, so
+                                // tapping it twice used to leave two identical notes.
+                                let title = draft.title, sentence = draft.sentence, explanation = draft.explanation
+                                existing = try context.fetch(FetchDescriptor<GrammarNoteRecord>(predicate: #Predicate {
+                                    $0.title == title && $0.sentence == sentence && $0.explanation == explanation
+                                })).first
+                            }
                             if let existing { existing.apply(draft) } else { context.insert(GrammarNoteRecord(draft)) }
                             try context.save(); dismiss()
                         } catch { context.rollback(); self.error = "语法收藏未能保存，请重试。" }

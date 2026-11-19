@@ -218,10 +218,11 @@ fun Modifier.jerreaderReveal(order: Int = 0, rise: Dp = 12.dp): Modifier = this.
 /** The app canvas: paper (dark: ink) with a faint static accent wash at the top left. */
 fun Modifier.jerreaderCanvasBackground(): Modifier = this.composed {
     val colors = LocalJerreaderColors.current
+    val glow = LocalJerreaderBackdropGlow.current
     Modifier.drawWithContent {
         drawRect(colors.canvas)
         val radius = max(size.width * 1.1f, 1f)
-        drawRect(
+        if (glow) drawRect(
             Brush.radialGradient(
                 colors = listOf(
                     colors.accent.copy(alpha = if (colors.isDark) 0.10f else 0.06f),

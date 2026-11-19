@@ -3,6 +3,7 @@
 package com.jerreader.android.reader
 
 import com.jerreader.shared.library.ReaderAppearance
+import com.jerreader.shared.library.ReaderThemeOption
 import org.json.JSONObject
 import org.readium.r2.navigator.epub.EpubPreferences
 import org.readium.r2.navigator.epub.EpubPreferencesSerializer
@@ -20,6 +21,11 @@ fun encodeStoredReaderPreferences(
     return JSONObject()
         .put("jerreaderReaderPreferencesVersion", 1)
         .put("readium", JSONObject(EpubPreferencesSerializer().serialize(epub)))
+        // The Readium preferences cannot say which paper is selected once a
+        // custom colour covers it (and 冷灰 is itself only a colour), so the
+        // choice is kept by name. Without it, switching the custom colour off
+        // after reopening the book fell back to the white paper.
+        .put("theme", appearance.theme.name)
         .put("customBackgroundHex", appearance.customBackgroundHex)
         .put("customSelectionColorHex", appearance.customSelectionColorHex)
         .put("pdfPaperModeEnabled", appearance.pdfPaperModeEnabled)
@@ -46,6 +52,9 @@ fun decodeStoredReaderPreferences(
         StoredReaderPreferences(
             epub = epub,
             appearance = base.copy(
+                theme = ReaderThemeOption.entries
+                    .firstOrNull { it.name == root.optString("theme") }
+                    ?: base.theme,
                 customBackgroundHex = root.optString("customBackgroundHex"),
                 customSelectionColorHex = root.optString("customSelectionColorHex"),
                 pdfPaperModeEnabled = root.optBoolean("pdfPaperModeEnabled", false)

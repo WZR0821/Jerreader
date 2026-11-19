@@ -191,6 +191,7 @@ final class JerreaderLearningUITests: XCTestCase {
             XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5))
             XCTAssertTrue(app.tabBars.buttons["学习"].exists)
             capture("ios-settings-" + name, app: app)
+            if name == "theme" { assertThemePage(app) }
             if name == "reader" {
                 for _ in 0..<5 {
                     if app.staticTexts["日文原版排版"].isHittable { break }
@@ -201,11 +202,79 @@ final class JerreaderLearningUITests: XCTestCase {
             app.navigationBars.buttons.firstMatch.tap()
             XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 5))
         }
+        // 2.0.1: 设置 opens on its home page again after the reader has been
+        // somewhere else. It used to keep whichever sub-page was open last.
+        let privacy = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "数据与隐私")).firstMatch
+        XCTAssertTrue(privacy.waitForExistence(timeout: 5)); privacy.tap()
+        XCTAssertTrue(app.navigationBars["数据与隐私"].waitForExistence(timeout: 5))
         app.tabBars.buttons["学习"].tap()
         XCTAssertTrue(draftInput.waitForExistence(timeout: 5))
         XCTAssertEqual(draftInput.value as? String, "practice draft")
         capture("ios-draft-restored", app: app)
+        app.tabBars.buttons["设置"].tap()
+        XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.navigationBars["数据与隐私"].exists)
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "界面主题")).firstMatch.exists)
+        capture("ios-settings-reopened", app: app)
         app.terminate()
+    }
+
+    /// 界面主题 (2.0.1): the preview, 外观模式, eight colours, 背景光晕 and the
+    /// way to the reader's paper. Choosing a colour moves the selection and
+    /// the summary under the swatches.
+    private func assertThemePage(_ app: XCUIApplication) {
+        let anything = app.descendants(matching: .any)
+        XCTAssertTrue(anything.matching(identifier: "themePreview").firstMatch.waitForExistence(timeout: 5))
+        for mode in ["system", "light", "dark"] {
+            XCTAssertTrue(app.buttons["appearanceMode-" + mode].exists, "Missing 外观模式 option \(mode)")
+        }
+        XCTAssertTrue(app.buttons["appearanceMode-system"].isSelected)
+        let colours = ["ocean", "forest", "wisteria", "amber", "berry", "teal", "terracotta", "graphite"]
+        for colour in colours {
+            XCTAssertTrue(app.buttons["themeSwatch-" + colour].exists, "Missing theme colour \(colour)")
+        }
+        let ocean = app.buttons["themeSwatch-ocean"]
+        let graphite = app.buttons["themeSwatch-graphite"]
+        // A run that stopped half way may have left another colour chosen.
+        if !ocean.isSelected {
+            ocean.tap()
+            expectation(for: NSPredicate(format: "isSelected == true"), evaluatedWith: ocean)
+            waitForExpectations(timeout: 5)
+        }
+        graphite.tap()
+        expectation(for: NSPredicate(format: "isSelected == true"), evaluatedWith: graphite)
+        waitForExpectations(timeout: 5)
+        XCTAssertFalse(ocean.isSelected)
+        let summary = anything.matching(identifier: "themeSelectedSummary").firstMatch
+        XCTAssertTrue(summary.exists)
+        XCTAssertTrue(summary.label.contains("石墨"), "The summary still reads: \(summary.label)")
+        capture("ios-settings-theme-graphite", app: app)
+        ocean.tap()
+        expectation(for: NSPredicate(format: "isSelected == true"), evaluatedWith: ocean)
+        waitForExpectations(timeout: 5)
+
+        let glow = app.switches["themeBackdropGlow"]
+        let paper = anything.matching(identifier: "themeReaderPaperLink").firstMatch
+        for _ in 0..<5 {
+            if glow.exists && glow.isHittable && paper.exists && paper.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(glow.waitForExistence(timeout: 5))
+        XCTAssertEqual(glow.value as? String, "1")
+        XCTAssertTrue(paper.exists)
+        capture("ios-settings-theme-lower", app: app)
+        // 阅读纸张 opens 默认阅读排版 and comes back here, not to the home page.
+        paper.tap()
+        XCTAssertTrue(app.navigationBars["默认阅读排版"].waitForExistence(timeout: 5))
+        let margins = app.sliders["readerDefaultsVerticalMargins"]
+        for _ in 0..<6 {
+            if margins.exists && margins.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(margins.exists, "默认阅读排版 must offer 上下边距")
+        capture("ios-settings-reader-margins", app: app)
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["界面主题"].waitForExistence(timeout: 5))
     }
 
     func testOfflineResourcesHaveOneSettingsEntry() {
@@ -1506,6 +1575,134 @@ final class JerreaderReaderLayoutUITests: XCTestCase {
         // Leave the simulator in the default layout.
         chooseLayout("标准")
         XCTAssertFalse(revealTop.exists)
+        app.terminate()
+    }
+
+    /// Opens 阅读设置 and returns its navigation bar.
+    private func openSettingsSheet() -> XCUIElement {
+        XCTAssertTrue(readerSettings.waitForExistence(timeout: 10))
+        openReaderSettings()
+        let sheet = app.navigationBars["阅读与翻译"]
+        XCTAssertTrue(sheet.waitForExistence(timeout: 5))
+        return sheet
+    }
+
+    private func closeSettingsSheet(_ sheet: XCUIElement) {
+        sheet.buttons["完成"].tap()
+        waitUntilGone(sheet, timeout: 5, "the settings sheet closes")
+    }
+
+    /// Scrolls the sheet a short way without a fling, so a control a few rows
+    /// down is not thrown past the top of the screen.
+    private func nudgeSheetUp() {
+        let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.74))
+        let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.50))
+        from.press(forDuration: 0.05, thenDragTo: to)
+    }
+
+    private func reveal(_ element: XCUIElement, _ message: String) {
+        for _ in 0 ..< 14 where !element.isHittable {
+            nudgeSheetUp()
+        }
+        XCTAssertTrue(element.isHittable, message)
+    }
+
+    /// Picks a paper in 阅读设置 → 背景 and closes the sheet.
+    private func choosePaper(_ title: String) {
+        let sheet = openSettingsSheet()
+        let swatch = app.buttons["\(title)背景"]
+        reveal(swatch, "the \(title) paper must be reachable")
+        swatch.tap()
+        XCTAssertTrue(swatch.isSelected, "\(title) must become the paper")
+        closeSettingsSheet(sheet)
+    }
+
+    /// Drags 阅读设置 → 版面 → 上下边距 to one end and closes the sheet.
+    private func setVerticalMargins(toEnd position: CGFloat, expecting label: String) {
+        let sheet = openSettingsSheet()
+        let slider = app.sliders["上下边距"]
+        reveal(slider, "上下边距 must be reachable")
+        slider.adjust(toNormalizedSliderPosition: position)
+        XCTAssertTrue(
+            app.staticTexts[label].waitForExistence(timeout: 3),
+            "上下边距 must read \(label) at this end"
+        )
+        closeSettingsSheet(sheet)
+    }
+
+    private var mockTranslation: XCUIElement {
+        app.staticTexts
+            .matching(NSPredicate(format: "label CONTAINS %@", "Mock 翻译结果"))
+            .firstMatch
+    }
+
+    /// Taps a sentence of the sample text and waits for its translation, so
+    /// the frame kept afterwards shows the highlight the tap drew.
+    private func translateASentence() {
+        let page = app.webViews.firstMatch
+        XCTAssertTrue(page.waitForExistence(timeout: 20), "the page must be showing")
+        // The page is tapped by position: how a web view hands its text to
+        // accessibility is not something this check should depend on. One
+        // point can fall between two lines or columns, so a few are tried,
+        // spread both ways; all of them are in the upper half, where the
+        // first page has text, and none is near a page-turn edge.
+        let points: [(CGFloat, CGFloat)] = [
+            (0.50, 0.30), (0.46, 0.36), (0.54, 0.24), (0.42, 0.42), (0.58, 0.33), (0.38, 0.27),
+        ]
+        for (x, y) in points {
+            page.coordinate(withNormalizedOffset: CGVector(dx: x, dy: y)).tap()
+            if mockTranslation.waitForExistence(timeout: 6) { break }
+        }
+        XCTAssertTrue(mockTranslation.exists, "a tap on a sentence must translate it")
+        Thread.sleep(forTimeInterval: 0.6)
+    }
+
+    /// Puts the translation card away, and with it the highlight on the page.
+    private func closeTranslation() {
+        let close = app.buttons["关闭翻译"]
+        XCTAssertTrue(close.waitForExistence(timeout: 5), "the card has 关闭翻译")
+        close.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        waitUntilGone(mockTranslation, timeout: 5, "关闭翻译 puts the card away")
+    }
+
+    /// 2.0.1. Two things a reader reported after 2.0.0:
+    ///
+    /// - the highlight a tap draws kept its outline and lost its fill on every
+    ///   paper but plain white, because ReadiumCSS forces backgrounds inside
+    ///   the page to transparent on tinted and dark papers;
+    /// - only the side margins could be set, not the gap above and below.
+    ///
+    /// The frames kept here are the evidence: a tapped sentence on each
+    /// paper, then the page with 上下边距 at each end. Whether the fill is
+    /// there is read off the frames; the unit test
+    /// `testQuickSentenceHighlightKeepsItsFillUnderReadiumThemeRules` holds
+    /// the computed colours.
+    func testSelectionFillOnEveryPaperAndVerticalMargins() {
+        // Six trips through the settings sheet and four translations: about
+        // two minutes on this simulator, which is the default allowance.
+        executionTimeAllowance = 360
+        app = XCUIApplication()
+        app.launchArguments = [
+            "--jerreader-sample-book-ui-test", "--jerreader-sample-text-ui-test",
+            "--jerreader-mock-translation-ui-test",
+            "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN",
+            "-ApplePersistenceIgnoreState", "YES",
+        ]
+        app.launch()
+        XCTAssertTrue(readerSettings.waitForExistence(timeout: 60), "The sample book must open")
+        chooseLayout("标准")
+
+        for (paper, name) in [("护眼", "sepia"), ("冷灰", "cool-gray"), ("深色", "dark"), ("浅色", "light")] {
+            choosePaper(paper)
+            translateASentence()
+            attach("reader-selection-\(name)")
+            closeTranslation()
+        }
+
+        setVerticalMargins(toEnd: 1, expecting: "宽")
+        attach("reader-vertical-margins-widest")
+        setVerticalMargins(toEnd: 0, expecting: "窄")
+        attach("reader-vertical-margins-none")
         app.terminate()
     }
 

@@ -16,11 +16,13 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,6 +67,9 @@ class MainActivity : ComponentActivity() {
             uri?.let(viewModel::importPublication)
         }
 
+    /** Counts the reader's requests to show 翻译与 AI (`EXTRA_OPEN_SETTINGS`). */
+    private var translationSettingsRequests by mutableIntStateOf(0)
+
     private var pendingCoverBookId: String? = null
     private var pendingCoverSelection: ((Uri) -> Unit)? = null
     private val chooseCover =
@@ -103,17 +108,29 @@ class MainActivity : ComponentActivity() {
             val state by viewModel.uiState.collectAsStateWithLifecycle()
             val translationPreferences by graph.translationSettings.preferences.collectAsStateWithLifecycle()
             val appPreferences by graph.appSettings.preferences.collectAsStateWithLifecycle()
+            val opensTranslationSettings = intent.getBooleanExtra(EXTRA_OPEN_SETTINGS, false)
             var selectedTab by rememberSaveable {
                 mutableStateOf(
-                    if (intent.getBooleanExtra(EXTRA_OPEN_SETTINGS, false)) {
-                        AndroidAppTab.SETTINGS
-                    } else {
-                        AndroidAppTab.LIBRARY
-                    }
+                    if (opensTranslationSettings) AndroidAppTab.SETTINGS else AndroidAppTab.LIBRARY
                 )
             }
             val tabStates = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
-            var settingsRoute by rememberSaveable { mutableStateOf(SettingsRoute.ROOT) }
+            var settingsRoute by rememberSaveable {
+                mutableStateOf(
+                    if (opensTranslationSettings) SettingsRoute.TRANSLATION else SettingsRoute.ROOT
+                )
+            }
+            // The reader's 翻译设置 button. This screen is normally still alive
+            // under the book, so the request arrives through onNewIntent; the
+            // start-up values above only cover a screen the system had to
+            // rebuild. Until 2.0.1 the button closed the book and left the
+            // reader on the shelf.
+            LaunchedEffect(translationSettingsRequests) {
+                if (translationSettingsRequests > 0) {
+                    settingsRoute = SettingsRoute.TRANSLATION
+                    selectedTab = AndroidAppTab.SETTINGS
+                }
+            }
 
             // Secondary screens are Compose state, not activities, so back has to
             // unwind them explicitly. Without this, back from a settings sub-page
@@ -127,10 +144,32 @@ class MainActivity : ComponentActivity() {
             ) { selectedTab = AndroidAppTab.LIBRARY }
 
             val bottomBar: @Composable () -> Unit = {
-                AppNavigationBar(selectedTab) { selectedTab = it }
+                AppNavigationBar(selectedTab) { tab ->
+                    // 设置 opens on its home page: the route is dropped when
+                    // the reader leaves the tab, and when the tab is tapped
+                    // again. It used to outlive both, so after an hour in a
+                    // book 设置 still showed whichever sub-page was open last.
+                    if (selectedTab == AndroidAppTab.SETTINGS) {
+                        settingsRoute = SettingsRoute.ROOT
+                        // The route alone is not enough: the tab's saved state
+                        // still holds whatever a sub-page had open (the
+                        // provider being edited under AI 大模型, a notice, a
+                        // scroll position) and hands it back the next time
+                        // that page appears.
+                        if (tab != AndroidAppTab.SETTINGS) {
+                            tabStates.removeState(AndroidAppTab.SETTINGS.name)
+                        }
+                    }
+                    selectedTab = tab
+                }
             }
 
-            JerreaderTheme(accent = appPreferences.theme) {
+            JerreaderTheme(
+                accent = appPreferences.theme,
+                // 界面主题 → 外观模式 and 背景光晕.
+                dark = appPreferences.appearanceMode.isDark(isSystemInDarkTheme()),
+                backdropGlow = appPreferences.backdropGlow
+            ) {
                 com.jerreader.android.ui.JerreaderSystemBars()
                 tabStates.SaveableStateProvider(selectedTab.name) { when (selectedTab) {
                     AndroidAppTab.LIBRARY -> JerreaderLibraryApp(
@@ -235,6 +274,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_OPEN_SETTINGS, false)) translationSettingsRequests++
         handleIncomingPublication(intent)
     }
 

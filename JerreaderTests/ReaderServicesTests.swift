@@ -1411,7 +1411,7 @@ final class ReaderServicesTests: XCTestCase {
                 )?.children.length || 0,
                 baseBackground: document.getElementById(
                   'jerreader-reader-quick-sentence-highlight'
-                )?.firstElementChild?.style.background || '',
+                )?.firstElementChild?.style.backgroundColor || '',
                 baseBorder: document.getElementById(
                   'jerreader-reader-quick-sentence-highlight'
                 )?.firstElementChild?.style.border || '',
@@ -2216,6 +2216,179 @@ final class ReaderServicesTests: XCTestCase {
         }
     }
 
+    /// The tap-translation highlight is drawn inside the publication's own
+    /// document, so ReadiumCSS's theme rules apply to it. Those rules — copied
+    /// here from `ReadiumCSS-after.css` — force every element's background to
+    /// `transparent !important` in sepia, at night, and whenever a page colour
+    /// is set (cool grey, any custom background). The markers used a plain
+    /// inline `background`, which loses to them: the selection kept its
+    /// outline and lost its fill on every page except plain white.
+    func testQuickSentenceHighlightKeepsItsFillUnderReadiumThemeRules() async throws {
+        let rootStyles = [
+            "--USER__appearance: readium-night-on;",
+            "--USER__appearance: readium-sepia-on;",
+            "--USER__backgroundColor: #EDF5FA; --USER__textColor: #1C2630;"
+        ]
+        for (index, rootStyle) in rootStyles.enumerated() {
+            let theme: ReaderThemeChoice = switch index {
+            case 0: .dark
+            case 1: .sepia
+            default: .coolGray
+            }
+            let palette = ReaderSelectionVisualStyle.palette(
+                theme: theme,
+                customBackgroundHex: "",
+                customSelectionColorHex: ""
+            )
+            let webView = WKWebView(
+                frame: CGRect(x: 0, y: 0, width: 390, height: 640)
+            )
+            webView.loadHTMLString(
+                """
+                <!doctype html><html lang="ja" style="\(rootStyle)"><head>
+                <meta name="viewport" content="width=device-width">
+                <style>
+                  :root[style*="readium-night-on"] *:not(a) {
+                    color: inherit !important;
+                    background-color: transparent !important;
+                    border-color: currentColor !important;
+                  }
+                  :root[style*="readium-sepia-on"] *:not(a) {
+                    color: inherit !important;
+                    background-color: transparent !important;
+                  }
+                  :root[style*="--USER__backgroundColor"] * {
+                    background-color: transparent !important;
+                  }
+                  body { margin: 24px; font-size: 22px; color: #808080; }
+                </style>
+                </head><body>
+                <p id="p">吾輩は猫である。名前はまだ無い。</p>
+                </body></html>
+                """,
+                baseURL: nil
+            )
+            for _ in 0 ..< 200 {
+                if try await webView.evaluateJavaScript(
+                    "document.getElementById('p') !== null"
+                ) as? Bool == true {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            try await Task.sleep(for: .milliseconds(80))
+
+            let probeRaw = try await webView.evaluateJavaScript(
+                """
+                (() => {
+                  const text = document.getElementById('p').firstChild;
+                  const range = document.createRange();
+                  range.setStart(text, 0);
+                  range.setEnd(text, 1);
+                  const rect = range.getBoundingClientRect();
+                  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+                })()
+                """
+            )
+            let probe = try XCTUnwrap(probeRaw as? [String: Any])
+            let point = CGPoint(
+                x: CGFloat(truncating: try XCTUnwrap(probe["x"] as? NSNumber)),
+                y: CGFloat(truncating: try XCTUnwrap(probe["y"] as? NSNumber))
+            )
+            let token = "fill-\(index)"
+            _ = try await webView.evaluateJavaScript(
+                EPUBReaderViewController.quickSentenceHighlightScript(
+                    at: point,
+                    utf16Range: 0 ..< 8,
+                    requestToken: token,
+                    palette: palette
+                )
+            )
+            let spoken = try XCTUnwrap(
+                ReaderSpeechHighlight(
+                    utf16Range: NSRange(location: 1, length: 2),
+                    totalLength: 8
+                )
+            )
+            _ = try await webView.evaluateJavaScript(
+                EPUBReaderViewController.quickSentenceSpeechHighlightScript(
+                    spoken,
+                    matching: token,
+                    sequence: 1,
+                    palette: palette
+                )
+            )
+
+            let paintRaw = try await webView.evaluateJavaScript(
+                """
+                (() => {
+                  const computed = (id) => {
+                    const marker = document.getElementById(id)?.firstElementChild;
+                    if (!marker) return null;
+                    const style = getComputedStyle(marker);
+                    return {
+                      fill: style.backgroundColor,
+                      border: style.borderTopColor,
+                      borderWidth: style.borderTopWidth
+                    };
+                  };
+                  return {
+                    base: computed('jerreader-reader-quick-sentence-highlight'),
+                    spoken: computed(
+                      'jerreader-reader-quick-sentence-speech-highlight'
+                    )
+                  };
+                })()
+                """
+            )
+            let paint = try XCTUnwrap(paintRaw as? [String: Any])
+            let base = try XCTUnwrap(
+                paint["base"] as? [String: Any],
+                "No highlight was produced under \(rootStyle)"
+            )
+            let spokenPaint = try XCTUnwrap(
+                paint["spoken"] as? [String: Any],
+                "No speech highlight was produced under \(rootStyle)"
+            )
+
+            func alpha(_ css: Any?) -> Double {
+                guard let css = css as? String else { return 0 }
+                let numbers = css
+                    .drop { $0 != "(" }.dropFirst()
+                    .prefix { $0 != ")" }
+                    .split(separator: ",")
+                    .compactMap {
+                        Double($0.trimmingCharacters(in: .whitespaces))
+                    }
+                // `rgb(r, g, b)` is opaque; `rgba(r, g, b, a)` carries alpha.
+                return numbers.count == 4 ? numbers[3] : (numbers.count == 3 ? 1 : 0)
+            }
+
+            XCTAssertGreaterThan(
+                alpha(base["fill"]),
+                0.25,
+                "The selection fill was forced transparent under \(rootStyle)"
+            )
+            XCTAssertGreaterThan(
+                alpha(spokenPaint["fill"]),
+                alpha(base["fill"]),
+                "The spoken span must read stronger than the selection under \(rootStyle)"
+            )
+            // At night ReadiumCSS also repaints every border in the text
+            // colour (#808080 here, fully opaque). The outline must stay ours.
+            XCTAssertNotEqual(
+                base["border"] as? String,
+                "rgb(128, 128, 128)",
+                "The selection outline took the text colour under \(rootStyle)"
+            )
+            XCTAssertEqual(
+                spokenPaint["borderWidth"] as? String,
+                "0px",
+                "The spoken span must not grow an outline under \(rootStyle)"
+            )
+        }
+    }
+
     func testWritingModePolicyReadsStoredModeOnlyWhenNotAuthoritative() {
         let injected = EPUBReaderViewController.writingModePolicyScript(
             forcesHorizontal: false,
@@ -2510,6 +2683,161 @@ final class ReaderServicesTests: XCTestCase {
         )
     }
 
+    // 2.0.1: reading time was keyed by the device's calendar, so under the
+    // Japanese or Buddhist calendar the weekly report never found it.
+    func testReadingActivityDayKeysAreGregorianWhateverTheDeviceCalendar() throws {
+        var components = DateComponents()
+        components.year = 2026; components.month = 11; components.day = 19; components.hour = 12
+        let date = try XCTUnwrap(ReadingActivity.dayCalendar.date(from: components))
+        XCTAssertEqual(ReadingActivity.key(date), "2026-11-19")
+
+        var activity = ReadingActivity()
+        activity.record(from: date, to: date.addingTimeInterval(600))
+        activity.query(at: date)
+        XCTAssertEqual(activity.days["2026-11-19"], ReadingDay(seconds: 600, queries: 1))
+
+        // Days written before the fix come back under their Gregorian key.
+        XCTAssertEqual(ReadingActivity.gregorianKey("0008-11-19"), "2026-11-19")
+        XCTAssertEqual(ReadingActivity.gregorianKey("0115-11-19"), "2026-11-19")
+        XCTAssertEqual(ReadingActivity.gregorianKey("2569-11-19"), "2026-11-19")
+        XCTAssertEqual(ReadingActivity.gregorianKey("2026-11-19"), "2026-11-19")
+        XCTAssertEqual(ReadingActivity.gregorianKey("5787-03-09"), "5787-03-09")
+        let stored = try JSONEncoder().encode(ReadingActivity(days: [
+            "0008-11-18": ReadingDay(seconds: 300, queries: 1),
+            "2026-11-18": ReadingDay(seconds: 60, queries: 2),
+            "2026-11-17": ReadingDay(seconds: 30, queries: 0),
+        ]))
+        let repaired = ReadingActivity.decode(stored)
+        XCTAssertEqual(repaired.days, [
+            "2026-11-18": ReadingDay(seconds: 360, queries: 3),
+            "2026-11-17": ReadingDay(seconds: 30, queries: 0),
+        ])
+    }
+
+    // 2.0.1: a PDF's last page reads (N−1)/N, so short PDFs never finished
+    // and a one-page PDF never even started.
+    func testPDFProgressReadsTheLastPageAsFinished() {
+        XCTAssertEqual(ReaderPDFProgress.adjusted(0.9, position: 10, pageCount: 10), 1)
+        XCTAssertEqual(ReaderPDFProgress.adjusted(0, position: 1, pageCount: 1), 1)
+        XCTAssertEqual(ReaderPDFProgress.adjusted(0.8, position: 9, pageCount: 10), 0.8)
+        XCTAssertEqual(ReaderPDFProgress.adjusted(0, position: 1, pageCount: 10), 0)
+        // Not a PDF, or its page count is not known yet: left as reported.
+        XCTAssertEqual(ReaderPDFProgress.adjusted(0.42, position: 7, pageCount: nil), 0.42)
+        XCTAssertEqual(ReaderPDFProgress.adjusted(0.42, position: nil, pageCount: 7), 0.42)
+        XCTAssertEqual(ReaderPDFProgress.adjusted(0.42, position: 3, pageCount: 0), 0.42)
+    }
+
+    // 2.0.1: every entry of a shared resource used to start where the
+    // resource starts, so the "current chapter" was the last one of the file
+    // — for a PDF, the last chapter of the book on every page.
+    func testOutlinePositionReadsPDFPagesAndAnchors() {
+        XCTAssertEqual(ReaderOutlineItem.fragment(of: "book.pdf#page=12"), "page=12")
+        XCTAssertEqual(ReaderOutlineItem.fragment(of: "text/ch1.xhtml#%E7%AF%80"), "節")
+        XCTAssertNil(ReaderOutlineItem.fragment(of: "text/ch1.xhtml"))
+        XCTAssertNil(ReaderOutlineItem.fragment(of: "text/ch1.xhtml#"))
+
+        XCTAssertEqual(ReaderOutlinePosition.pdfPage(fragment: "page=12"), 12)
+        XCTAssertEqual(ReaderOutlinePosition.pdfPage(fragment: "zoom=2&page=3"), 3)
+        XCTAssertNil(ReaderOutlinePosition.pdfPage(fragment: "page=0"))
+        XCTAssertNil(ReaderOutlinePosition.pdfPage(fragment: "section-2"))
+        XCTAssertNil(ReaderOutlinePosition.pdfPage(fragment: nil))
+
+        let head = "<html><head><title>t</title></head>"
+        let body = "<body><h2 id=\"s1\">一</h2>"
+            + String(repeating: "あ", count: 300)
+            + "<h2 id='s2'>二</h2>"
+            + String(repeating: "い", count: 300)
+            + "<a name=\"s3\"></a>"
+            + String(repeating: "う", count: 300)
+            + "</body></html>"
+        let markup = Data((head + body).utf8)
+        let first = ReaderOutlinePosition.fraction(ofAnchor: "s1", in: markup)
+        let second = ReaderOutlinePosition.fraction(ofAnchor: "s2", in: markup)
+        let third = ReaderOutlinePosition.fraction(ofAnchor: "s3", in: markup)
+        XCTAssertNotNil(first)
+        XCTAssertNotNil(second)
+        XCTAssertNotNil(third)
+        // Measured from the body, so the first heading sits at the very top.
+        XCTAssertLessThan(first ?? 1, 0.02)
+        XCTAssertEqual(second ?? 0, 1.0 / 3.0, accuracy: 0.03)
+        XCTAssertEqual(third ?? 0, 2.0 / 3.0, accuracy: 0.03)
+        XCTAssertNil(ReaderOutlinePosition.fraction(ofAnchor: "missing", in: markup))
+        XCTAssertNil(ReaderOutlinePosition.fraction(ofAnchor: "s1", in: Data()))
+    }
+
+    func testOutlinePositionPicksTheEntryThePageIsIn() {
+        func entry(_ title: String, _ href: String, fraction: Double?, start: Double?) -> ReaderOutlineItem {
+            var item = ReaderOutlineItem(title: title, link: Link(href: href), depth: 0)
+            item.resourceFraction = fraction
+            item.startProgression = start
+            return item
+        }
+        // A 100-page PDF with chapters on pages 1, 11 and 51.
+        let chapters = [
+            entry("序", "book.pdf#page=1", fraction: 0, start: 0),
+            entry("上", "book.pdf#page=11", fraction: 0.10, start: 0.10),
+            entry("下", "book.pdf#page=51", fraction: 0.50, start: 0.50)
+        ]
+        func current(_ progression: Double) -> String? {
+            ReaderOutlinePosition.current(
+                among: chapters,
+                resourceProgression: progression,
+                totalProgression: progression
+            )?.title
+        }
+        XCTAssertEqual(current(0), "序")
+        XCTAssertEqual(current(0.09), "序")
+        XCTAssertEqual(current(0.10), "上")
+        XCTAssertEqual(current(0.49), "上")
+        XCTAssertEqual(current(0.50), "下")
+        XCTAssertEqual(current(0.99), "下")
+
+        // A part and its first chapter start at the same place: the more
+        // specific, later entry wins.
+        let nested = [
+            entry("第一部", "text/p1.xhtml", fraction: 0, start: 0.2),
+            entry("第一章", "text/p1.xhtml#c1", fraction: 0, start: 0.2),
+            entry("第二章", "text/p1.xhtml#c2", fraction: 0.6, start: 0.26)
+        ]
+        XCTAssertEqual(
+            ReaderOutlinePosition.current(
+                among: nested, resourceProgression: 0.3, totalProgression: 0.23
+            )?.title,
+            "第一章"
+        )
+        XCTAssertEqual(
+            ReaderOutlinePosition.current(
+                among: nested, resourceProgression: 0.7, totalProgression: 0.27
+            )?.title,
+            "第二章"
+        )
+
+        // Before the positions are resolved the fractions are unknown; the
+        // whole-publication figure still decides, and a page ahead of every
+        // entry falls back to the first.
+        let unresolved = [
+            entry("甲", "text/a.xhtml#x", fraction: nil, start: 0.4),
+            entry("乙", "text/a.xhtml#y", fraction: nil, start: 0.5)
+        ]
+        XCTAssertEqual(
+            ReaderOutlinePosition.current(
+                among: unresolved, resourceProgression: 0.9, totalProgression: 0.45
+            )?.title,
+            "甲"
+        )
+        XCTAssertEqual(
+            ReaderOutlinePosition.current(
+                among: unresolved, resourceProgression: nil, totalProgression: 0.1
+            )?.title,
+            "甲"
+        )
+        XCTAssertNil(
+            ReaderOutlinePosition.current(
+                among: [], resourceProgression: 0.5, totalProgression: 0.5
+            )
+        )
+    }
+
     func testPublicationLayoutDetectorFindsVerticalCSSWithoutLanguageMetadata() {
         XCTAssertEqual(
             JapanesePublicationLayoutDetector.detect(
@@ -2645,6 +2973,44 @@ final class ReaderServicesTests: XCTestCase {
         XCTAssertEqual(JerreaderThemePreferences.current(defaults: defaults), .berry)
         defaults.set("not-a-theme", forKey: JerreaderThemePreferences.storageKey)
         XCTAssertEqual(JerreaderThemePreferences.current(defaults: defaults), .ocean)
+
+        // 2.0.1: three more colours, appended so the five stored names keep
+        // their meaning. Android lists the same eight in the same order.
+        XCTAssertEqual(
+            JerreaderThemeColorChoice.allCases.map(\.rawValue),
+            ["ocean", "forest", "wisteria", "amber", "berry", "teal", "terracotta", "graphite"]
+        )
+        XCTAssertEqual(
+            JerreaderThemeColorChoice.allCases.map(\.title),
+            ["海蓝", "森林", "紫藤", "琥珀", "莓红", "松石", "赤陶", "石墨"]
+        )
+        defaults.set(
+            JerreaderThemeColorChoice.graphite.rawValue,
+            forKey: JerreaderThemePreferences.storageKey
+        )
+        XCTAssertEqual(JerreaderThemePreferences.current(defaults: defaults), .graphite)
+    }
+
+    func testAppearanceModeDefaultsToTheSystemAndFallsBackSafely() throws {
+        let suiteName = "JerreaderTests.AppearanceMode.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.removePersistentDomain(forName: suiteName)
+
+        XCTAssertEqual(JerreaderThemePreferences.appearanceMode(defaults: defaults), .system)
+        for mode in JerreaderAppearanceMode.allCases {
+            defaults.set(mode.rawValue, forKey: JerreaderThemePreferences.appearanceModeKey)
+            XCTAssertEqual(JerreaderThemePreferences.appearanceMode(defaults: defaults), mode)
+        }
+        defaults.set("sepia", forKey: JerreaderThemePreferences.appearanceModeKey)
+        XCTAssertEqual(JerreaderThemePreferences.appearanceMode(defaults: defaults), .system)
+
+        // The raw values Android stores, and what each asks of a window.
+        XCTAssertEqual(JerreaderAppearanceMode.allCases.map(\.rawValue), ["system", "light", "dark"])
+        XCTAssertEqual(JerreaderAppearanceMode.allCases.map(\.title), ["跟随系统", "浅色", "深色"])
+        XCTAssertEqual(JerreaderAppearanceMode.system.interfaceStyle, .unspecified)
+        XCTAssertEqual(JerreaderAppearanceMode.light.interfaceStyle, .light)
+        XCTAssertEqual(JerreaderAppearanceMode.dark.interfaceStyle, .dark)
     }
 
     func testSelectionPalettesAdaptToThemeAndCustomColors() {
@@ -2764,6 +3130,36 @@ final class ReaderServicesTests: XCTestCase {
         defaults.set("unknown", forKey: ReaderInterfaceDefaults.layoutModeKey)
         XCTAssertEqual(ReaderInterfaceDefaults.layoutMode(defaults: defaults), .standard)
         XCTAssertEqual(ReaderLayoutMode.allCases.map(\.title), ["标准", "沉浸"])
+    }
+
+    /// 上下边距 (2.0.1). An untouched setting must reproduce 2.0.0's 14pt gap
+    /// exactly, so the update moves nobody's page.
+    func testVerticalMarginsDefaultToTheShippedGapAndClampStoredValues() throws {
+        let suiteName = "JerreaderTests.verticalMargins.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        XCTAssertEqual(ReaderInterfaceDefaults.verticalMargins(defaults: defaults), 1)
+        XCTAssertEqual(
+            ReaderInterfaceDefaults.pageEdgeInset(verticalMargins: 1),
+            ReaderInterfaceDefaults.contentEdgeInset
+        )
+        XCTAssertEqual(ReaderInterfaceDefaults.pageEdgeInset(verticalMargins: 0), 0)
+        XCTAssertEqual(ReaderInterfaceDefaults.pageEdgeInset(verticalMargins: 2.5), 35)
+        XCTAssertEqual(ReaderInterfaceDefaults.pageEdgeInset(verticalMargins: 4), 56)
+
+        defaults.set(2.5, forKey: ReaderInterfaceDefaults.verticalMarginsKey)
+        XCTAssertEqual(ReaderInterfaceDefaults.verticalMargins(defaults: defaults), 2.5)
+        defaults.set(-3.0, forKey: ReaderInterfaceDefaults.verticalMarginsKey)
+        XCTAssertEqual(ReaderInterfaceDefaults.verticalMargins(defaults: defaults), 0)
+        defaults.set(99.0, forKey: ReaderInterfaceDefaults.verticalMarginsKey)
+        XCTAssertEqual(ReaderInterfaceDefaults.verticalMargins(defaults: defaults), 4)
+        defaults.set(Double.nan, forKey: ReaderInterfaceDefaults.verticalMarginsKey)
+        XCTAssertEqual(ReaderInterfaceDefaults.verticalMargins(defaults: defaults), 1)
+        XCTAssertEqual(
+            [0.0, 0.7, 0.8, 1.0, 1.5, 1.6, 4.0].map(ReaderInterfaceDefaults.verticalMarginsLabel),
+            ["窄", "窄", "标准", "标准", "标准", "宽", "宽"]
+        )
     }
 
     func testQuickTranslationIndicatorAutoHidesWithoutDisablingPointTranslation() async throws {
@@ -4238,6 +4634,83 @@ final class ReaderServicesTests: XCTestCase {
             configuration.endpoint.absoluteString,
             "https://api.moonshot.cn/v1/chat/completions"
         )
+    }
+
+    // 2.0.1: restoring a backup reloads the settings. The reload rebuilt the
+    // list of ready providers from API keys alone, and the ChatGPT plan has
+    // none, so a signed-in plan showed as 未设置 until the app was restarted.
+    func testReloadingSettingsKeepsASignedInChatGPTPlanReady() throws {
+        let suiteName = "JerreaderTests.PlanReload.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.removePersistentDomain(forName: suiteName)
+        let store = TranslationSettingsStore(
+            defaults: defaults,
+            credentialStore: TestTranslationCredentialStore()
+        )
+        XCTAssertTrue(try store.addProvider(.preset(.anthropic), key: "claude-local-key"))
+        store.chatGPTPlanSessionChanged(
+            ChatGPTPlanAccount(email: "reader@example.test", planType: "plus")
+        )
+        XCTAssertTrue(store.keyedProviderIDs.contains(TranslationSettingsStore.chatGPTPlanID))
+
+        store.reloadNonSensitivePreferences()
+
+        XCTAssertTrue(store.keyedProviderIDs.contains(TranslationSettingsStore.chatGPTPlanID))
+        XCTAssertTrue(store.keyedProviderIDs.contains("anthropic"))
+
+        // Signed out, a reload must not bring it back.
+        store.chatGPTPlanSignedOut()
+        store.reloadNonSensitivePreferences()
+        XCTAssertFalse(store.keyedProviderIDs.contains(TranslationSettingsStore.chatGPTPlanID))
+    }
+
+    // 2.0.1: signing in to the plan forced it into use by saying the provider
+    // in use had no key. That also dropped a default DeepSeek the user had
+    // already given a key, so it had to be added and keyed again to go back.
+    func testSigningInToThePlanKeepsADefaultProviderThatHasAKey() throws {
+        let account = ChatGPTPlanAccount(email: "reader@example.test", planType: "plus")
+        let models = [ChatGPTPlanModel(slug: "gpt-plan-model", displayName: "Plan Model")]
+        let planID = TranslationSettingsStore.chatGPTPlanID
+        let defaultID = DirectAIProviderChoice.defaultProvider.rawValue
+
+        let keyedSuite = "JerreaderTests.PlanTakesOver.\(UUID().uuidString)"
+        let keyedDefaults = try XCTUnwrap(UserDefaults(suiteName: keyedSuite))
+        defer { keyedDefaults.removePersistentDomain(forName: keyedSuite) }
+        keyedDefaults.removePersistentDomain(forName: keyedSuite)
+        let keyed = TranslationSettingsStore(
+            defaults: keyedDefaults,
+            credentialStore: TestTranslationCredentialStore()
+        )
+        try keyed.saveKey("default-local-key", for: defaultID)
+        keyed.chatGPTPlanSignedIn(account, models: models)
+        XCTAssertEqual(keyed.aiProviders.activeID, planID)
+        XCTAssertEqual(keyed.aiProviders.entries.map(\.id), [defaultID, planID])
+        XCTAssertEqual(keyed.apiKey(for: defaultID), "default-local-key")
+
+        // With no key the untouched default still gives way, as before.
+        let bareSuite = "JerreaderTests.PlanReplaces.\(UUID().uuidString)"
+        let bareDefaults = try XCTUnwrap(UserDefaults(suiteName: bareSuite))
+        defer { bareDefaults.removePersistentDomain(forName: bareSuite) }
+        bareDefaults.removePersistentDomain(forName: bareSuite)
+        let bare = TranslationSettingsStore(
+            defaults: bareDefaults,
+            credentialStore: TestTranslationCredentialStore()
+        )
+        bare.chatGPTPlanSignedIn(account, models: models)
+        XCTAssertEqual(bare.aiProviders.activeID, planID)
+        XCTAssertEqual(bare.aiProviders.entries.map(\.id), [planID])
+
+        // Without a model the plan cannot translate, so nothing changes hands.
+        var waiting = AIProviderSettings.fresh
+        let empty = AIProviderEntry(
+            id: planID, kind: .chatGPTPlan, name: nil,
+            baseURL: DirectAIProviderChoice.chatGPTPlan.defaultBaseURL, model: "", models: []
+        )
+        let inUse = waiting.add(empty, activeHasKey: true, takesOver: false)
+        XCTAssertFalse(inUse)
+        XCTAssertEqual(waiting.activeID, defaultID)
+        XCTAssertEqual(waiting.entries.map(\.id), [defaultID, planID])
     }
 
     func testAddingProviderPutsItInUseOnlyWhenTheModelInUseHasNoKey() throws {

@@ -242,3 +242,18 @@
 - 额度用完、需要重新登录、请求被拒这三种不自动重试，也不换备用服务（与 iOS 只在暂时性错误时换备用服务一致），阅读页不提供“重新翻译”按钮。
 - 模型列表来自 `GET /v1/models`，只列 `visibility` 为 `list` 的模型，显示账号给的名字，存的是模型 id。
 - 测试全部用 Mock：iOS `scripts/test_chatgpt_plan.swift`（host-test 的 `chatgpt-plan` 组，回环监听在本机真实运行，不出本机）和 XCTest `ChatGPTPlanTranslationTests`；安卓是 JVM 单元测试 `ChatGPTPlanProtocolTest`、`ChatGPTPlanSessionTest`、`ChatGPTPlanCompletionTest`、`ChatGPTPlanSettingsTest`（假的 HTTP 客户端；回环监听同样在 127.0.0.1 真实运行）。没有用真实 ChatGPT 账号验证过。
+
+## 2.0.1 修复版（2026-11-20）
+
+没有新模块；下面是这一版改动里以后维护要知道的几条约定。逐条问题和验证情况见 [2.0.1 维护记录](RELEASE_2.0.1_2026-11-20.md)。
+
+- **选区方块的颜色必须用行内 `!important`。** 轻点翻译和朗读的选区是画在书页 DOM 里的一组小方块。ReadiumCSS 在护眼、夜间主题下，以及只要设了页面背景色，会给页面里每个元素声明 `background-color: transparent !important`（夜间还有 `border-color: currentColor !important`）。普通行内样式压不过它，所以填充和描边都写成行内 `!important`，并加 `background-image: none`。iOS 在 `EPUBReaderScripts.markerPaintCSS(fill:stroke:)`，Android 在 `selectionMarkerPaintCss(fill, stroke)`；以后往书页里画别的东西也照这个写法。
+- **上下边距是全局设置，不进每本书的排版。** 取值 0–4（14pt / 14dp 的倍数，默认 1）。iOS 键 `reader.verticalMargins`（`ReaderInterfaceDefaults`），`EPUBReaderHost` 用它算给 Readium 的上下内容留白，改值后调 `refreshContentInsets()`；Android 键同名（`AndroidAppSettingsStore`），Readium 自带的上下留白资源 `readium_navigator_epub_vertical_padding` 置 0，由 `ReaderActivity.updateReaderContentPadding()` 给页面容器加内边距（横排滚动阅读和 PDF 不加）。它和 1.7.0 删掉的「分别设置」无关，不读那几个旧键。
+- **「设置」标签离开即回首页。** iOS 给设置标签的 `NavigationStack` 一个随“离开设置”递增的 `id`（`ContentView.settingsVisit`）；`LibraryBackupActivity.isBusy` 为真时不递增，免得把正在报告结果的备份页重建掉。Android 在切换标签时把 `settingsRoute` 设回首页并丢掉保存的页面状态。书架和学习两个标签仍保留各自的状态。
+- **外观模式和背景光晕。** iOS 键 `appearance.mode`（`system` / `light` / `dark`）和 `appearance.backdrop-glow`，外观模式直接设在窗口的 `overrideUserInterfaceStyle` 上（不用 `preferredColorScheme`，这样回到“跟随系统”立即生效，阅读页按纸张定的明暗也仍然优先）；Android 键 `app.appearanceMode`、`app.backdropGlow`，枚举 `JerreaderAppearanceMode` 在 `shared`。主题色枚举在两端都只在末尾追加（松石、赤陶、石墨），存的是名字。四项都随“非敏感设置”进备份。
+- **套餐接管“正在用的 AI 模型”时不删有密钥的默认项。** `AIProviderSettings.add(_:activeHasKey:takesOver:)`（Android `adding(…, takesOver)`）：`takesOver` 只表示“这一项要成为当前项”，“没动过的默认项让位并从列表里移除”仍然只在它真的没有密钥时发生。套餐登录不改「翻译服务」，登录后的提示按当时的翻译服务分两种说法。
+- **PDF 进度在最后一页记 100%。** Readium 给 PDF 的 `totalProgression` 是页首位置（`(页码 − 1) / 总页数`），最后一页到不了 1。iOS `ReaderPDFProgress.adjusted`、Android `PdfLocatorFormat.readingProgress` 在位置等于总页数时返回 1；只用于显示和 `lastReadProgress`，保存的 Locator 不改。
+- **iOS PDF 划线要等文档装上再画。** Readium 调 `setupPDFView` 时 `pdfView.document` 还是空的，文档稍后才装上。`PDFReaderHost` 监听 `PDFViewDocumentChanged`，并在位置变化时用 `installAnnotationsIfDocumentChanged()` 兜底；点按命中只认本应用自己装上的划线（`ownAnnotationID`），PDF 里原有的批注、链接不拦截点句翻译。
+- **iOS 目录项按文件内位置定位。** 一个资源里有多个目录项时（`chapter.xhtml#part2`，或整本一个资源的 PDF `#page=N`），当前章节按 `ReaderOutlinePosition` 比较：PDF 用页码，EPUB 用锚点在正文里的相对位置（`ReaderOutlineBuilder.anchorFractions`）。
+- **iOS 阅读时长的日期键一律公历。** `ReadingActivity.dayCalendar` 是 ISO 8601 日历加当前时区；读取时把以前按和历、民国历、佛历写下的键换回公历（`gregorianKey`）。
+- **Android 语法笔记去重在仓库层。** `grammarNoteToSave(note, existing)`：编号不存在而标题、原句、讲解全同的，沿用已有那条的编号；iOS 在 `GrammarNoteEditor` 保存时做同样的查找。

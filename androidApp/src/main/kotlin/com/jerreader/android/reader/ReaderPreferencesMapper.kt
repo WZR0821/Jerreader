@@ -2,6 +2,7 @@ package com.jerreader.android.reader
 
 import com.jerreader.shared.library.ReaderAppearance
 import com.jerreader.shared.library.ReaderFontOption
+import com.jerreader.shared.library.ReaderInterfaceDefaults
 import com.jerreader.shared.library.ReaderTextOrientation
 import com.jerreader.shared.library.ReaderThemeOption
 import org.readium.r2.navigator.epub.EpubPreferences
@@ -15,8 +16,15 @@ import org.readium.r2.shared.ExperimentalReadiumApi
 fun ReaderAppearance.toEpubPreferences(base: EpubPreferences = EpubPreferences()): EpubPreferences =
     base.copy(
         backgroundColor = appearanceBackgroundColor(),
+        textColor = customPageUsesLightText()?.let { light ->
+            ReadiumColor(if (light) CUSTOM_PAGE_LIGHT_INK else CUSTOM_PAGE_DARK_INK)
+        },
         fontSize = fontScale,
-        theme = theme.toReadiumTheme(),
+        theme = when (customPageUsesLightText()) {
+            true -> Theme.DARK
+            false -> Theme.LIGHT
+            null -> theme.toReadiumTheme()
+        },
         scroll = scroll,
         fontFamily = when (font) {
             ReaderFontOption.PUBLICATION -> null
@@ -76,6 +84,21 @@ private fun ReaderThemeOption.toReadiumTheme(): Theme = when (this) {
     ReaderThemeOption.COOL_GRAY -> Theme.LIGHT
     ReaderThemeOption.DARK -> Theme.DARK
 }
+
+/**
+ * A custom page colour brings its own ink, as on iOS
+ * (`ReaderCustomBackground.prefersLightText`): light text on a dark colour,
+ * dark text on a light one, whichever theme is selected underneath. Until
+ * 2.0.1 the text kept the theme's colour, so switching 自定义背景颜色 on over
+ * the night theme gave near-white text on the near-white default colour while
+ * the bars, which already went by the colour's brightness, turned light.
+ * Null when no custom colour is set.
+ */
+private fun ReaderAppearance.customPageUsesLightText(): Boolean? =
+    parseRgbHex(customBackgroundHex)?.let { ReaderInterfaceDefaults.prefersDarkChrome(this) }
+
+private val CUSTOM_PAGE_LIGHT_INK: Int = 0xFFF4F7FA.toInt()
+private val CUSTOM_PAGE_DARK_INK: Int = 0xFF17212B.toInt()
 
 private fun ReaderAppearance.appearanceBackgroundColor(): ReadiumColor? {
     parseRgbHex(customBackgroundHex)?.let { return ReadiumColor(it) }

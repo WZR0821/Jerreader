@@ -8,11 +8,12 @@ import com.jerreader.shared.library.ReaderLayoutMode
 import com.jerreader.shared.library.ReaderTextOrientation
 import com.jerreader.shared.library.ReaderThemeOption
 import com.jerreader.shared.ui.JerreaderAccent
+import com.jerreader.shared.ui.JerreaderAppearanceMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-// The visual identity is shared with iOS, so the five accents come straight
+// The visual identity is shared with iOS, so the accents come straight
 // from `JerreaderTheme` instead of a second Android-only palette.
 typealias AppThemeChoice = JerreaderAccent
 
@@ -29,8 +30,34 @@ data class AndroidAppPreferences(
     /** Hides the status bar in the standard layout; the immersive one always does. */
     val immersiveReading: Boolean = true,
     val layoutMode: ReaderLayoutMode = ReaderLayoutMode.STANDARD,
-    val applyReaderDefaultsToExistingBooks: Boolean = false
+    val applyReaderDefaultsToExistingBooks: Boolean = false,
+    /**
+     * 上下边距 (2.0.1): a multiple of the 14dp gap above and below a reflowable
+     * page, shared by every book like the layout mode. 1 is what 2.0.0 drew.
+     */
+    val verticalMargins: Float = 1f,
+    /** 外观模式 (2.0.1): follow the system, or hold light or dark. */
+    val appearanceMode: JerreaderAppearanceMode = JerreaderAppearanceMode.SYSTEM,
+    /** 背景光晕 (2.0.1): the faint accent wash at the top of every page. */
+    val backdropGlow: Boolean = true
 )
+
+/** The range of 上下边距, the same as iOS `ReaderInterfaceDefaults.verticalMarginsRange`. */
+val VERTICAL_MARGINS_RANGE = 0f..4f
+
+/** A stored or restored 上下边距, held to its range and to one decimal. */
+fun clampedVerticalMargins(value: Float): Float {
+    if (!value.isFinite()) return 1f
+    val clamped = value.coerceIn(VERTICAL_MARGINS_RANGE.start, VERTICAL_MARGINS_RANGE.endInclusive)
+    return kotlin.math.round(clamped * 10f) / 10f
+}
+
+/** 窄 / 标准 / 宽, as 左右边距 reads. */
+fun verticalMarginsLabel(value: Float): String = when {
+    clampedVerticalMargins(value) < 0.8f -> "窄"
+    clampedVerticalMargins(value) < 1.6f -> "标准"
+    else -> "宽"
+}
 
 class AndroidAppSettingsStore(context: Context) {
     private val storage = context.getSharedPreferences("jerreader_app_settings", Context.MODE_PRIVATE)
@@ -95,6 +122,22 @@ class AndroidAppSettingsStore(context: Context) {
     fun updateLayoutMode(value: ReaderLayoutMode) {
         storage.edit { putString(KEY_LAYOUT_MODE, value.storageValue) }
         mutablePreferences.value = mutablePreferences.value.copy(layoutMode = value)
+    }
+
+    fun updateVerticalMargins(value: Float) {
+        val safe = clampedVerticalMargins(value)
+        storage.edit { putFloat(KEY_VERTICAL_MARGINS, safe) }
+        mutablePreferences.value = mutablePreferences.value.copy(verticalMargins = safe)
+    }
+
+    fun updateAppearanceMode(value: JerreaderAppearanceMode) {
+        storage.edit { putString(KEY_APPEARANCE_MODE, value.storageValue) }
+        mutablePreferences.value = mutablePreferences.value.copy(appearanceMode = value)
+    }
+
+    fun updateBackdropGlow(value: Boolean) {
+        storage.edit { putBoolean(KEY_BACKDROP_GLOW, value) }
+        mutablePreferences.value = mutablePreferences.value.copy(backdropGlow = value)
     }
 
     fun updateJapaneseFurigana(value: Boolean) {
@@ -174,7 +217,17 @@ class AndroidAppSettingsStore(context: Context) {
             applyReaderDefaultsToExistingBooks = payload.optBoolean(
                 "applyReaderDefaultsToExistingBooks",
                 current.applyReaderDefaultsToExistingBooks
-            )
+            ),
+            verticalMargins = payload.optDouble(
+                "verticalMargins",
+                current.verticalMargins.toDouble()
+            ).toFloat(),
+            appearanceMode = if (payload.has("appearanceMode")) {
+                JerreaderAppearanceMode.fromStorage(payload.optString("appearanceMode"))
+            } else {
+                current.appearanceMode
+            },
+            backdropGlow = payload.optBoolean("backdropGlow", current.backdropGlow)
         )
         updateGrowthEnabled(restored.growthEnabled)
         updateTheme(restored.theme)
@@ -186,6 +239,9 @@ class AndroidAppSettingsStore(context: Context) {
         updateImmersiveReading(restored.immersiveReading)
         updateLayoutMode(restored.layoutMode)
         updateApplyReaderDefaultsToExistingBooks(restored.applyReaderDefaultsToExistingBooks)
+        updateVerticalMargins(restored.verticalMargins)
+        updateAppearanceMode(restored.appearanceMode)
+        updateBackdropGlow(restored.backdropGlow)
     }
 
     private fun load(): AndroidAppPreferences = AndroidAppPreferences(
@@ -213,7 +269,10 @@ class AndroidAppSettingsStore(context: Context) {
         japaneseFuriganaEnabled = storage.getBoolean(KEY_FURIGANA, false),
         immersiveReading = storage.getBoolean(KEY_IMMERSIVE, true),
         layoutMode = ReaderLayoutMode.fromStorage(storage.getString(KEY_LAYOUT_MODE, null)),
-        applyReaderDefaultsToExistingBooks = storage.getBoolean(KEY_APPLY_TO_EXISTING, false)
+        applyReaderDefaultsToExistingBooks = storage.getBoolean(KEY_APPLY_TO_EXISTING, false),
+        verticalMargins = clampedVerticalMargins(storage.getFloat(KEY_VERTICAL_MARGINS, 1f)),
+        appearanceMode = JerreaderAppearanceMode.fromStorage(storage.getString(KEY_APPEARANCE_MODE, null)),
+        backdropGlow = storage.getBoolean(KEY_BACKDROP_GLOW, true)
     )
 
     private inline fun <reified T : Enum<T>> enumValue(raw: String?, default: T): T =
@@ -240,5 +299,9 @@ class AndroidAppSettingsStore(context: Context) {
         // Same key and raw values as iOS `ReaderInterfaceDefaults.layoutModeKey`.
         const val KEY_LAYOUT_MODE = "reader.layoutMode"
         const val KEY_APPLY_TO_EXISTING = "reader.applyDefaultsToExisting"
+        // Same key as iOS `ReaderInterfaceDefaults.verticalMarginsKey`.
+        const val KEY_VERTICAL_MARGINS = "reader.verticalMargins"
+        const val KEY_APPEARANCE_MODE = "app.appearanceMode"
+        const val KEY_BACKDROP_GLOW = "app.backdropGlow"
     }
 }

@@ -61,6 +61,7 @@ import com.jerreader.shared.ui.SettingsPage
 import com.jerreader.shared.ui.SettingsToggleRow
 import com.jerreader.shared.ui.SettingsValueRow
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -98,6 +99,13 @@ fun BackupCenterScreen(
     var suggestedFolder by remember { mutableStateOf<Pair<Uri, String>?>(null) }
     val scope = rememberCoroutineScope()
 
+    // A backup or a restore belongs to the app, not to this page. Run in the
+    // page's own scope it was cancelled the moment the reader pressed back or
+    // changed tab, without a word: nothing restored and nothing said. Now the
+    // work finishes either way and only its report is tied to the page.
+    suspend fun <T> outlivingThisPage(work: suspend () -> T): T =
+        graph.applicationScope.async { work() }.await()
+
     suspend fun reload() {
         runCatching { graph.backupService.listBackups() }
             .onSuccess { backups = it }
@@ -110,7 +118,8 @@ fun BackupCenterScreen(
         if (busy || manualScopes.isEmpty()) return
         scope.launch {
             busy = true; error = null; message = null
-            runCatching { graph.backupService.backup(manualScopes) }
+            val scopes = manualScopes
+            runCatching { outlivingThisPage { graph.backupService.backup(scopes) } }
                 .onSuccess { result ->
                     message = buildString {
                         append("备份完成：${result.archiveName}（${formatBytes(result.sizeBytes)}）。")
@@ -173,7 +182,7 @@ fun BackupCenterScreen(
                         folderUri to (result.suggestedFolderName ?: "以前的备份文件夹")
                     }
                 }
-            ) { graph.backupService.restore(uri) }
+            ) { outlivingThisPage { graph.backupService.restore(uri) } }
             reload()
         }
     }
@@ -355,8 +364,10 @@ fun BackupCenterScreen(
                                 }
                             }
                         ) {
-                            if (sourceFolder != null) graph.backupService.restoreFromFolder(sourceFolder, target.name)
-                            else graph.backupService.restore(target.name)
+                            outlivingThisPage {
+                                if (sourceFolder != null) graph.backupService.restoreFromFolder(sourceFolder, target.name)
+                                else graph.backupService.restore(target.name)
+                            }
                         }
                         reload()
                     }

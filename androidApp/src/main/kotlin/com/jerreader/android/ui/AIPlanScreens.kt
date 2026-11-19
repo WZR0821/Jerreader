@@ -67,6 +67,7 @@ import com.jerreader.android.translation.chatgptplan.ChatGPTPlan
 import com.jerreader.android.translation.chatgptplan.ChatGPTPlanAccount
 import com.jerreader.android.translation.chatgptplan.ChatGPTPlanError
 import com.jerreader.android.translation.chatgptplan.ChatGPTPlanSignIn
+import com.jerreader.shared.translation.TranslationProviderMode
 import com.jerreader.shared.ui.JerreaderGlyph
 import com.jerreader.shared.ui.JerreaderIcon
 import com.jerreader.shared.ui.JerreaderIconTile
@@ -129,6 +130,11 @@ internal object ChatGPTPlanActions {
         if (modelsError != null) {
             return "已登录 ChatGPT$who，但没能取到模型列表：${AIProviderRequests.message(modelsError)} 到“ChatGPT 套餐”页面点“刷新模型”重试。"
         }
+        // The plan becomes the AI model in use, but reading only calls it when
+        // the translation service is the AI one; say which case this is.
+        if (store.preferences.value.providerMode != TranslationProviderMode.DIRECT_API) {
+            return "已登录 ChatGPT$who。翻译服务还不是“AI 大模型”，到“AI 大模型”页点“用它翻译”后，才会用套餐额度翻译。"
+        }
         return "已登录 ChatGPT$who，现在用套餐额度翻译。"
     }
 
@@ -171,6 +177,7 @@ internal fun PlanOptionsList(
     finish: (String) -> Unit
 ) {
     val account by store.chatGPTPlanAccount.collectAsState()
+    val translationPreferences by store.preferences.collectAsState()
     var busy by remember { mutableStateOf(false) }
     var error by rememberSaveable { mutableStateOf<String?>(null) }
     var job by remember { mutableStateOf<Job?>(null) }
@@ -215,12 +222,15 @@ internal fun PlanOptionsList(
         sheet = if (welcome) SHEET_WELCOME else null,
         onDismiss = {},
         sheetContent = { _ ->
-            ChatGPTPlanWelcome(onDone = {
-                welcome = false
-                val notice = pendingNotice
-                pendingNotice = null
-                if (notice != null) finish(notice)
-            })
+            ChatGPTPlanWelcome(
+                translatesWithPlan = translationPreferences.providerMode == TranslationProviderMode.DIRECT_API,
+                onDone = {
+                    welcome = false
+                    val notice = pendingNotice
+                    pendingNotice = null
+                    if (notice != null) finish(notice)
+                }
+            )
         }
     ) {
       Column(Modifier.fillMaxSize()) {
@@ -497,7 +507,7 @@ internal fun ContinueWithChatGPTButton(busy: Boolean, onHero: Boolean = false, o
  * turn, and a success haptic. Only 开始使用 closes it.
  */
 @Composable
-internal fun ChatGPTPlanWelcome(onDone: () -> Unit) {
+internal fun ChatGPTPlanWelcome(translatesWithPlan: Boolean = true, onDone: () -> Unit) {
     val colors = jerreaderPalette
     val handler = LocalUriHandler.current
     val haptics = LocalHapticFeedback.current
@@ -540,7 +550,11 @@ internal fun ChatGPTPlanWelcome(onDone: () -> Unit) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("已连接 ChatGPT 套餐", style = planHeroTitle(), color = Color.White)
                     Text(
-                        "Jerreader 现在用你的 ChatGPT 套餐翻译和讲解语法。",
+                        if (translatesWithPlan) {
+                            "Jerreader 现在用你的 ChatGPT 套餐翻译和讲解语法。"
+                        } else {
+                            "套餐已经是 Jerreader 的 AI 模型。到“AI 大模型”页点“用它翻译”，阅读时就用它翻译。"
+                        },
                         style = MaterialTheme.typography.bodyLarge,
                         color = Color.White.copy(alpha = 0.82f)
                     )
@@ -646,6 +660,7 @@ internal fun ChatGPTPlanDetailPage(
     openModel: (String) -> Unit
 ) {
     val account by store.chatGPTPlanAccount.collectAsState()
+    val translationPreferences by store.preferences.collectAsState()
     val names by store.chatGPTPlanModelNames.collectAsState()
     val entry = providers.entry(entryID)
     val models = entry?.models.orEmpty()
@@ -726,11 +741,14 @@ internal fun ChatGPTPlanDetailPage(
         // Only 开始使用 closes the welcome.
         onDismissSheet = {},
         sheetContent = {
-            ChatGPTPlanWelcome(onDone = {
-                welcome = false
-                notice = pendingNotice
-                pendingNotice = null
-            })
+            ChatGPTPlanWelcome(
+                translatesWithPlan = translationPreferences.providerMode == TranslationProviderMode.DIRECT_API,
+                onDone = {
+                    welcome = false
+                    notice = pendingNotice
+                    pendingNotice = null
+                }
+            )
         }
     ) { padding ->
         AIListContent(

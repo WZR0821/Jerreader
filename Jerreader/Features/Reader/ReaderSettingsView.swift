@@ -15,6 +15,8 @@ struct ReaderSettingsView: View {
     private var bottomTransparency = ReaderInterfaceDefaults.barTransparency
     @AppStorage(ReaderInterfaceDefaults.japaneseFuriganaKey)
     private var japaneseFuriganaEnabled = false
+    @AppStorage(ReaderInterfaceDefaults.verticalMarginsKey)
+    private var verticalMargins = 1.0
 
     init(model: EPUBReaderViewModel) {
         self.model = model
@@ -332,11 +334,24 @@ struct ReaderSettingsView: View {
             ReaderSettingsDivider()
 
             spacingSlider(
-                "页边距",
+                "左右边距",
                 valueText: pageMarginLabel,
                 value: pageMarginsBinding,
                 range: 0.5 ... 2.0
             )
+            .readerSettingsRow()
+
+            ReaderSettingsDivider()
+
+            VStack(alignment: .leading, spacing: JerreaderSpacing.xs) {
+                spacingSlider(
+                    "上下边距",
+                    valueText: ReaderInterfaceDefaults.verticalMarginsLabel(verticalMargins),
+                    value: verticalMarginsBinding,
+                    range: ReaderInterfaceDefaults.verticalMarginsRange
+                )
+                detailText("正文离屏幕上下两端（标准布局下是上下栏）的留白，对所有书生效；PDF 按页面本身显示，不受影响。")
+            }
             .readerSettingsRow()
         }
     }
@@ -505,6 +520,18 @@ struct ReaderSettingsView: View {
 
     private var pageMarginsBinding: Binding<Double> {
         Binding(get: { model.pageMargins }, set: { model.updatePageMargins($0) })
+    }
+
+    /// Stored to one decimal, so the value survives a backup round trip and
+    /// reads the same on Android.
+    private var verticalMarginsBinding: Binding<Double> {
+        Binding(
+            get: { ReaderInterfaceDefaults.clampedVerticalMargins(verticalMargins) },
+            set: {
+                verticalMargins = (ReaderInterfaceDefaults.clampedVerticalMargins($0) * 10)
+                    .rounded() / 10
+            }
+        )
     }
 
     private var textOrientationBinding: Binding<ReaderTextOrientationChoice> {
