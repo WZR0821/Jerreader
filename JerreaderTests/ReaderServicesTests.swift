@@ -9,6 +9,54 @@ import XCTest
 
 @MainActor
 final class ReaderServicesTests: XCTestCase {
+    /// 2.0.1: closing the navigation panel before a book search answered
+    /// left “无结果” behind on reopening. `EPUBReaderViewModel` reruns the
+    /// search when `wasInterrupted` is set (`resumeInterruptedSearch`).
+    func testBookSearchCutShortByClosingThePanelIsMarkedAndRunsAgain() async throws {
+        let controller = SearchingReaderController()
+        let search = ReaderSearchModel()
+
+        // A search that finished is not rerun.
+        controller.answersAtOnce = true
+        search.search("ナミヤ", in: controller)
+        for _ in 0 ..< 200 where search.isSearching {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(search.results.count, 1)
+        search.cancel()
+        XCTAssertFalse(search.wasInterrupted, "closing after the results came must not rerun")
+
+        // One still running when the panel closes is.
+        controller.answersAtOnce = false
+        search.search("雑貨店", in: controller)
+        XCTAssertTrue(search.isSearching)
+        for _ in 0 ..< 200 where controller.queries.count < 2 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        search.cancel()
+        XCTAssertTrue(search.wasInterrupted)
+        XCTAssertFalse(search.isSearching)
+        for _ in 0 ..< 200 where controller.cancellations == 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(controller.cancellations, 1)
+        XCTAssertEqual(search.results.count, 0)
+        XCTAssertEqual(search.lastQuery, "雑貨店", "the panel shows the cut-short query again")
+
+        // Reopening: what `resumeInterruptedSearch` does.
+        controller.answersAtOnce = true
+        if search.wasInterrupted {
+            search.search(search.lastQuery, in: controller)
+        }
+        XCTAssertFalse(search.wasInterrupted)
+        for _ in 0 ..< 200 where search.isSearching {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(controller.queries, ["ナミヤ", "雑貨店", "雑貨店"])
+        XCTAssertEqual(search.results.count, 1)
+        XCTAssertNil(search.errorMessage)
+    }
+
     func testNativeSelectionGestureGateBlocksTrailingTapWithoutBlockingLaterTap() {
         var gate = EPUBSelectionGestureGate()
 
@@ -5977,6 +6025,71 @@ private final class TestTranslationCredentialStore: TranslationCredentialStoring
     func saveSecret(_ secret: String?, account: String) throws {
         secrets[account] = secret
     }
+}
+
+/// Only `search` does anything: it answers at once, or waits until cancelled.
+@MainActor
+private final class SearchingReaderController: UIViewController, PublicationReaderController {
+    var answersAtOnce = true
+    private(set) var queries: [String] = []
+    private(set) var cancellations = 0
+
+    var onLocationChange: ((Locator) -> Void)?
+    var onSelectedText: ((ReaderSelectionPayload) -> Void)?
+    var onSelectionFrameChange: ((CGRect?) -> Void)?
+    var onContentTap: (() -> Void)?
+    var onReaderError: ((String) -> Void)?
+    var onReaderActivityChange: ((String?) -> Void)?
+    var onPaginationModeChange: ((Bool) -> Void)?
+    var onAnnotationActivated: ((UUID) -> Void)?
+    var isPaginated: Bool { true }
+    var supportsQuickSentenceTranslation: Bool { false }
+    var currentLocator: Locator? { nil }
+
+    func search(_ query: String) async throws -> [Locator] {
+        queries.append(query)
+        if !answersAtOnce {
+            do {
+                try await Task.sleep(for: .seconds(60))
+            } catch {
+                cancellations += 1
+                throw CancellationError()
+            }
+        }
+        return [
+            Locator(
+                href: AnyURL(string: "chapter.xhtml")!,
+                mediaType: .xhtml,
+                title: "第一章",
+                locations: .init(progression: 0.5, totalProgression: 0.5),
+                text: .init(highlight: query)
+            )
+        ]
+    }
+
+    func navigateBackward() {}
+    func navigateForward() {}
+    func navigate(to link: ReadiumShared.Link) {}
+    func navigate(to locator: Locator) {}
+    func crossPageContext(for sourceText: String) async -> String? { nil }
+    func clearSelection() {}
+    func updateSpeechHighlight(_ highlight: ReaderSpeechHighlight?) {}
+    func applyAnnotations(_ annotations: [ReaderAnnotationPresentation]) {}
+    func setQuickSentenceTranslationEnabled(_ enabled: Bool) {}
+    func setQuickTranslationUnit(_ unit: ReaderQuickTranslationUnit) {}
+    func setQuickSentenceTapPageTurnsDisabled(_ disabled: Bool) {}
+    func applyPreferences(
+        fontSize: Double,
+        theme: ReaderThemeChoice,
+        fontChoice: ReaderFontChoice,
+        lineHeight: Double,
+        paragraphSpacing: Double,
+        pageMargins: Double,
+        textOrientation: ReaderTextOrientationChoice,
+        readingMode: ReaderReadingMode,
+        customBackgroundHex: String,
+        customSelectionColorHex: String
+    ) {}
 }
 
 @MainActor

@@ -29,6 +29,9 @@ REGRESSION_CLASSES = [
     "translation.TranslationCacheTest",
     # 2026-11-18, GitHub issue #2: sideways swipes while a book scrolls.
     "reader.ReaderScrollGestureTest",
+    # 2026-11-21: 2.0.1's PDF fixes on a generated text PDF (last: it closes
+    # the reader mid-OCR, and a crash there would end the run).
+    "reader.ReaderPdfTapTranslationTest",
 ]
 UI_CLASSES = [
     "learning.LearningUiParityTest#japaneseLearningWorkflow",

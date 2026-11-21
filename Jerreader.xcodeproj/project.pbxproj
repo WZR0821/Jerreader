@@ -916,7 +916,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 73;
+				CURRENT_PROJECT_VERSION = 74;
 				DEVELOPMENT_ASSET_PATHS = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -924,7 +924,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Jerreader";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
-				MARKETING_VERSION = 2.0.1;
+				MARKETING_VERSION = 2.0.2;
 				OTHER_SWIFT_FLAGS = "$(inherited) -file-prefix-map \"$(SRCROOT)=.\" -debug-prefix-map \"$(SRCROOT)=.\"";
 				PRODUCT_BUNDLE_IDENTIFIER = com.raydon.Jerreader;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -943,7 +943,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 73;
+				CURRENT_PROJECT_VERSION = 74;
 				DEVELOPMENT_ASSET_PATHS = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -951,7 +951,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Jerreader";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
-				MARKETING_VERSION = 2.0.1;
+				MARKETING_VERSION = 2.0.2;
 				OTHER_SWIFT_FLAGS = "$(inherited) -file-prefix-map \"$(SRCROOT)=.\" -debug-prefix-map \"$(SRCROOT)=.\"";
 				PRODUCT_BUNDLE_IDENTIFIER = com.raydon.Jerreader;
 				PRODUCT_NAME = "$(TARGET_NAME)";

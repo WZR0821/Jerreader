@@ -1414,6 +1414,277 @@ final class LibraryTests: XCTestCase {
         publication.close()
     }
 
+    /// Another app's highlight and link over a sentence used to swallow the
+    /// tap, so the sentence could not be translated; the reader's own
+    /// highlight has to open wherever it sits, page-turn edges included.
+    func testPDFTapTranslatesUnderAnotherAppsAnnotationAndOpensOwnHighlight() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let pageBounds = CGRect(x: 0, y: 0, width: 320, height: 480)
+        let rendered = UIGraphicsPDFRenderer(bounds: pageBounds).pdfData { context in
+            context.beginPage()
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: UIFont.systemFont(ofSize: 20),
+            ]
+            NSString(string: "Foreign notes cover this line.")
+                .draw(at: CGPoint(x: 24, y: 44), withAttributes: attributes)
+            NSString(string: "My highlight sits here.")
+                .draw(at: CGPoint(x: 24, y: 200), withAttributes: attributes)
+        }
+        // What another reader leaves behind: a highlight and a link area over
+        // the whole first line.
+        let annotatedDocument = try XCTUnwrap(PDFKit.PDFDocument(data: rendered))
+        let annotatedPage = try XCTUnwrap(annotatedDocument.page(at: 0))
+        let foreignBounds = CGRect(x: 16, y: 404, width: 300, height: 36)
+        let foreignHighlight = PDFAnnotation(
+            bounds: foreignBounds,
+            forType: .highlight,
+            withProperties: nil
+        )
+        foreignHighlight.color = .yellow
+        foreignHighlight.userName = "Another Reader"
+        annotatedPage.addAnnotation(foreignHighlight)
+        let foreignLink = PDFAnnotation(bounds: foreignBounds, forType: .link, withProperties: nil)
+        foreignLink.url = URL(string: "https://example.com/note")
+        annotatedPage.addAnnotation(foreignLink)
+        let sourceURL = root.appendingPathComponent("annotated.pdf")
+        try XCTUnwrap(annotatedDocument.dataRepresentation()).write(to: sourceURL)
+
+        let imported = try await EPUBImportService(rootDirectoryURL: root)
+            .importBook(from: sourceURL, existingFingerprints: [])
+        let book = BookRecord(
+            title: imported.title,
+            author: imported.author,
+            language: imported.language,
+            sourceFormat: imported.sourceFormat.rawValue,
+            localFileName: imported.localFileName,
+            coverFileName: imported.coverFileName,
+            fileFingerprint: imported.fileFingerprint
+        )
+        let publication = try await EPUBPublicationService(rootDirectoryURL: root).open(book: book)
+        var controller: PDFReaderViewController? = try PDFReaderViewController(
+            publication: publication,
+            initialLocation: nil,
+            theme: .light,
+            bookLanguage: nil
+        )
+        let ownHighlight = ReadingAnnotationRecord(
+            annotationKey: "own-highlight-second-line",
+            bookID: book.id,
+            bookTitle: book.title,
+            locatorJSON: #"{"href":"annotated.pdf"}"#,
+            anchorJSON: ReaderPDFAnnotationAnchor(
+                pageIndex: 0,
+                coordinateSpace: .pdfPage,
+                rectangles: [CGRect(x: 0.06, y: 0.52, width: 0.7, height: 0.075)]
+            ).jsonString,
+            selectedText: "My highlight sits here.",
+            chapterTitle: "",
+            progress: 0
+        )
+        controller?.applyAnnotations([ReaderAnnotationPresentation(ownHighlight)])
+
+        var payloads: [ReaderSelectionPayload] = []
+        var activated: [UUID] = []
+        var contentTaps = 0
+        controller?.onSelectedText = { payloads.append($0) }
+        controller?.onAnnotationActivated = { activated.append($0) }
+        controller?.onContentTap = { contentTaps += 1 }
+
+        controller?.loadViewIfNeeded()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        // Readium picks one or two pages from its size once it lays out.
+        window.layoutIfNeeded()
+
+        var drawnPage: PDFPage?
+        for _ in 0 ..< 160 {
+            let page = controller?.view.flatMap(firstPDFView)?.document?.page(at: 0)
+            if page?.annotations.contains(where: {
+                $0.userName == "Jerreader:\(ownHighlight.id.uuidString)"
+            }) == true {
+                drawnPage = page
+                break
+            }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        let page = try XCTUnwrap(drawnPage, "the PDF and the saved highlight must be showing")
+        let pdfView = try XCTUnwrap(controller?.view.flatMap(firstPDFView))
+        XCTAssertEqual(
+            page.annotations.filter { $0.userName == "Another Reader" }.count,
+            1,
+            "the other app's highlight stays in the file"
+        )
+        window.layoutIfNeeded()
+        let reader = try XCTUnwrap(controller)
+        func tap(atPagePoint pagePoint: CGPoint) -> CGPoint {
+            let inPDFView = pdfView.convert(pagePoint, from: page)
+            let point = pdfView.convert(inPDFView, to: reader.navigator.view)
+            reader.navigator(reader.navigator, didTapAt: point)
+            return point
+        }
+
+        // Tap translation on: the sentence under the other app's annotation
+        // is translated, not swallowed.
+        reader.setQuickSentenceTranslationEnabled(true)
+        _ = tap(atPagePoint: CGPoint(x: 150, y: 424))
+        XCTAssertEqual(payloads.count, 1, "the tap under the foreign annotation must translate")
+        XCTAssertTrue(
+            payloads.first?.text.contains("Foreign notes cover this line") == true,
+            payloads.first?.text ?? "nothing"
+        )
+        XCTAssertEqual(payloads.first?.trigger, .quickSentence)
+        XCTAssertTrue(activated.isEmpty, "another app's highlight is not the reader's to open")
+
+        // The reader's own highlight opens instead of being translated.
+        _ = tap(atPagePoint: CGPoint(x: 120, y: 268))
+        XCTAssertEqual(activated, [ownHighlight.id])
+        XCTAssertEqual(payloads.count, 1)
+
+        // Tap translation off, a tap on the highlight inside the left
+        // page-turn band still opens it rather than turning the page.
+        reader.setQuickSentenceTranslationEnabled(false)
+        let edgePoint = tap(atPagePoint: CGPoint(x: 34, y: 268))
+        let edge = max(72, reader.view.bounds.width * 0.22)
+        XCTAssertLessThanOrEqual(edgePoint.x, edge, "the tap must be inside the page-turn band")
+        XCTAssertEqual(activated, [ownHighlight.id, ownHighlight.id])
+        XCTAssertEqual(contentTaps, 0)
+
+        // And with tap translation off a tap on the foreign annotation in the
+        // middle of the page is an ordinary content tap.
+        _ = tap(atPagePoint: CGPoint(x: 150, y: 424))
+        XCTAssertEqual(contentTaps, 1)
+        XCTAssertEqual(payloads.count, 1)
+        XCTAssertEqual(activated.count, 2)
+
+        window.rootViewController = nil
+        window.isHidden = true
+        controller = nil
+        publication.close()
+    }
+
+    /// With two pages side by side PDFKit's `currentPage` is only one of
+    /// them. OCR on the other page used to finish and then return early,
+    /// leaving 正在识别本页文字… up and the sentence untranslated.
+    func testPDFOCRTapOnTheOtherOfTwoSideBySidePagesTranslatesIt() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let pageSize = CGSize(width: 320, height: 480)
+        let texts = ["Left page words.", "Right page sentence."]
+        func scan(_ text: String) -> UIImage {
+            let size = CGSize(width: 960, height: 1440)
+            return UIGraphicsImageRenderer(size: size).image { context in
+                UIColor.white.setFill()
+                context.fill(CGRect(origin: .zero, size: size))
+                NSString(string: text).draw(
+                    in: CGRect(x: 60, y: 560, width: 860, height: 400),
+                    withAttributes: [
+                        .font: UIFont.systemFont(ofSize: 92, weight: .medium),
+                        .foregroundColor: UIColor.black,
+                    ]
+                )
+            }
+        }
+        // Pages that are only pictures, as a scan is, so tapping goes to OCR.
+        let sourceURL = root.appendingPathComponent("scanned.pdf")
+        try UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: pageSize))
+            .pdfData { context in
+                for text in texts {
+                    context.beginPage()
+                    scan(text).draw(in: CGRect(origin: .zero, size: pageSize))
+                }
+            }
+            .write(to: sourceURL)
+
+        let imported = try await EPUBImportService(rootDirectoryURL: root)
+            .importBook(from: sourceURL, existingFingerprints: [])
+        let book = BookRecord(
+            title: imported.title,
+            author: imported.author,
+            language: "en",
+            sourceFormat: imported.sourceFormat.rawValue,
+            localFileName: imported.localFileName,
+            coverFileName: imported.coverFileName,
+            fileFingerprint: imported.fileFingerprint
+        )
+        let publication = try await EPUBPublicationService(rootDirectoryURL: root).open(book: book)
+        var controller: PDFReaderViewController? = try PDFReaderViewController(
+            publication: publication,
+            initialLocation: nil,
+            theme: .light,
+            bookLanguage: "en"
+        )
+        var payloads: [ReaderSelectionPayload] = []
+        var activities: [String?] = []
+        var errors: [String] = []
+        controller?.onSelectedText = { payloads.append($0) }
+        controller?.onReaderActivityChange = { activities.append($0) }
+        controller?.onReaderError = { errors.append($0) }
+
+        controller?.loadViewIfNeeded()
+        // A phone on its side.
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 844, height: 390))
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        // Readium picks one or two pages from its size once it lays out.
+        window.layoutIfNeeded()
+
+        var shownView: PDFView?
+        for _ in 0 ..< 200 {
+            if let pdfView = controller?.view.flatMap(firstPDFView),
+               pdfView.document?.pageCount == 2,
+               pdfView.displayMode == .twoUp,
+               pdfView.visiblePages.count == 2
+            {
+                shownView = pdfView
+                break
+            }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        let pdfView = try XCTUnwrap(shownView, "both pages must be side by side")
+        window.layoutIfNeeded()
+        let target = try XCTUnwrap(
+            pdfView.visiblePages.first { $0 !== pdfView.currentPage },
+            "one of the two pages is not PDFKit's current page"
+        )
+        let targetIndex = try XCTUnwrap(pdfView.document?.index(for: target))
+        let reader = try XCTUnwrap(controller)
+        reader.setQuickSentenceTranslationEnabled(true)
+
+        // The first line of the scan sits about 205pt down a 480pt page.
+        let pagePoint = CGPoint(x: 90, y: pageSize.height - 205)
+        let point = pdfView.convert(pdfView.convert(pagePoint, from: target), to: reader.navigator.view)
+        reader.navigator(reader.navigator, didTapAt: point)
+
+        for _ in 0 ..< 600 where payloads.isEmpty && errors.isEmpty {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        XCTAssertEqual(errors, [])
+        XCTAssertEqual(payloads.count, 1, "the OCR sentence on page \(targetIndex + 1) must be delivered")
+        let recognized = payloads.first?.text.lowercased() ?? ""
+        XCTAssertTrue(
+            recognized.contains(texts[targetIndex].lowercased().split(separator: " ")[0]),
+            recognized
+        )
+        // Starting a recognition first cancels any earlier one, which
+        // clears the line, so the busy text is the second report.
+        XCTAssertTrue(activities.contains("正在识别本页文字…"), "\(activities)")
+        XCTAssertEqual(activities.last ?? "still busy", nil, "the busy line must go away")
+
+        window.rootViewController = nil
+        window.isHidden = true
+        controller = nil
+        publication.close()
+    }
+
     func testVisionOCRRecognizesRenderedEnglishSentence() async throws {
         let renderer = UIGraphicsImageRenderer(
             size: CGSize(width: 900, height: 360)

@@ -1085,6 +1085,9 @@ private struct BatchBookManagementView: View {
                                         .foregroundStyle(.secondary)
                                 }
                             }
+                            // A plain button only answers taps on what it
+                            // draws, so the gap the Spacer leaves did nothing.
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                     }

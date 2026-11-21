@@ -79,11 +79,11 @@ scripts/safe_xcodebuild.sh ui-test
 
 `JerreaderSelectionUITests/testIPadShellUsesWholePortraitAndLandscapeWindow` 只在 iPad 上运行，在 iPhone 上会跳过；要单独以 iPad 模拟器为 destination，用上面的筛选跑这一项。2026-11-16 之前 UI 测试目标只设了 iPhone（`TARGETED_DEVICE_FAMILY = 1`），运行器在 iPad 上走 iPhone 兼容模式，读到的设备类型是 iPhone，这一项在 iPad 上也会跳过；现已改成与 App 相同的 `"1,2"`。
 
-Android 设备验收同样通过共享入口 `scripts/safe_android_build.sh test`。默认执行已审核的 49 项离线设备与 UI 用例（37 项功能回归、12 项界面用例，含 9 项备份、千条列表详情/筛选回归与翻译卡片几何场景；2026-11-16 补入了此前写好却没列进运行清单的 5 个回归类和 6 项界面用例）；只复验界面时可设置 `JERREADER_ANDROID_VALIDATION_SCOPE=ui`，执行固定的 12 个界面用例，不接受任意命令或测试类。先完成 APK 与测试 APK 编译，再显式指定单一 AVD。入口在持锁、资源稳定后启动只读临时设备，使用 2 个虚拟核心、请求 2 GiB 内存、当前 SDK 支持的 `swiftshader` 软件渲染，无窗口、无快照，关闭本轮不需要的 guest Vulkan。SDK 可能提高镜像最低内存，设备记录同时保存请求值与 guest 实际 MemTotal，不能将请求值当作硬限制。
+Android 设备验收同样通过共享入口 `scripts/safe_android_build.sh test`。默认执行已审核的 51 项离线设备与 UI 用例（39 项功能回归、12 项界面用例，含 9 项备份、千条列表详情/筛选回归与翻译卡片几何场景；2026-11-16 补入了此前写好却没列进运行清单的 5 个回归类和 6 项界面用例）；只复验界面时可设置 `JERREADER_ANDROID_VALIDATION_SCOPE=ui`，执行固定的 12 个界面用例，不接受任意命令或测试类。先完成 APK 与测试 APK 编译，再显式指定单一 AVD。入口在持锁、资源稳定后启动只读临时设备，使用 2 个虚拟核心、请求 2 GiB 内存、当前 SDK 支持的 `swiftshader` 软件渲染，无窗口、无快照，关闭本轮不需要的 guest Vulkan。SDK 可能提高镜像最低内存，设备记录同时保存请求值与 guest 实际 MemTotal，不能将请求值当作硬限制。
 
 临时设备开机完成后先等待资源稳定、核验开机窗口及 events，再切换飞行模式、关闭 Wi-Fi 和安装 APK。测试前再次等待稳定并确认系统设置；诊断缺失、超时、开机 events 中有 ANR 或存在无响应窗口时不启动测试。这一流程兼容缺少 telephony 服务的 AOSP 镜像。命令依据 [AOSP ConnectivityService](https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/heads/main/service/src/com/android/server/ConnectivityService.java)。仅在本次拥有的只读覆盖层中卸载预装的 Jerreader 与 androidTest 两个包，再装预编译 APK，避免原 AVD 预装更高版本或不同调试证书导致安装失败；其他包及原 AVD 数据保留。
 
-37 项功能回归先在同一进程运行一次（入口按至少 17 项核对）；随后 12 项 UI 用例在 instrumentation 连接前设置系统字体（两项大字号用例为 1.5 倍，其余 1.0 倍），每项用新进程执行一次，严格串行，不自动重试。每份和汇总结果均核对完成状态、最低用例数及每个用例的成功状态，跳过、漏跑或失败不能算通过。每个 UI 用例完成后导出截图，成功后才合并至证据目录，后续中断不会覆盖既有证据。关闭设备前保存实际系统版本、屏幕配置、ANR、全部 logcat 缓冲区、窗口及内存信息；失败也保存已产生的截图。
+39 项功能回归先在同一进程运行一次（入口按至少 17 项核对）；随后 12 项 UI 用例在 instrumentation 连接前设置系统字体（两项大字号用例为 1.5 倍，其余 1.0 倍），每项用新进程执行一次，严格串行，不自动重试。每份和汇总结果均核对完成状态、最低用例数及每个用例的成功状态，跳过、漏跑或失败不能算通过。每个 UI 用例完成后导出截图，成功后才合并至证据目录，后续中断不会覆盖既有证据。关闭设备前保存实际系统版本、屏幕配置、ANR、全部 logcat 缓冲区、窗口及内存信息；失败也保存已产生的截图。
 
 每次测试按以下顺序执行：
 

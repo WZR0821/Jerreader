@@ -230,6 +230,14 @@ class PdfTapTranslationController(
     /** The zero-based page of the last OCR selection. */
     fun selectionPageIndex(): Int? = lastSelectionPageIndex
 
+    /** Where the PDF is scrolled to and how far it is zoomed. */
+    data class ViewportSignature(val x: Float, val y: Float, val zoom: Float, val width: Int, val height: Int)
+
+    /** Changes with every frame of a drag, fling or pinch; null before the PDF is laid out. */
+    fun viewportSignature(): ViewportSignature? = actualPdfView()?.let { view ->
+        ViewportSignature(view.currentXOffset, view.currentYOffset, view.zoom, view.width, view.height)
+    }
+
     /** Maps a normalized page rectangle into the current PDF navigator view. */
     suspend fun mapPageGeometryToView(
         geometry: RectF,

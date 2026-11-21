@@ -216,6 +216,17 @@ class ReaderActivity : AppCompatActivity() {
         private set
     internal var translationSourceFrameForTesting: RectF? = null
         private set
+    /** The PDF selection as painted, in navigator pixels. */
+    internal val pdfSelectionRectsForTesting: List<RectF>
+        get() = selectionRects.map(::RectF)
+    /** Saved PDF highlights as painted, in navigator pixels. */
+    internal val pdfAnnotationRectsForTesting: List<RectF>
+        get() = pdfAnnotationRects.map(::RectF)
+    internal val pdfTranslationControllerForTesting: PdfTapTranslationController?
+        get() = pdfTranslationController
+    internal fun dismissTranslationForTesting() = dismissTranslation()
+    /** Where 加批注 on the card would put a PDF note (see `annotateTranslatedText`). */
+    internal fun pdfAnnotationLocatorForTesting(): Locator? = pdfSelectionLocator() ?: latestLocator
     private var currentTranslationLocatorJson: String? = null
 
     internal var currentAppearance by mutableStateOf(ReaderAppearance())
@@ -268,7 +279,9 @@ class ReaderActivity : AppCompatActivity() {
     private var pdfGeometryView: View? = null
     private var pdfGeometryScrollListener: ViewTreeObserver.OnScrollChangedListener? = null
     private var pdfGeometryLayoutListener: View.OnLayoutChangeListener? = null
-    private var pdfGeometryTouchListener: View.OnTouchListener? = null
+    private var pdfGeometryDrawListener: ViewTreeObserver.OnDrawListener? = null
+    private var pdfViewportSignature: PdfTapTranslationController.ViewportSignature? = null
+    private var pdfGeometryRefreshPosted = false
 
     // The two layouts, after iOS `EPUBReaderViewModel`: the standard one keeps
     // its bars and lays the page out between them; the immersive one starts
@@ -1299,9 +1312,18 @@ class ReaderActivity : AppCompatActivity() {
         observeLocator { fragment.currentLocator.collectLatest(it) }
     }
 
-    // This listener observes release/cancel only. It returns false so PDFView
-    // dispatches its own accessible click; calling performClick here would duplicate taps.
-    @android.annotation.SuppressLint("ClickableViewAccessibility")
+    /**
+     * Keeps the PDF selection and saved highlights on their text while the
+     * page is dragged, flung or pinched.
+     *
+     * AndroidPdfViewer pans and zooms by drawing at new offsets, not by
+     * scrolling a view, and it keeps every touch to itself: a touch listener
+     * on Readium's container (what 2.0.1 used, and 1.3.5 before it for the
+     * highlights) never hears a drag, and the scroll listener never fires. So
+     * every frame the window draws is checked against the PDF's offsets and
+     * zoom, and the paint is mapped again when they changed: at most once a
+     * frame, and not at all while nothing moves.
+     */
     private fun installPdfGeometryListeners(view: View) {
         removePdfGeometryListeners()
         val scrollListener = ViewTreeObserver.OnScrollChangedListener {
@@ -1312,29 +1334,25 @@ class ReaderActivity : AppCompatActivity() {
             latestLocator?.let(::refreshPdfAnnotationRects)
             refreshPdfSelectionRect()
         }
-        val touchListener = View.OnTouchListener { touchedView, event ->
-            if (event.actionMasked == android.view.MotionEvent.ACTION_UP ||
-                event.actionMasked == android.view.MotionEvent.ACTION_CANCEL
-            ) {
-                touchedView.postDelayed(
-                    {
-                        latestLocator?.let(::refreshPdfAnnotationRects)
-                        refreshPdfSelectionRect()
-                    },
-                    PDF_GEOMETRY_REFRESH_DELAY_MILLIS
-                )
+        val drawListener = ViewTreeObserver.OnDrawListener {
+            if (pdfGeometryRefreshPosted) return@OnDrawListener
+            val signature = pdfTranslationController?.viewportSignature() ?: return@OnDrawListener
+            if (signature == pdfViewportSignature) return@OnDrawListener
+            // Nothing may change while the window is drawing.
+            pdfGeometryRefreshPosted = view.post {
+                pdfGeometryRefreshPosted = false
+                pdfViewportSignature = pdfTranslationController?.viewportSignature()
+                latestLocator?.let(::refreshPdfAnnotationRects)
+                refreshPdfSelectionRect()
             }
-            // Do not consume the event: PDFView must keep its own pan/zoom
-            // gesture handling and Readium must keep receiving taps.
-            false
         }
         view.viewTreeObserver.addOnScrollChangedListener(scrollListener)
         view.addOnLayoutChangeListener(layoutListener)
-        view.setOnTouchListener(touchListener)
+        view.viewTreeObserver.addOnDrawListener(drawListener)
         pdfGeometryView = view
         pdfGeometryScrollListener = scrollListener
         pdfGeometryLayoutListener = layoutListener
-        pdfGeometryTouchListener = touchListener
+        pdfGeometryDrawListener = drawListener
     }
 
     private fun removePdfGeometryListeners() {
@@ -1345,11 +1363,17 @@ class ReaderActivity : AppCompatActivity() {
             }
         }
         pdfGeometryLayoutListener?.let(view::removeOnLayoutChangeListener)
-        if (pdfGeometryTouchListener != null) view.setOnTouchListener(null)
+        pdfGeometryDrawListener?.let { listener ->
+            if (view.viewTreeObserver.isAlive) {
+                view.viewTreeObserver.removeOnDrawListener(listener)
+            }
+        }
         pdfGeometryView = null
         pdfGeometryScrollListener = null
         pdfGeometryLayoutListener = null
-        pdfGeometryTouchListener = null
+        pdfGeometryDrawListener = null
+        pdfViewportSignature = null
+        pdfGeometryRefreshPosted = false
     }
 
     private fun observeLocator(collect: suspend (suspend (Locator) -> Unit) -> Unit) {
@@ -3285,7 +3309,6 @@ class ReaderActivity : AppCompatActivity() {
         private const val NAVIGATOR_TAG = "JerreaderNavigator"
         private const val INTEGRITY_TAG = "JerreaderIntegrity"
         private const val READER_OPEN_TIMEOUT_MILLIS = 25_000L
-        private const val PDF_GEOMETRY_REFRESH_DELAY_MILLIS = 80L
         private const val SEARCH_RESULT_LIMIT = 80
         private const val SEARCH_PAGE_LIMIT = 6
         private const val COMPANION_PREFERENCES = "jerreader_reader_companion"
