@@ -88,6 +88,27 @@ class ReadingSessionRecorderTest {
     }
 
     @Test
+    fun sessionSecondsCountSavedAndRunningTimeSinceBegin() {
+        val recorder = recorder()
+        recorder.begin("book")
+        recorder.startClock()
+        now = 10_000L
+        recorder.pause()
+        awaitWrites()
+        // Saved to the book, still part of this session.
+        assertEquals(10.0, recorder.sessionSeconds(), 0.0)
+        recorder.startClock()
+        now = 12_500L
+        assertEquals(12.5, recorder.sessionSeconds(), 0.0)
+        recorder.pause()
+        assertEquals(12.5, recorder.sessionSeconds(), 0.0)
+
+        // Opening the book again reads its record, which now holds these seconds.
+        recorder.begin("book")
+        assertEquals(0.0, recorder.sessionSeconds(), 0.0)
+    }
+
+    @Test
     fun startingARunningClockKeepsTheOriginalStart() {
         val recorder = recorder()
         recorder.begin("book")

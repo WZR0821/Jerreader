@@ -443,6 +443,10 @@ struct ReaderTranslationTiming: Sendable {
     let backendRequestTimeout: Duration
     let contextExplanationRequestTimeout: Duration
     let manualRetryCooldown: Duration
+    /// The cap on a streamed answer (2.1.0). Once the first delta has come,
+    /// `backendRequestTimeout` and `contextExplanationRequestTimeout` count
+    /// from the newest delta instead of from the start.
+    let streamingTotalTimeout: Duration
 
     init(
         appleLaunchRetryDelay: Duration,
@@ -450,7 +454,8 @@ struct ReaderTranslationTiming: Sendable {
         appleRequestTimeout: Duration,
         backendRequestTimeout: Duration,
         contextExplanationRequestTimeout: Duration? = nil,
-        manualRetryCooldown: Duration = .seconds(5)
+        manualRetryCooldown: Duration = .seconds(5),
+        streamingTotalTimeout: Duration = .seconds(180)
     ) {
         self.appleLaunchRetryDelay = appleLaunchRetryDelay
         self.appleLaunchTimeout = appleLaunchTimeout
@@ -459,6 +464,7 @@ struct ReaderTranslationTiming: Sendable {
         self.contextExplanationRequestTimeout =
             contextExplanationRequestTimeout ?? backendRequestTimeout
         self.manualRetryCooldown = manualRetryCooldown
+        self.streamingTotalTimeout = streamingTotalTimeout
     }
 
     static let standard = ReaderTranslationTiming(
@@ -472,6 +478,13 @@ struct ReaderTranslationTiming: Sendable {
         contextExplanationRequestTimeout: .seconds(70),
         manualRetryCooldown: .seconds(5)
     )
+}
+
+/// An answer while a model streams it (2.1.0): shown only, never cached,
+/// and only on the card of the request it belongs to.
+struct ReaderStreamingText: Equatable, Sendable {
+    let requestID: UUID
+    let text: String
 }
 
 enum ReaderTranslationDisplayError: Equatable, Sendable {
@@ -491,6 +504,8 @@ enum ReaderTranslationDisplayError: Equatable, Sendable {
     case providerUnavailable
     case appleLanguagePreparationTimedOut
     case timedOut
+    /// A streamed translation still unfinished at the total cap (2.1.0).
+    case streamTimedOut
     case persistenceFailed
     case unknown
 
@@ -526,6 +541,8 @@ enum ReaderTranslationDisplayError: Equatable, Sendable {
             return "Apple 语言包准备时间过长。请保持 App 在前台并连接网络；也可先在 Apple“翻译”App 中下载原文和目标语言，再回到 Jerreader 重试。"
         case .timedOut:
             return "翻译等待时间过长，本次请求已停止。请检查网络后重试。"
+        case .streamTimedOut:
+            return "翻译超过 3 分钟仍未完成，请重试或更换翻译服务。"
         case .persistenceFailed:
             return "译文已经生成，但暂时无法保存到本机缓存。"
         case .unknown:
@@ -541,7 +558,7 @@ enum ReaderTranslationDisplayError: Equatable, Sendable {
             return false
         case .languageDownloadDeclined, .userCancelled, .translationUnavailable,
              .providerUnavailable, .appleLanguagePreparationTimedOut,
-             .timedOut, .persistenceFailed, .unknown:
+             .timedOut, .streamTimedOut, .persistenceFailed, .unknown:
             return true
         }
     }

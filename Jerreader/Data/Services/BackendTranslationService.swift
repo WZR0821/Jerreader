@@ -3,13 +3,57 @@ import Foundation
 
 protocol BackendTranslationHTTPClient: Sendable {
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse)
+
+    /// Sends `request` and hands its body on a line at a time while it
+    /// arrives (2.1.0), without the line breaks and with the blank lines
+    /// that end Server-Sent Events. `response` sees the status first and may
+    /// throw to stop; `line` returns false to stop reading. Stopping early,
+    /// or being cancelled, closes the connection.
+    func lines(
+        for request: URLRequest,
+        response: (HTTPURLResponse) async throws -> Void,
+        line: (String) async throws -> Bool
+    ) async throws
+}
+
+extension BackendTranslationHTTPClient {
+    /// For a client that only has whole bodies: the lines once all have arrived.
+    func lines(
+        for request: URLRequest,
+        response: (HTTPURLResponse) async throws -> Void,
+        line: (String) async throws -> Bool
+    ) async throws {
+        let (data, http) = try await data(for: request)
+        try await response(http)
+        for text in AIStreamLineSplitter.lines(of: data) {
+            try Task.checkCancellation()
+            guard try await line(text) else { return }
+        }
+    }
 }
 
 struct URLSessionBackendTranslationHTTPClient: BackendTranslationHTTPClient, ChatGPTPlanHTTPClient {
-    private let session: URLSession
+    /// The session `lines` reads streams with (2.1.0). A shown stream asks
+    /// to wait 80 s for its next bytes, and the shared session's own limit
+    /// is 60 s; which of the two URLSession keeps when a request asks for
+    /// more is not documented, so this session's limit is 80 s too and an
+    /// 80 s request is not cut at 60 s either way. Requests read in one
+    /// piece (`data`) keep the shared session.
+    static let streamingSession: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = DirectAITranslationService.streamingRequestTimeout
+        return URLSession(configuration: configuration)
+    }()
 
-    init(session: URLSession = .shared) {
+    private let session: URLSession
+    private let streamingSession: URLSession
+
+    init(
+        session: URLSession = .shared,
+        streamingSession: URLSession = URLSessionBackendTranslationHTTPClient.streamingSession
+    ) {
         self.session = session
+        self.streamingSession = streamingSession
     }
 
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
@@ -19,9 +63,35 @@ struct URLSessionBackendTranslationHTTPClient: BackendTranslationHTTPClient, Cha
         }
         return (data, response)
     }
+
+    func lines(
+        for request: URLRequest,
+        response: (HTTPURLResponse) async throws -> Void,
+        line: (String) async throws -> Bool
+    ) async throws {
+        let (bytes, urlResponse) = try await streamingSession.bytes(for: request)
+        let task = bytes.task
+        var finished = false
+        // Leaving early, by a throw, a cancellation or `line`, closes the connection.
+        defer { if !finished { task.cancel() } }
+        guard let http = urlResponse as? HTTPURLResponse else {
+            throw ServiceError.temporarilyUnavailable
+        }
+        try await response(http)
+        // `bytes.lines` would drop the blank lines that end an event and
+        // break a line at U+2028, so the bytes are split here.
+        var splitter = AIStreamLineSplitter()
+        for try await byte in bytes {
+            if let text = splitter.append(byte) {
+                guard try await line(text) else { return }
+            }
+        }
+        if let text = splitter.finish() { _ = try await line(text) }
+        finished = true
+    }
 }
 
-struct BackendTranslationService: TranslationService, ContextExplanationService {
+struct BackendTranslationService: TranslationService, ContextExplanationService, AIActionService {
     static let providerIdentifier = "ai-backend-proxy"
     static let explanationRequestTimeout: TimeInterval = 60
 
@@ -268,6 +338,78 @@ struct BackendTranslationService: TranslationService, ContextExplanationService 
         )
     }
 
+    /// 直译 and 追问 through the proxy (2.1.0): one turn, with the
+    /// conversation flattened into `text` and the instruction as `prompt`.
+    /// The proxy answers in one piece, so nothing is streamed.
+    func respond(
+        to actionRequest: AIActionRequest,
+        onPartialText: AIPartialTextHandler?
+    ) async throws -> AICompletion {
+        let text = actionRequest.flattened.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { throw ServiceError.emptyText }
+        guard configuration.endpoint.scheme?.lowercased() == "https",
+              configuration.endpoint.host?.isEmpty == false
+        else {
+            throw ServiceError.invalidConfiguration
+        }
+
+        var request = URLRequest(url: configuration.endpoint)
+        request.httpMethod = "POST"
+        request.timeoutInterval = Self.explanationRequestTimeout
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("1", forHTTPHeaderField: "X-Jerreader-Translation-Protocol")
+        if let token = configuration.accessToken, !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try JSONEncoder().encode(
+            ExplanationRequestBody(
+                task: "explain",
+                analysisMode: actionRequest.action.rawValue,
+                text: text,
+                context: nil,
+                sourceLanguage: actionRequest.sourceLanguage?.rawValue,
+                responseLanguage: actionRequest.responseLanguage.rawValue,
+                model: configuration.model,
+                prompt: actionRequest.instruction
+            )
+        )
+
+        let data: Data
+        let response: HTTPURLResponse
+        do {
+            (data, response) = try await client.data(for: request)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as ServiceError {
+            throw error
+        } catch {
+            throw ServiceError.temporarilyUnavailable
+        }
+        switch response.statusCode {
+        case 200 ..< 300:
+            break
+        case 401, 403:
+            throw ServiceError.authenticationFailed
+        case 400, 404, 405, 415, 422:
+            throw ServiceError.invalidConfiguration
+        default:
+            throw ServiceError.temporarilyUnavailable
+        }
+        let payload: ExplanationResponseBody
+        do {
+            payload = try JSONDecoder().decode(ExplanationResponseBody.self, from: data)
+        } catch {
+            throw ServiceError.resultNotFound
+        }
+        guard let answer = TranslationOutputPolicy.displayText(
+            payload.explanation ?? payload.answer ?? payload.translatedText ?? payload.translation ?? ""
+        ) else {
+            throw ServiceError.resultNotFound
+        }
+        return AICompletion(text: answer)
+    }
+
     private struct RequestBody: Encodable {
         let text: String
         let context: String?
@@ -301,8 +443,13 @@ struct BackendTranslationService: TranslationService, ContextExplanationService 
     }
 }
 
-struct DirectAITranslationService: TranslationService, ContextExplanationService {
+struct DirectAITranslationService: StreamingTranslationService, StreamingContextExplanationService, AIActionService {
     static let explanationRequestTimeout: TimeInterval = 60
+    /// How long a request whose text shows while it arrives waits for its
+    /// next bytes (2.1.0), as Android's STREAM_READ_TIMEOUT_MILLIS: longer
+    /// than the reader's own quiet limits (30 s for a translation, 70 s for
+    /// an AI answer), so theirs decide and say so in their own words.
+    static let streamingRequestTimeout: TimeInterval = 80
 
     let configuration: DirectAITranslationConfiguration
     private let client: any BackendTranslationHTTPClient
@@ -380,6 +527,24 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
         sourceLanguage: LanguageCode?,
         targetLanguage: LanguageCode
     ) async throws -> TranslationResult {
+        try await translate(
+            text: text,
+            context: context,
+            sourceLanguage: sourceLanguage,
+            targetLanguage: targetLanguage,
+            onPartialText: nil
+        )
+    }
+
+    /// Streams the answer (2.1.0): `onPartialText` sees the text so far,
+    /// the result is the whole validated answer.
+    func translate(
+        text: String,
+        context: String?,
+        sourceLanguage: LanguageCode?,
+        targetLanguage: LanguageCode,
+        onPartialText: AIPartialTextHandler?
+    ) async throws -> TranslationResult {
         let sourceText = TranslationCacheStore.normalizedText(text)
         let normalizedContext = context.map(TranslationCacheStore.normalizedText)
             .flatMap { value in
@@ -394,13 +559,7 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
         else {
             throw ServiceError.unsupportedLanguage
         }
-        guard configuration.endpoint.scheme?.lowercased() == "https",
-              configuration.endpoint.host?.isEmpty == false,
-              !configuration.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !configuration.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else {
-            throw ServiceError.invalidConfiguration
-        }
+        try validateConfiguration()
 
         let prompt = TranslationPrompt(
             sourceText: sourceText,
@@ -409,12 +568,13 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
             targetLanguage: targetLanguage,
             template: configuration.translationPromptTemplate
         )
-        let text = try await completion(
+        let answer = try await completion(
             systemInstruction: prompt.systemInstruction,
-            userContent: prompt.userContent
+            conversation: [AIChatMessage(.user, prompt.userContent)],
+            onPartialText: onPartialText
         )
 
-        guard let translatedText = TranslationOutputPolicy.displayText(text) else {
+        guard let translatedText = TranslationOutputPolicy.displayText(answer.text) else {
             throw ServiceError.resultNotFound
         }
 
@@ -432,6 +592,14 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
     func explain(
         _ explanationRequest: ContextExplanationRequest
     ) async throws -> ContextExplanationResult {
+        try await explain(explanationRequest, onPartialText: nil)
+    }
+
+    /// Streams the explanation (2.1.0), as `translate` does the translation.
+    func explain(
+        _ explanationRequest: ContextExplanationRequest,
+        onPartialText: AIPartialTextHandler?
+    ) async throws -> ContextExplanationResult {
         let explanationRequest = ContextExplanationInputPolicy.prepared(
             explanationRequest
         )
@@ -442,13 +610,7 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
             } : nil].compactMap { $0 }.joined(separator: "\n\n").nilIfBlankForLookup
         guard !focusedText.isEmpty else { throw ServiceError.emptyText }
         guard focusedText.count <= 2_000 else { throw ServiceError.textTooLong }
-        guard configuration.endpoint.scheme?.lowercased() == "https",
-              configuration.endpoint.host?.isEmpty == false,
-              !configuration.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !configuration.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else {
-            throw ServiceError.invalidConfiguration
-        }
+        try validateConfiguration()
 
         let systemInstruction = explanationRequest.systemInstruction(
             grammarPrompt: AIPromptTemplateDefaults.rendered(
@@ -470,14 +632,15 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
         } else {
             userContent = "SELECTED TEXT:\n\(focusedText)"
         }
-        let text = try await completion(
+        let answer = try await completion(
             systemInstruction: systemInstruction,
-            userContent: userContent,
+            conversation: [AIChatMessage(.user, userContent)],
             timeoutInterval: Self.explanationRequestTimeout,
-            quick: false
+            quick: false,
+            onPartialText: onPartialText
         )
 
-        guard let explanation = TranslationOutputPolicy.displayText(text) else {
+        guard let explanation = TranslationOutputPolicy.displayText(answer.text) else {
             throw ServiceError.resultNotFound
         }
         return ContextExplanationResult(
@@ -487,39 +650,115 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
         )
     }
 
-    /// Sends one request and returns the model's text.
+    /// 直译 and 追问 (2.1.0): the instruction, then every turn as a message
+    /// of its own, for the four formats and the ChatGPT plan alike.
+    func respond(
+        to request: AIActionRequest,
+        onPartialText: AIPartialTextHandler?
+    ) async throws -> AICompletion {
+        guard request.conversation.contains(where: { $0.role == .user }) else {
+            throw ServiceError.emptyText
+        }
+        try validateConfiguration()
+        let answer = try await completion(
+            systemInstruction: request.instruction,
+            conversation: request.conversation,
+            timeoutInterval: Self.explanationRequestTimeout,
+            quick: request.action == .literal,
+            onPartialText: onPartialText
+        )
+        guard let text = TranslationOutputPolicy.displayText(answer.text) else {
+            throw ServiceError.resultNotFound
+        }
+        return AICompletion(text: text, usage: answer.usage)
+    }
+
+    private func validateConfiguration() throws {
+        guard configuration.endpoint.scheme?.lowercased() == "https",
+              configuration.endpoint.host?.isEmpty == false,
+              !configuration.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !configuration.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw ServiceError.invalidConfiguration
+        }
+    }
+
+    /// Sends one request and returns the model's answer. Every format streams
+    /// (2.1.0); `onPartialText` sees the visible answer each time it grows.
+    /// A service that answers with one JSON body instead is read as before.
     /// - Parameter quick: a translation, as opposed to an explanation; 自动
     ///   reasoning is lighter for it.
+    /// - Parameter timeoutInterval: the limit for an answer shown only when
+    ///   whole; one shown while it arrives waits `streamingRequestTimeout`.
     private func completion(
         systemInstruction: String,
-        userContent: String,
+        conversation: [AIChatMessage],
         timeoutInterval: TimeInterval = 30,
-        quick: Bool = true
-    ) async throws -> String {
+        quick: Bool = true,
+        onPartialText: AIPartialTextHandler? = nil
+    ) async throws -> AICompletion {
+        let timeoutInterval = onPartialText == nil ? timeoutInterval : Self.streamingRequestTimeout
         if configuration.provider.usesAccountSignIn {
             return try await planCompletion(
-                systemInstruction: systemInstruction, userContent: userContent,
-                timeoutInterval: timeoutInterval, quick: quick
+                systemInstruction: systemInstruction, conversation: conversation,
+                timeoutInterval: timeoutInterval, quick: quick, onPartialText: onPartialText
             )
         }
         let request = try makeRequest(
             systemInstruction: systemInstruction,
-            userContent: userContent,
+            conversation: conversation,
             timeoutInterval: timeoutInterval,
             quick: quick
         )
-        let (data, response) = try await send(request)
-        switch response.statusCode {
-        case 200 ..< 300:
-            break
-        case 401, 403:
-            throw ServiceError.authenticationFailed
-        case 400, 404, 405, 415, 422:
-            throw ServiceError.invalidConfiguration
-        default:
+        var reader = AIStreamReader(format: AIStreamFormat(configuration.style))
+        try await streamLines(for: request) { response in
+            switch response.statusCode {
+            case 200 ..< 300:
+                break
+            case 401, 403:
+                throw ServiceError.authenticationFailed
+            case 400, 404, 405, 415, 422:
+                throw ServiceError.invalidConfiguration
+            default:
+                throw ServiceError.temporarilyUnavailable
+            }
+        } line: { line in
+            if reader.read(line), let onPartialText {
+                await onPartialText(reader.decoder.text)
+            }
+            return !reader.isFinished
+        }
+        if let body = reader.plainBody {
+            return AICompletion(text: try decodedText(from: body))
+        }
+        let decoder = reader.decoder
+        switch decoder.finish() {
+        case .completed:
+            return AICompletion(text: decoder.answer, usage: decoder.usage)
+        case .incomplete:
+            // Cut short by a length or safety stop: not the whole answer, so
+            // it is neither shown as a result nor cached (2.1.0), as on the
+            // plan path and on Android. Its text so far was only shown.
+            throw ServiceError.resultNotFound
+        case .failed(let code, _):
+            throw Self.streamError(code: code)
+        case .interrupted:
             throw ServiceError.temporarilyUnavailable
         }
-        return try decodedText(from: data)
+    }
+
+    /// An error event in a stream that began with a 2xx status.
+    private static func streamError(code: String?) -> ServiceError {
+        switch code ?? "" {
+        case "authentication_error", "invalid_api_key", "permission_error",
+             "UNAUTHENTICATED", "PERMISSION_DENIED":
+            return .authenticationFailed
+        case "invalid_request_error", "not_found_error", "model_not_found",
+             "INVALID_ARGUMENT", "NOT_FOUND":
+            return .invalidConfiguration
+        default:
+            return .temporarilyUnavailable
+        }
     }
 
     /// A request paid by a ChatGPT plan: a current access token, one retry
@@ -527,10 +766,11 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
     /// `response.completed`, so a cut-off answer is never shown or cached.
     private func planCompletion(
         systemInstruction: String,
-        userContent: String,
+        conversation: [AIChatMessage],
         timeoutInterval: TimeInterval,
-        quick: Bool
-    ) async throws -> String {
+        quick: Bool,
+        onPartialText: AIPartialTextHandler?
+    ) async throws -> AICompletion {
         let extra = AIRequestTuning.extraFields(
             kind: configuration.provider,
             style: .responses,
@@ -539,37 +779,81 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
             quick: quick
         )
         func request(_ token: String) throws -> URLRequest {
-            try ChatGPTPlanRequests.responses(
+            if conversation.count == 1, let only = conversation.first, only.role == .user {
+                return try ChatGPTPlanRequests.responses(
+                    accessToken: token, model: configuration.model, instructions: systemInstruction,
+                    input: only.text, extra: extra, timeoutInterval: timeoutInterval
+                )
+            }
+            return try ChatGPTPlanRequests.responses(
                 accessToken: token, model: configuration.model, instructions: systemInstruction,
-                input: userContent, extra: extra, timeoutInterval: timeoutInterval
+                turns: conversation.map { (role: $0.role.rawValue, text: $0.text) },
+                extra: extra, timeoutInterval: timeoutInterval
             )
         }
         var token = try await planAccessToken(rejected: nil)
-        var (data, response) = try await send(try request(token))
-        if response.statusCode == 401 {
+        var attempt = try await planAttempt(try request(token), onPartialText: onPartialText)
+        if case .refused(401, _, _) = attempt {
             token = try await planAccessToken(rejected: token)
-            (data, response) = try await send(try request(token))
+            attempt = try await planAttempt(try request(token), onPartialText: onPartialText)
         }
-        // OpenAI's own reason is kept: the status, the code and the request id.
-        guard (200 ..< 300).contains(response.statusCode) else {
-            if ChatGPTPlanErrorBody(data).needsConsent { planConsentNeeded() }
+        switch attempt {
+        case .refused(let status, let body, let requestID):
+            // OpenAI's own reason is kept: the status, the code and the request id.
+            if ChatGPTPlanErrorBody(body).needsConsent { planConsentNeeded() }
             throw Self.serviceError(ChatGPTPlanRefusal.classify(
-                status: response.statusCode, body: data,
-                requestID: response.value(forHTTPHeaderField: "x-request-id")
+                status: status, body: body, requestID: requestID
             ))
+        case .streamed(let outcome):
+            switch outcome {
+            case .completed(let text):
+                let answer = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !answer.isEmpty else { throw ServiceError.resultNotFound }
+                return AICompletion(text: answer)
+            case .failed(let code, let message):
+                throw Self.serviceError(ChatGPTPlanRefusal.streamFailure(code: code, message: message))
+            case .incomplete:
+                throw ServiceError.resultNotFound
+            case .interrupted:
+                throw ServiceError.temporarilyUnavailable
+            }
         }
-        switch ChatGPTPlanStream.parse(data) {
-        case .completed(let text):
-            let answer = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !answer.isEmpty else { throw ServiceError.resultNotFound }
-            return answer
-        case .failed(let code, let message):
-            throw Self.serviceError(ChatGPTPlanRefusal.streamFailure(code: code, message: message))
-        case .incomplete:
-            throw ServiceError.resultNotFound
-        case .interrupted:
-            throw ServiceError.temporarilyUnavailable
+    }
+
+    private enum PlanAttempt {
+        case refused(status: Int, body: Data, requestID: String?)
+        case streamed(ChatGPTPlanStreamOutcome)
+    }
+
+    /// One plan request: a refusal's body, or the stream read as it arrives.
+    private func planAttempt(
+        _ request: URLRequest,
+        onPartialText: AIPartialTextHandler?
+    ) async throws -> PlanAttempt {
+        var status = 0
+        var requestID: String?
+        var refusal: [String] = []
+        var refusalBytes = 0
+        var decoder = ChatGPTPlanStreamDecoder()
+        try await streamLines(for: request) { response in
+            status = response.statusCode
+            requestID = response.value(forHTTPHeaderField: "x-request-id")
+        } line: { line in
+            guard (200 ..< 300).contains(status) else {
+                // An error body is small; more than this is not read.
+                refusal.append(line)
+                refusalBytes += line.utf8.count + 1
+                return refusalBytes < 65_536
+            }
+            if decoder.feed(line), let onPartialText {
+                await onPartialText(decoder.text)
+            }
+            return decoder.outcome == nil
         }
+        guard (200 ..< 300).contains(status) else {
+            return .refused(status: status, body: Data(refusal.joined(separator: "\n").utf8), requestID: requestID)
+        }
+        return .streamed(decoder.finish())
     }
 
     private static func serviceError(_ refusal: ChatGPTPlanRefusal) -> ServiceError {
@@ -593,23 +877,32 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
         }
     }
 
-    private func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    /// Reads a response a line at a time; a dropped or cancelled connection
+    /// becomes the same errors a whole-body request had.
+    private func streamLines(
+        for request: URLRequest,
+        response: (HTTPURLResponse) async throws -> Void,
+        line: (String) async throws -> Bool
+    ) async throws {
         do {
-            return try await client.data(for: request)
+            try await client.lines(for: request, response: response, line: line)
         } catch is CancellationError {
             throw CancellationError()
         } catch let error as ServiceError {
             throw error
         } catch {
+            // URLSession reports a cancelled task as URLError.cancelled.
+            if Task.isCancelled { throw CancellationError() }
             throw ServiceError.temporarilyUnavailable
         }
+        try Task.checkCancellation()
     }
 
     /// - Parameter quick: a translation, as opposed to an explanation; 自动
     ///   reasoning is lighter for it.
     private func makeRequest(
         systemInstruction: String,
-        userContent: String,
+        conversation: [AIChatMessage],
         timeoutInterval: TimeInterval = 30,
         quick: Bool = true
     ) throws -> URLRequest {
@@ -617,64 +910,67 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
         request.httpMethod = "POST"
         request.timeoutInterval = timeoutInterval
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        // A service that does not stream answers with JSON, which is read too.
+        request.setValue("text/event-stream, application/json", forHTTPHeaderField: "Accept")
+        let turns = conversation.filter { $0.role != .system }
+        let messages: [[String: String]] = turns.map { turn in
+            ["role": turn.role.rawValue, "content": turn.text]
+        }
 
+        var body: [String: Any]
         switch configuration.style {
         case .responses:
             request.setValue(
                 "Bearer \(configuration.apiKey)",
                 forHTTPHeaderField: "Authorization"
             )
-            request.httpBody = try JSONEncoder().encode(
-                OpenAIResponsesRequest(
-                    model: configuration.model,
-                    instructions: systemInstruction,
-                    input: userContent
-                )
-            )
+            body = [
+                "model": configuration.model,
+                "instructions": systemInstruction,
+                "stream": true,
+            ]
+            // One question goes out as a plain string, as before streaming.
+            if turns.count == 1, let only = turns.first, only.role == .user {
+                body["input"] = only.text
+            } else {
+                body["input"] = messages
+            }
 
         case .chatCompletions:
             request.setValue(
                 "Bearer \(configuration.apiKey)",
                 forHTTPHeaderField: "Authorization"
             )
-            request.httpBody = try JSONEncoder().encode(
-                ChatCompletionsRequest(
-                    model: configuration.model,
-                    messages: [
-                        .init(role: "system", content: systemInstruction),
-                        .init(role: "user", content: userContent),
-                    ],
-                    stream: false
-                )
-            )
+            let system: [String: String] = ["role": "system", "content": systemInstruction]
+            body = [
+                "model": configuration.model,
+                "messages": [system] + messages,
+                "stream": true,
+            ]
 
         case .geminiNative:
             request.setValue(configuration.apiKey, forHTTPHeaderField: "x-goog-api-key")
-            request.httpBody = try JSONEncoder().encode(
-                GeminiRequest(
-                    systemInstruction: .init(
-                        parts: [.init(text: systemInstruction)]
-                    ),
-                    contents: [
-                        .init(role: "user", parts: [.init(text: userContent)])
-                    ]
-                )
-            )
+            let contents: [[String: Any]] = turns.map { turn in
+                let role = turn.role == .assistant ? "model" : "user"
+                let parts: [[String: String]] = [["text": turn.text]]
+                return ["role": role, "parts": parts]
+            }
+            let instruction: [String: Any] = ["parts": [["text": systemInstruction]]]
+            body = [
+                "systemInstruction": instruction,
+                "contents": contents,
+            ]
 
         case .anthropicMessages:
             request.setValue(configuration.apiKey, forHTTPHeaderField: "x-api-key")
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-            request.httpBody = try JSONEncoder().encode(
-                AnthropicRequest(
-                    model: configuration.model,
-                    maxTokens: AIRequestTuning.anthropicOutputTokens,
-                    system: systemInstruction,
-                    messages: [
-                        .init(role: "user", content: userContent)
-                    ]
-                )
-            )
+            body = [
+                "model": configuration.model,
+                "max_tokens": AIRequestTuning.anthropicOutputTokens,
+                "system": systemInstruction,
+                "messages": messages,
+                "stream": true,
+            ]
         }
 
         // Reasoning and output fields of the chosen model; none for most
@@ -686,21 +982,25 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
             reasoning: configuration.reasoning,
             quick: quick
         )
-        if !extra.isEmpty, let body = request.httpBody,
-           var object = try JSONSerialization.jsonObject(with: body) as? [String: Any] {
-            object.merge(extra) { _, added in added }
-            request.httpBody = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
-        }
+        body.merge(extra) { _, added in added }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         return request
     }
 
+    /// Gemini streams from `:streamGenerateContent` with `alt=sse`; the other
+    /// formats stream from their own address.
     private var requestURL: URL {
         guard configuration.style == .geminiNative else {
             return configuration.endpoint
         }
-        return configuration.endpoint
+        let url = configuration.endpoint
             .appendingPathComponent("models")
-            .appendingPathComponent("\(configuration.model):generateContent")
+            .appendingPathComponent("\(configuration.model):streamGenerateContent")
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        var items = (components.queryItems ?? []).filter { $0.name != "alt" }
+        items.append(URLQueryItem(name: "alt", value: "sse"))
+        components.queryItems = items
+        return components.url ?? url
     }
 
     private func decodedText(from data: Data) throws -> String {
@@ -728,6 +1028,8 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
                 let response = try JSONDecoder().decode(GeminiResponse.self, from: data)
                 return (response.candidates ?? [])
                     .flatMap { $0.content?.parts ?? [] }
+                    // A thinking model's thought summary is not the answer.
+                    .filter { $0.thought != true }
                     .compactMap(\.text)
                     .joined()
 
@@ -781,12 +1083,6 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
         }
     }
 
-    private struct OpenAIResponsesRequest: Encodable {
-        let model: String
-        let instructions: String
-        let input: String
-    }
-
     private struct OpenAIResponsesResponse: Decodable {
         let outputText: String?
         let output: [OutputItem]?
@@ -805,17 +1101,6 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
         }
     }
 
-    private struct ChatCompletionsRequest: Encodable {
-        let model: String
-        let messages: [Message]
-        let stream: Bool
-
-        struct Message: Encodable {
-            let role: String
-            let content: String
-        }
-    }
-
     private struct ChatCompletionsResponse: Decodable {
         let choices: [Choice]
 
@@ -825,25 +1110,6 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
 
         struct Message: Decodable {
             let content: String?
-        }
-    }
-
-    private struct GeminiRequest: Encodable {
-        let systemInstruction: Content
-        let contents: [Content]
-
-        struct Content: Encodable {
-            let role: String?
-            let parts: [Part]
-
-            init(role: String? = nil, parts: [Part]) {
-                self.role = role
-                self.parts = parts
-            }
-        }
-
-        struct Part: Encodable {
-            let text: String
         }
     }
 
@@ -860,25 +1126,7 @@ struct DirectAITranslationService: TranslationService, ContextExplanationService
 
         struct Part: Decodable {
             let text: String?
-        }
-    }
-
-    private struct AnthropicRequest: Encodable {
-        let model: String
-        let maxTokens: Int
-        let system: String
-        let messages: [Message]
-
-        enum CodingKeys: String, CodingKey {
-            case model
-            case maxTokens = "max_tokens"
-            case system
-            case messages
-        }
-
-        struct Message: Encodable {
-            let role: String
-            let content: String
+            let thought: Bool?
         }
     }
 

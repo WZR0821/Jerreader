@@ -6,14 +6,39 @@ import java.util.zip.CRC32
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
+/**
+ * Phrases a WebView's ICU splits apart (くだ|さい, おい|し|そうですね,
+ * すみません|で|した). iOS's ReaderServicesTests has the same paragraph, and
+ * expects the same word for every glyph.
+ */
+const val SHORT_TAP_PHRASES = "ご注意ください　おいしそうですね　悲しそうだ　帰ったらしい　本を読んじゃった　彼は振り返った　" +
+    "すみませんでした　よさそうだ　行くことにした　もしそうなら行く　雨が降り出した　そうですね"
+
 fun createSyntheticEpub(
     file: File,
     identifier: String = "jerreader-${System.nanoTime()}",
     // Paragraphs added after chapter one's fixed content, for tests that need
     // a chapter longer than one screen.
-    fillerParagraphs: Int = 0
+    fillerParagraphs: Int = 0,
+    // A Japanese sentence with two furigana readings, and one more set as a
+    // div paragraph as some books set them, for the ruby selection tests. Off
+    // by default so the other tests keep their exact layout.
+    rubySentence: Boolean = false,
+    // A paragraph of phrases ICU splits apart, for the short-tap test.
+    shortTapPhrases: Boolean = false,
+    // A sentence whose ruby gives each kanji its own reading, the first one
+    // longer than its kanji (玄 くろう, 人 と), so the line has blank room
+    // between the two kanji, for the long-press test. Off by default too.
+    rubyRoomSentence: Boolean = false
 ) {
     val filler = (1..fillerParagraphs).joinToString("") { "<p>这是让第一章超过一屏的填充段落，第 $it 段。</p>" }
+    val ruby = if (!rubySentence) "" else
+        "<p id=\"ruby-sentence\">彼は<ruby id=\"ruby-door\">扉<rt id=\"ruby-door-reading\">とびら</rt></ruby>を" +
+            "<ruby id=\"ruby-open\">開<rt id=\"ruby-open-reading\">あ</rt></ruby>けた。</p>" +
+            "<div id=\"ruby-div-sentence\">外は<ruby id=\"ruby-rain\">雨<rt>あめ</rt></ruby>だった。</div>"
+    val phrases = if (!shortTapPhrases) "" else "<p id=\"tap-phrases\">$SHORT_TAP_PHRASES</p>"
+    val rubyRoom = if (!rubyRoomSentence) "" else
+        "<p id=\"ruby-room-sentence\">彼は<ruby id=\"ruby-room\">玄<rt id=\"ruby-room-reading\">くろう</rt>人<rt>と</rt></ruby>だ。</p>"
     ZipOutputStream(file.outputStream().buffered()).use { archive ->
         val mimetype = "application/epub+zip".encodeToByteArray()
         val checksum = CRC32().apply { update(mimetype) }
@@ -98,7 +123,7 @@ fun createSyntheticEpub(
                     <h1>第一章</h1>
                     <p>这是不含版权内容的合成 EPUB 测试夹具。</p>
                     <p id="english-sentence">She <span id="english-word">went</span> home. Then she opened a book.</p>
-                    <p id="japanese-sentence">昨日ご飯を<span id="japanese-word">食べました</span>。</p>$filler
+                    <p id="japanese-sentence">昨日ご飯を<span id="japanese-word">食べました</span>。</p>$ruby$rubyRoom$phrases$filler
                   </body>
                 </html>
             """.trimIndent()

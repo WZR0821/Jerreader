@@ -1204,6 +1204,15 @@ final class ReaderServicesTests: XCTestCase {
         let other = EPUBReaderViewController.selectionPolicyScript(
             detachRubyAnnotations: false
         )
+        // The long-press word guard is the one part that listens for
+        // selections and puts a long press's word right
+        // (testLongPressWordGuardSelectsTheWordUnderTheFinger). It only
+        // watches: touches still reach the ruby base untouched.
+        let guardScript = EPUBReaderViewController.longPressWordGuardScript
+        XCTAssertFalse(guardScript.contains("touchstart"))
+        XCTAssertFalse(guardScript.contains("preventDefault"))
+        XCTAssertFalse(guardScript.contains("stopPropagation"))
+        XCTAssertTrue(guardScript.contains("passive: true"))
 
         for script in [japanese, other] {
             XCTAssertTrue(script.contains("-webkit-user-select:none"))
@@ -1211,10 +1220,13 @@ final class ReaderServicesTests: XCTestCase {
             XCTAssertTrue(script.contains("data-jerreader-rt"))
             XCTAssertTrue(script.contains("content: attr(data-jerreader-rt)"))
             XCTAssertTrue(script.contains("__jerreaderReaderSelectionBridgeVersion = 3"))
-            XCTAssertFalse(script.contains("touchstart"))
-            XCTAssertFalse(script.contains("selectionchange"))
-            XCTAssertFalse(script.contains("selection.addRange"))
-            XCTAssertFalse(script.contains("setTimeout"))
+            XCTAssertEqual(script.components(separatedBy: guardScript).count, 2, "the guard is installed once")
+            // Outside the guard the policy rewrites no range.
+            let policy = script.replacingOccurrences(of: guardScript, with: "")
+            XCTAssertFalse(policy.contains("touchstart"))
+            XCTAssertFalse(policy.contains("selectionchange"))
+            XCTAssertFalse(policy.contains("selection.addRange"))
+            XCTAssertFalse(policy.contains("setTimeout"))
         }
         XCTAssertTrue(japanese.contains("const bookPrefersDetachment = true"))
         XCTAssertTrue(other.contains("const bookPrefersDetachment = false"))
@@ -1347,6 +1359,94 @@ final class ReaderServicesTests: XCTestCase {
         )
     }
 
+    func testQuickSentenceHitReadsTextThatSitsOutsideEveryBlock() async throws {
+        let webView = WKWebView(
+            frame: CGRect(x: 0, y: 0, width: 390, height: 600)
+        )
+        let host = UIViewController()
+        host.view.frame = webView.bounds
+        host.view.backgroundColor = .white
+        host.view.addSubview(webView)
+        let windowScene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .first
+        )
+        let window = UIWindow(windowScene: windowScene)
+        window.frame = webView.bounds
+        window.windowLevel = .alert + 1
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        // Some EPUBs put text straight into body: a loose span, or bare text
+        // with no element of its own. A tap on either still reads it.
+        webView.loadHTMLString(
+            """
+            <!doctype html><html lang="en"><head>
+            <meta name="viewport" content="width=device-width">
+            </head><body style="margin:40px 24px;font-size:28px"><span id="loose">A loose line sits in the body.</span><br>Bare words follow it here.</body></html>
+            """,
+            baseURL: nil
+        )
+        for _ in 0 ..< 300 {
+            if try await webView.evaluateJavaScript(
+                "document.readyState === 'complete' && document.getElementById('loose') !== null"
+            ) as? Bool == true {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        window.layoutIfNeeded()
+        host.view.layoutIfNeeded()
+        webView.layoutIfNeeded()
+
+        let cases: [(node: String, text: String, wholeParagraph: Bool)] = [
+            ("document.getElementById('loose').firstChild", "A loose line sits in the body.", true),
+            ("document.body.lastChild", "Bare words follow it here.", false)
+        ]
+        for testCase in cases {
+            let rawPoint = try await webView.evaluateJavaScript(
+                """
+                (() => {
+                  const node = \(testCase.node);
+                  const range = document.createRange();
+                  range.setStart(node, 2);
+                  range.setEnd(node, 3);
+                  const rect = range.getBoundingClientRect();
+                  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+                })()
+                """
+            )
+            let pointJSON = try XCTUnwrap(rawPoint as? [String: Any])
+            let point = CGPoint(
+                x: CGFloat(truncating: try XCTUnwrap(pointJSON["x"] as? NSNumber)),
+                y: CGFloat(truncating: try XCTUnwrap(pointJSON["y"] as? NSNumber))
+            )
+            let rawHit = try await webView.evaluateJavaScript(
+                EPUBReaderViewController.quickSentenceHitScript(at: point)
+            )
+            let hit = try XCTUnwrap(
+                rawHit as? [String: Any],
+                "A tap on \(testCase.text) found no text."
+            )
+            let paragraph = try XCTUnwrap(hit["paragraph"] as? String)
+            let offset = try XCTUnwrap((hit["offset"] as? NSNumber)?.intValue)
+            if testCase.wholeParagraph {
+                XCTAssertEqual(paragraph, testCase.text)
+            }
+            let start = (paragraph as NSString).range(of: testCase.text).location
+            XCTAssertNotEqual(start, NSNotFound, paragraph)
+            XCTAssertTrue(
+                (2 ... 3).contains(offset - start),
+                "The tap on \(testCase.text) landed at \(offset - start)."
+            )
+        }
+    }
+
     func testQuickSentenceSpeechHighlightTracksDOMRangeAndExcludesRuby() async throws {
         let webView = WKWebView(
             frame: CGRect(x: 0, y: 0, width: 390, height: 600)
@@ -1468,12 +1568,45 @@ final class ReaderServicesTests: XCTestCase {
                 )?.children.length || 0,
                 hasRubyNode: state.nodes.some(
                   (node) => Boolean(node.parentElement?.closest('rt,rp'))
-                )
+                ),
+                // One marker must hold both the kanji and its reading: the
+                // furigana join the kanji's tile instead of a strip of their own.
+                ...(() => {
+                  const reading = document.getElementById('reading');
+                  const kanjiRange = document.createRange();
+                  kanjiRange.selectNodeContents(reading.closest('ruby').firstChild);
+                  const kana = reading.getBoundingClientRect();
+                  const kanji = kanjiRange.getBoundingClientRect();
+                  const holds = (rect, box) => {
+                    const x = (box.left + box.right) / 2;
+                    const y = (box.top + box.bottom) / 2;
+                    return x >= rect.left - 1 && x <= rect.right + 1 &&
+                      y >= rect.top - 1 && y <= rect.bottom + 1;
+                  };
+                  const joined = (id) => Array.from(
+                    document.getElementById(id)?.children || []
+                  ).some((marker) => {
+                    const rect = marker.getBoundingClientRect();
+                    return holds(rect, kana) && holds(rect, kanji);
+                  });
+                  return {
+                    baseRubyJoined: joined('jerreader-reader-quick-sentence-highlight'),
+                    spokenRubyJoined: joined('jerreader-reader-quick-sentence-speech-highlight')
+                  };
+                })()
               };
             })()
             """
         )
         let state = try XCTUnwrap(rawState as? [String: Any])
+        XCTAssertEqual(
+            state["baseRubyJoined"] as? Bool, true,
+            "The sentence highlight should paint 扉 and とびら as one tile"
+        )
+        XCTAssertEqual(
+            state["spokenRubyJoined"] as? Bool, true,
+            "The spoken-word highlight should paint 扉 and とびら as one tile"
+        )
         XCTAssertGreaterThan((state["baseMarkers"] as? NSNumber)?.intValue ?? 0, 0)
         XCTAssertTrue(
             (state["baseBackground"] as? String)?.contains("rgba") == true
@@ -1751,6 +1884,29 @@ final class ReaderServicesTests: XCTestCase {
             ),
             "Selection rects \(baseDecoded.localRects) must cover furigana \(readingRect)"
         )
+        // ...and cover it as one region: the kana join the tile of the kanji
+        // below them, so there is no gap and no second outline between 東京
+        // and とうきょう (shared/parity/selection_tiles.json).
+        let kanjiRect = try await Self.clientRect(
+            of: "document.querySelector('#text ruby').firstChild",
+            in: webView
+        )
+        XCTAssertEqual(
+            baseDecoded.localRects.count, 1,
+            "A one-line ruby selection should be one tile, got \(baseDecoded.localRects)"
+        )
+        XCTAssertTrue(
+            baseUnion.insetBy(dx: -1, dy: -1).contains(CGPoint(x: kanjiRect.midX, y: kanjiRect.midY)),
+            "Selection tile \(baseUnion) must cover the kanji \(kanjiRect)"
+        )
+        XCTAssertLessThanOrEqual(baseUnion.minY, readingRect.minY + 1)
+        XCTAssertGreaterThanOrEqual(baseUnion.maxY, kanjiRect.maxY - 1)
+        let baseFrame = bridge.display(snapshot: baseDecoded, from: webView)
+        XCTAssertNotNil(baseFrame)
+        XCTAssertEqual(
+            bridge.displayedRects.count, 1,
+            "The UIKit highlight must keep the ruby tile whole, got \(bridge.displayedRects)"
+        )
 
         _ = try await webView.evaluateJavaScript(
             """
@@ -1775,6 +1931,38 @@ final class ReaderServicesTests: XCTestCase {
             "私は東京と大学へ行く。"
         )
         XCTAssertEqual(multi["recoveredFromRuby"] as? Bool, false)
+        // Each reading joins the tile of its own kanji, and the tiles of a
+        // multi-ruby selection never overlap one another.
+        let multiDecoded = try XCTUnwrap(EPUBSelectionSnapshot(javaScriptValue: multiRaw))
+        for readingID in ["reading2", "reading3"] {
+            let kana = try await Self.clientRect(
+                of: "document.getElementById('\(readingID)')",
+                in: webView
+            )
+            let kanji = try await Self.clientRect(
+                of: "document.getElementById('\(readingID)').closest('ruby').firstChild",
+                in: webView
+            )
+            let tile = multiDecoded.localRects.first {
+                $0.insetBy(dx: -1, dy: -1).contains(CGPoint(x: kana.midX, y: kana.midY))
+            }
+            XCTAssertNotNil(tile, "No tile covers \(readingID) \(kana): \(multiDecoded.localRects)")
+            if let tile {
+                XCTAssertTrue(
+                    tile.insetBy(dx: -1, dy: -1).contains(CGPoint(x: kanji.midX, y: kanji.midY)),
+                    "\(readingID) and its kanji \(kanji) should share tile \(tile)"
+                )
+            }
+        }
+        for (index, tile) in multiDecoded.localRects.enumerated() {
+            for other in multiDecoded.localRects.dropFirst(index + 1) {
+                let overlap = tile.intersection(other)
+                XCTAssertTrue(
+                    overlap.isNull || overlap.width * overlap.height <= 1,
+                    "Tiles \(tile) and \(other) overlap"
+                )
+            }
+        }
 
         let verticalStateRaw = try await webView.evaluateJavaScript(
             """
@@ -1841,6 +2029,30 @@ final class ReaderServicesTests: XCTestCase {
             bridge.displayedRects.isEmpty,
             "Vertical selection highlight was dropped before painting"
         )
+        // In vertical text the reading sits beside the column; it still joins
+        // the kanji's tile, so 大学 and だいがく are one region.
+        let verticalKana = try await Self.clientRect(
+            of: "document.getElementById('reading3')",
+            in: webView
+        )
+        let verticalKanji = try await Self.clientRect(
+            of: "document.getElementById('reading3').closest('ruby').firstChild",
+            in: webView
+        )
+        XCTAssertEqual(
+            verticalDecoded.localRects.count, 1,
+            "A one-column ruby selection should be one tile, got \(verticalDecoded.localRects)"
+        )
+        if let tile = verticalDecoded.localRects.first {
+            XCTAssertTrue(
+                tile.insetBy(dx: -1, dy: -1).contains(
+                    CGPoint(x: verticalKana.midX, y: verticalKana.midY)
+                ) && tile.insetBy(dx: -1, dy: -1).contains(
+                    CGPoint(x: verticalKanji.midX, y: verticalKanji.midY)
+                ),
+                "Vertical tile \(tile) should hold the kanji \(verticalKanji) and kana \(verticalKana)"
+            )
+        }
 
         let snapshotConfiguration = WKSnapshotConfiguration()
         snapshotConfiguration.rect = webView.bounds
@@ -2151,6 +2363,325 @@ final class ReaderServicesTests: XCTestCase {
     /// Japanese book showed the translation with no highlight at all — while
     /// long-press, which paints through the UIKit bridge, kept working. The
     /// markers must land on the text in both writing modes.
+    /// A long press selects the word under the finger. WebKit takes the word
+    /// that ends at the caret under the finger, so a press on the first
+    /// quarter of 東 selected は. The guard in the selection policy script
+    /// selects the word that holds the pressed character instead, and puts
+    /// right WebKit's later picks of the same word while the finger is down
+    /// and as it lifts. Taps, drags, presses on punctuation and selections
+    /// that already hold the pressed character are left alone. A press in a
+    /// ruby's blank room (玄 くろう leaves room between 玄 and 人), or on the
+    /// part of its reading over that room, counts as the nearest kanji, 玄.
+    /// WebKit's pick can also stop at a ruby inside a word: a press on the
+    /// second half of 玄 picked 玄 alone. Such a pick grows to the word, 玄人,
+    /// which a press on 玄's first half selects; so does a pick of 見 alone,
+    /// or of the る after its ruby, in 見る.
+    func testLongPressWordGuardSelectsTheWordUnderTheFinger() async throws {
+        XCTAssertTrue(
+            EPUBReaderViewController.selectionPolicyScript(detachRubyAnnotations: true)
+                .contains("jerreaderInstallLongPressWordGuard();")
+        )
+        for writingMode in ["horizontal-tb", "vertical-rl"] {
+            let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 600))
+            let host = UIViewController()
+            host.view.frame = webView.bounds
+            host.view.backgroundColor = .white
+            host.view.addSubview(webView)
+            let windowScene = try XCTUnwrap(
+                UIApplication.shared.connectedScenes
+                    .compactMap { $0 as? UIWindowScene }
+                    .first
+            )
+            let window = UIWindow(windowScene: windowScene)
+            window.frame = webView.bounds
+            window.windowLevel = .alert + 1
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            defer {
+                window.isHidden = true
+                window.rootViewController = nil
+            }
+
+            webView.loadHTMLString(
+                """
+                <!doctype html><html lang="ja"><head>
+                <meta name="viewport" content="width=device-width">
+                <style>
+                  html { writing-mode: \(writingMode); }
+                  body { margin: 40px; font-size: 32px; line-height: 2.4; }
+                </style>
+                </head><body>
+                <p id="p">私は<ruby id="ruby">東京<rt id="reading">とうきょう</rt></ruby>へ行く。</p>
+                <p id="pm">彼は<ruby id="mono">玄<rt id="mono-reading">くろう</rt>人<rt>と</rt></ruby>だ。</p>
+                <p id="po">彼が<ruby id="okuri">見<rt>み</rt></ruby>る。</p>
+                </body></html>
+                """,
+                baseURL: nil
+            )
+            for _ in 0 ..< 200 {
+                if try await webView.evaluateJavaScript(
+                    "document.getElementById('reading') !== null"
+                ) as? Bool == true {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            window.layoutIfNeeded()
+            webView.layoutIfNeeded()
+            _ = try await webView.evaluateJavaScript(
+                EPUBReaderViewController.selectionPolicyScript(detachRubyAnnotations: true)
+            )
+            for _ in 0 ..< 100 {
+                if try await webView.evaluateJavaScript(
+                    "document.getElementById('reading').dataset.jerreaderRt !== undefined"
+                ) as? Bool == true {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            try await Task.sleep(for: .milliseconds(80))
+
+            // Where things are: the press point a quarter of the way into 東
+            // (the first half, where WebKit's caret sits before 東), and the
+            // ranges the cases select.
+            let layout = try await webView.evaluateJavaScript(
+                """
+                (() => {
+                  if (!globalThis.__jerreaderLongPressWordGuard) return 'no guard';
+                  const p = document.getElementById('p');
+                  const ruby = document.getElementById('ruby');
+                  const vertical = getComputedStyle(p).writingMode.startsWith('vertical');
+                  const glyph = (node, offset) => {
+                    const range = document.createRange();
+                    range.setStart(node, offset);
+                    range.setEnd(node, offset + 1);
+                    return Array.from(range.getClientRects())
+                      .find((rect) => rect.width > 0.5 && rect.height > 0.5);
+                  };
+                  const at = (node, offset, fraction) => {
+                    const rect = glyph(node, offset);
+                    return vertical
+                      ? { x: rect.left + rect.width / 2, y: rect.top + rect.height * fraction }
+                      : { x: rect.left + rect.width * fraction, y: rect.top + rect.height / 2 };
+                  };
+                  const pm = document.getElementById('pm');
+                  const mono = document.getElementById('mono');
+                  const po = document.getElementById('po');
+                  const okuri = document.getElementById('okuri');
+                  const t = {
+                    before: p.firstChild,
+                    base: ruby.firstChild,
+                    after: ruby.nextSibling,
+                    monoBefore: pm.firstChild,
+                    gen: mono.firstChild,
+                    nin: mono.childNodes[2],
+                    okuriBefore: po.firstChild,
+                    mi: okuri.firstChild,
+                    ru: okuri.nextSibling,
+                    vertical
+                  };
+                  t.select = (name) => {
+                    const ranges = {
+                      ha: [t.before, 1, t.before, 2],
+                      he: [t.after, 0, t.after, 1],
+                      tokyo: [t.base, 0, t.base, 2],
+                      iku: [t.after, 1, t.after, 3],
+                      ha2: [t.monoBefore, 1, t.monoBefore, 2],
+                      gen: [t.gen, 0, t.gen, 1],
+                      nin: [t.nin, 0, t.nin, 1],
+                      genElement: [mono, 0, mono, 1],
+                      ga: [t.okuriBefore, 1, t.okuriBefore, 2],
+                      mi: [t.mi, 0, t.mi, 1],
+                      ru: [t.ru, 0, t.ru, 1]
+                    };
+                    getSelection().setBaseAndExtent(...ranges[name]);
+                    return getSelection().toString();
+                  };
+                  t.at = at;
+                  t.press = at(t.base, 0, 0.25);
+                  // A quarter of the way from 玄 to 人, in the room くろう
+                  // leaves between them, on 玄's line and on the reading. A
+                  // WebKit that measures 玄 with that room has no gap between
+                  // the two, and the press goes on 玄's second half instead.
+                  const gen = glyph(t.gen, 0);
+                  const nin = glyph(t.nin, 0);
+                  const reading = document.getElementById('mono-reading').getBoundingClientRect();
+                  const genEnd = vertical ? gen.bottom : gen.right;
+                  const gap = (vertical ? nin.top : nin.left) - genEnd;
+                  const along = gap >= 2
+                    ? genEnd + gap / 4
+                    : (vertical ? gen.top + gen.height * 0.75 : gen.left + gen.width * 0.75);
+                  const line = vertical ? gen.left + gen.width / 2 : gen.top + gen.height / 2;
+                  const onReading = vertical ? reading.left + reading.width / 2 : reading.top + reading.height / 2;
+                  t.room = vertical ? { x: line, y: along } : { x: along, y: line };
+                  t.roomReading = vertical ? { x: onReading, y: along } : { x: along, y: onReading };
+                  t.finger = (type, point) => document.dispatchEvent(new PointerEvent(type, {
+                    pointerType: 'touch', isPrimary: true, pointerId: 7,
+                    clientX: point.x, clientY: point.y, bubbles: true
+                  }));
+                  globalThis.__guardTest = t;
+                  return t.base.data + '|' + t.before.data + '|' + t.after.data + '|' + vertical +
+                    '|' + t.gen.data + t.nin.data + '|' + t.okuriBefore.data + t.mi.data + t.ru.data;
+                })()
+                """
+            ) as? String
+            XCTAssertEqual(
+                layout,
+                "東京|私は|へ行く。|\(writingMode == "vertical-rl")|玄人|彼が見る。",
+                "\(writingMode): page set up"
+            )
+
+            // The guard on its own: each selection against a pressed character.
+            let directRaw = try await webView.evaluateJavaScript(
+                """
+                (() => {
+                  const t = globalThis.__guardTest;
+                  const guard = globalThis.__jerreaderLongPressWordGuard;
+                  const run = (selection, point) => {
+                    t.select(selection);
+                    const result = guard.correct(point.x, point.y);
+                    return result + ':' + getSelection().toString();
+                  };
+                  const rows = {
+                    before: run('ha', t.press),
+                    after: run('he', t.at(t.base, 1, 0.75)),
+                    holds: run('tokyo', t.press),
+                    apart: run('iku', t.press),
+                    punctuation: run('iku', t.at(t.after, 3, 0.5)),
+                    room: run('ha2', t.room),
+                    roomReading: run('ha2', t.roomReading),
+                    split: run('gen', t.at(t.gen, 0, 0.75)),
+                    splitSecond: run('nin', t.at(t.nin, 0, 0.75)),
+                    splitElement: run('genElement', t.at(t.gen, 0, 0.75)),
+                    plain: run('iku', t.at(t.after, 1, 0.5)),
+                    besideRuby: run('he', t.at(t.after, 0, 0.75)),
+                    wholeRuby: run('tokyo', t.at(t.base, 1, 0.75)),
+                    okuriFront: run('ga', t.at(t.mi, 0, 0.25)),
+                    okuri: run('mi', t.at(t.mi, 0, 0.75)),
+                    okuriKana: run('ru', t.at(t.ru, 0, 0.75))
+                  };
+                  getSelection().removeAllRanges();
+                  rows.empty = guard.correct(t.press.x, t.press.y);
+                  return rows;
+                })()
+                """
+            )
+            let direct = try XCTUnwrap(
+                directRaw as? [String: String],
+                "\(writingMode): the guard's cases ran"
+            )
+            // は ends right before the pressed 東: the word holding 東 is chosen.
+            let before = try XCTUnwrap(direct["before"])
+            XCTAssertTrue(before.hasPrefix("moved:"), "\(writingMode): \(before)")
+            XCTAssertTrue(before.contains("東") && !before.contains("は"), "\(writingMode): \(before)")
+            // へ starts right after the pressed 京 (Chromium's side of the
+            // boundary): the word holding 京 is chosen.
+            let after = try XCTUnwrap(direct["after"])
+            XCTAssertTrue(after.hasPrefix("moved:"), "\(writingMode): \(after)")
+            XCTAssertTrue(after.contains("京") && !after.contains("へ"), "\(writingMode): \(after)")
+            XCTAssertEqual(direct["holds"], "kept:東京", writingMode)
+            XCTAssertEqual(direct["apart"], "kept:行く", writingMode)
+            XCTAssertEqual(direct["punctuation"], "kept:行く", writingMode)
+            XCTAssertEqual(direct["empty"], "none", writingMode)
+            // は ends right before 玄, and the press is in the room after 玄
+            // (or on the reading over it): the word holding 玄 is chosen.
+            for name in ["room", "roomReading"] {
+                let row = try XCTUnwrap(direct[name], "\(writingMode): \(name)")
+                XCTAssertTrue(row.hasPrefix("moved:"), "\(writingMode) \(name): \(row)")
+                XCTAssertTrue(
+                    row.contains("玄") && !row.contains("は") && !row.contains("だ"),
+                    "\(writingMode) \(name): \(row)"
+                )
+            }
+            // A pick of 玄 alone or 人 alone (by text offsets, or by the ruby's
+            // child positions) holds the pressed character but stops at a
+            // ruby inside 玄人: it grows to that word.
+            for name in ["split", "splitSecond", "splitElement"] {
+                let row = try XCTUnwrap(direct[name], "\(writingMode): \(name)")
+                XCTAssertTrue(row.hasPrefix("moved:"), "\(writingMode) \(name): \(row)")
+                XCTAssertTrue(
+                    row.contains("玄") && row.contains("人") && !row.contains("は") && !row.contains("だ"),
+                    "\(writingMode) \(name): \(row)"
+                )
+            }
+            // A pick that already is the whole word stays, beside a ruby or not.
+            XCTAssertEqual(direct["plain"], "kept:行く", writingMode)
+            XCTAssertEqual(direct["besideRuby"], "kept:へ", writingMode)
+            XCTAssertEqual(direct["wholeRuby"], "kept:東京", writingMode)
+            // 見 has a reading and る does not. A press on the second half of
+            // 見, or on る, selects what a press on 見's first half selects.
+            let okuriFront = try XCTUnwrap(direct["okuriFront"])
+            XCTAssertTrue(okuriFront.hasPrefix("moved:"), "\(writingMode): \(okuriFront)")
+            let okuriWord = String(okuriFront.dropFirst("moved:".count))
+            XCTAssertTrue(
+                okuriWord.contains("見") && !okuriWord.contains("が") && !okuriWord.contains("。"),
+                "\(writingMode): \(okuriFront)"
+            )
+            let okuri = try XCTUnwrap(direct["okuri"])
+            XCTAssertTrue(okuri.hasSuffix(":" + okuriWord), "\(writingMode): \(okuri) against \(okuriFront)")
+            let okuriKana = try XCTUnwrap(direct["okuriKana"])
+            XCTAssertEqual(
+                okuriKana,
+                okuriWord.contains("る") ? "moved:" + okuriWord : "kept:る",
+                "\(writingMode): \(okuriKana) against \(okuriFront)"
+            )
+            XCTAssertFalse(
+                direct.values.joined().contains("とうきょう") || direct.values.joined().contains("くろう"),
+                "\(writingMode): the selections hold no reading"
+            )
+
+            func step(_ script: String) async throws -> String? {
+                try await webView.evaluateJavaScript(
+                    "(() => { const t = globalThis.__guardTest; \(script) })()"
+                ) as? String
+            }
+            func selected(after delay: Int = 150) async throws -> String? {
+                try await Task.sleep(for: .milliseconds(delay))
+                return try await step("return getSelection().toString();")
+            }
+
+            // A long press on the first quarter of 東: WebKit's pick of は is
+            // put right, again while the finger stays down and as it lifts,
+            // and left alone once the press is over.
+            _ = try await step("getSelection().removeAllRanges(); t.finger('pointerdown', t.press); return 'down';")
+            try await Task.sleep(for: .milliseconds(450))
+            _ = try await step("return t.select('ha');")
+            let first = try await selected()
+            XCTAssertTrue(
+                first?.contains("東") == true && first?.contains("は") == false,
+                "\(writingMode): a long press must select the word under the finger, got \(String(describing: first))"
+            )
+            _ = try await step("return t.select('ha');")
+            let held = try await selected()
+            XCTAssertEqual(held, first, "\(writingMode): WebKit's pick while the finger is down")
+            _ = try await step("t.finger('pointerup', t.press); return t.select('ha');")
+            let lifted = try await selected()
+            XCTAssertEqual(lifted, first, "\(writingMode): WebKit's pick as the finger lifts")
+            try await Task.sleep(for: .milliseconds(900))
+            _ = try await step("return t.select('ha');")
+            let later = try await selected()
+            XCTAssertEqual(later, "は", "\(writingMode): a selection after the press is left alone")
+
+            // A tap: the selection that follows it is not a long press's pick.
+            _ = try await step(
+                "getSelection().removeAllRanges(); t.finger('pointerdown', t.press); " +
+                    "t.finger('pointerup', t.press); return t.select('ha');"
+            )
+            let tapped = try await selected()
+            XCTAssertEqual(tapped, "は", "\(writingMode): a tap is left alone")
+
+            // A finger that moved is choosing text, not pressing a word.
+            _ = try await step(
+                "getSelection().removeAllRanges(); t.finger('pointerdown', t.press); " +
+                    "t.finger('pointermove', { x: t.press.x + 30, y: t.press.y + 30 }); return 'moved';"
+            )
+            try await Task.sleep(for: .milliseconds(450))
+            _ = try await step("t.finger('pointerup', t.press); return t.select('ha');")
+            let dragged = try await selected()
+            XCTAssertEqual(dragged, "は", "\(writingMode): a drag is left alone")
+        }
+    }
+
     func testQuickSentenceHighlightLandsOnTheTextInVerticalWriting() async throws {
         for writingMode in ["horizontal-tb", "vertical-rl"] {
             let webView = WKWebView(
@@ -3409,6 +3940,209 @@ final class ReaderServicesTests: XCTestCase {
         XCTAssertEqual(segment.text, "問題")
     }
 
+    func testShortTapWordSegmentationKeepsPrefixesAndParticlesOffTheWordBefore() throws {
+        // The tokenizer gives 昨日|お|茶|を and 昨日|ご飯|を: neither お, を nor
+        // ご飯 is okurigana of 昨日. A tap on a prefix, or on the kanji after
+        // it, means the word the prefix starts (お茶, お母さん).
+        // It keeps okurigana with its verb (行か|ない, 泳が|ない), so a lone が,
+        // に, で or と after a noun is a particle, and takes no inflection.
+        // Whichever glyph of a word is tapped, the word is the same.
+        let cases: [(paragraph: String, probe: String, word: String)] = [
+            ("昨日お茶を飲んだ。", "お", "お茶"),
+            ("昨日お茶を飲んだ。", "茶", "お茶"),
+            ("昨日お茶を飲んだ。", "を", "を"),
+            ("昨日お茶を飲んだ。", "飲", "飲んだ"),
+            ("昨日お茶を飲んだ。", "だ", "飲んだ"),
+            ("昨日ご飯を食べました。", "ご", "ご飯"),
+            ("昨日ご飯を食べました。", "を", "を"),
+            ("彼はパンを食べました。", "た", "食べました"),
+            ("お母さんが来た。", "お", "お母さん"),
+            ("お母さんが来た。", "母", "お母さん"),
+            ("彼は来た。", "来", "来た"),
+            ("本を読んでいた。", "読", "読んでいた"),
+            ("本を読んでいた。", "で", "読んでいた"),
+            ("食べませんでした。", "で", "食べませんでした"),
+            ("行かなかった。", "た", "行かなかった"),
+            ("死にたい。", "死", "死にたい"),
+            ("話していました。", "い", "話していました"),
+            ("日本は美しい。", "は", "は"),
+            ("それはない。", "は", "は"),
+            ("それはない。", "ない", "ない"),
+            ("猫が好きだ。", "が", "が"),
+            ("彼は来た。", "た", "来た"),
+            ("お金がない。", "お", "お金"),
+            ("時間がない。", "が", "が"),
+            ("時間がない。", "ない", "ない"),
+            ("家にいる。", "に", "に"),
+            ("学生である。", "で", "で"),
+            ("友達といる。", "と", "と"),
+            ("何かある。", "か", "何か"),
+            ("本かもしれない。", "か", "か"),
+            ("雨でした。", "た", "でした"),
+            ("夜だ。", "だ", "だ"),
+            ("行かない。", "か", "行かない"),
+            ("泳がない。", "が", "泳がない"),
+        ]
+        for item in cases {
+            let label = "\(item.paragraph) \(item.probe)"
+            let offset = (item.paragraph as NSString).range(of: item.probe).location
+            let segment = try XCTUnwrap(
+                ReaderWordSegmenter.word(
+                    in: item.paragraph,
+                    utf16Offset: offset,
+                    language: .japanese
+                ),
+                label
+            )
+            XCTAssertEqual(segment.text, item.word, label)
+        }
+    }
+
+    func testJapaneseWordBoundsReadWebViewStyleTokensAsWholeWords() {
+        // Android's WebView splits words more finely than NLTokenizer
+        // (食|べ|ま|した, 上|が|っ|た), and its short tap uses the same rules:
+        // any token of a word gives the whole word, and particles stay apart.
+        let cases: [(tokens: String, words: String)] = [
+            ("彼|は|パン|を|食|べ|ま|した", "彼|は|パン|を|食べました|食べました|食べました|食べました"),
+            ("食|べ|ま|せん|で|した", "食べませんでした|食べませんでした|食べませんでした|食べませんでした|食べませんでした|食べませんでした"),
+            ("上|が|っ|た", "上がった|上がった|上がった|上がった"),
+            ("美|しか|っ|た", "美しかった|美しかった|美しかった|美しかった"),
+            ("下|が|ら|ない", "下がらない|下がらない|下がらない|下がらない"),
+            ("本|を|読|んで|い|た", "本|を|読んでいた|読んでいた|読んでいた|読んでいた"),
+            ("時間|が|ない", "時間|が|ない"),
+            ("雨|で|した", "雨|でした|でした"),
+            ("死|に|たい", "死にたい|死にたい|死にたい"),
+            ("行|か|なか|っ|た", "行かなかった|行かなかった|行かなかった|行かなかった|行かなかった"),
+            ("昨日|ご|飯|を", "昨日|ご飯|ご飯|を"),
+            ("走|って|帰|っ|た", "走って|走って|帰った|帰った|帰った"),
+            ("話|し|てい|ま|した", "話していました|話していました|話していました|話していました|話していました"),
+        ]
+        for item in cases {
+            let tokens = item.tokens.split(separator: "|").map(String.init)
+            let words = item.words.split(separator: "|").map(String.init)
+            XCTAssertEqual(tokens.count, words.count, item.tokens)
+            let paragraph = tokens.joined()
+            var ranges: [Range<String.Index>] = []
+            var lower = paragraph.startIndex
+            for token in tokens {
+                let upper = paragraph.index(lower, offsetBy: token.count)
+                ranges.append(lower ..< upper)
+                lower = upper
+            }
+            for (tapped, word) in words.enumerated() {
+                let bounds = ReaderWordSegmenter.japaneseWordBounds(in: paragraph, tokens: ranges, tapped: tapped)
+                XCTAssertEqual(String(paragraph[bounds]), word, "\(item.tokens) \(tokens[tapped])")
+            }
+        }
+    }
+
+    func testRepairedJapaneseTokensGiveWholeWordsFromEitherTokenizer() {
+        // 2.1.0: the words NLTokenizer (iOS) and ICU (Android's WebView, words
+        // only) give for these phrases, and the word each glyph gives once
+        // the tokens are repaired. Android runs the same rules in JavaScript.
+        let cases: [(tokens: String, words: String)] = [
+            ("ご注意|くだ|さい",
+             "ご注意|ご注意|ご注意|ください|ください|ください|ください"),
+            ("ご|注意|ください",
+             "ご注意|ご注意|ご注意|ください|ください|ください|ください"),
+            ("おい|し|そうですね",
+             "おいし|おいし|おいし|そう|そう|です|です|ね"),
+            ("おいし|そう|です|ね",
+             "おいし|おいし|おいし|そう|そう|です|です|ね"),
+            ("悲|し|そうだ",
+             "悲し|悲し|そう|そう|だ"),
+            ("帰|ったらしい",
+             "帰った|帰った|帰った|らしい|らしい|らしい"),
+            ("帰っ|た|らしい",
+             "帰った|帰った|帰った|らしい|らしい|らしい"),
+            ("本|を|読|んじゃ|っ|た",
+             "本|を|読ん|読ん|じゃった|じゃった|じゃった|じゃった"),
+            ("本|を|読ん|じゃっ|た",
+             "本|を|読ん|読ん|じゃった|じゃった|じゃった|じゃった"),
+            ("彼|は|振り|返|っ|た",
+             "彼|は|振り返った|振り返った|振り返った|振り返った|振り返った"),
+            ("彼|は|振り返っ|た",
+             "彼|は|振り返った|振り返った|振り返った|振り返った|振り返った"),
+            ("立ち|止まり|振り|返|っ|た",
+             "立ち止まり|立ち止まり|立ち止まり|立ち止まり|立ち止まり|振り返った|振り返った|振り返った|振り返った|振り返った"),
+            ("すみません|で|した",
+             "すみませんでした|すみませんでした|すみませんでした|すみませんでした|すみませんでした|すみませんでした|すみませんでした|すみませんでした"),
+            ("すみ|ませ|ん|でし|た",
+             "すみませんでした|すみませんでした|すみませんでした|すみませんでした|すみませんでした|すみませんでした|すみませんでした|すみませんでした"),
+            ("ご|ちそう|さま",
+             "ごちそうさま|ごちそうさま|ごちそうさま|ごちそうさま|ごちそうさま|ごちそうさま"),
+            ("お|めでとう",
+             "おめでとう|おめでとう|おめでとう|おめでとう|おめでとう"),
+            ("そうですね",
+             "そう|そう|です|です|ね"),
+            ("よ|さ|そうだ",
+             "よさ|よさ|そう|そう|だ"),
+            ("行く|ことに|した",
+             "行く|行く|こと|こと|に|した|した"),
+            ("行く|こと|に|し|た",
+             "行く|行く|こと|こと|に|した|した"),
+            ("も|しそう|なら",
+             "もし|もし|そう|そう|なら|なら"),
+            ("雨|が|降り|出|した",
+             "雨|が|降り出した|降り出した|降り出した|降り出した|降り出した"),
+            ("雨|が|降り|出し|た",
+             "雨|が|降り出した|降り出した|降り出した|降り出した|降り出した"),
+        ]
+        for item in cases {
+            let tokens = item.tokens.split(separator: "|").map(String.init)
+            let words = item.words.split(separator: "|").map(String.init)
+            let paragraph = tokens.joined()
+            guard paragraph.count == words.count else {
+                XCTFail("\(item.tokens): \(words.count) words for \(paragraph.count) glyphs"); continue
+            }
+            var ranges: [Range<String.Index>] = []
+            var lower = paragraph.startIndex
+            for token in tokens {
+                let upper = paragraph.index(lower, offsetBy: token.count)
+                ranges.append(lower ..< upper)
+                lower = upper
+            }
+            let repaired = ReaderWordSegmenter.repairedJapaneseTokens(in: paragraph, tokens: ranges)
+            for (offset, glyph) in paragraph.indices.enumerated() {
+                guard let tapped = repaired.firstIndex(where: { $0.contains(glyph) }) else {
+                    XCTFail("\(item.tokens): no token holds glyph \(offset)"); continue
+                }
+                let bounds = ReaderWordSegmenter.japaneseWordBounds(in: paragraph, tokens: repaired, tapped: tapped)
+                XCTAssertEqual(String(paragraph[bounds]), words[offset], "\(item.tokens) glyph \(offset)")
+            }
+        }
+    }
+
+    func testShortTapGivesAndroidsWordForEveryGlyphOfTheSharedParagraph() throws {
+        // 2.1.0: Android's ReaderWordLookupTest taps every glyph of this
+        // paragraph in a WebView and expects these same words.
+        let paragraph = "ご注意ください　おいしそうですね　悲しそうだ　帰ったらしい　本を読んじゃった　彼は振り返った　"
+            + "すみませんでした　よさそうだ　行くことにした　もしそうなら行く　雨が降り出した　そうですね"
+        let expected = [
+            "ご注意|ご注意|ご注意|ください|ください|ください|ください",
+            "おいし|おいし|おいし|そう|そう|です|です|ね",
+            "悲し|悲し|そう|そう|だ",
+            "帰った|帰った|帰った|らしい|らしい|らしい",
+            "本|を|読ん|読ん|じゃった|じゃった|じゃった|じゃった",
+            "彼|は|振り返った|振り返った|振り返った|振り返った|振り返った",
+            "すみませんでした|すみませんでした|すみませんでした|すみませんでした|すみませんでした|すみませんでした|すみませんでした|すみませんでした",
+            "よさ|よさ|そう|そう|だ",
+            "行く|行く|こと|こと|に|した|した",
+            "もし|もし|そう|そう|なら|なら|行く|行く",
+            "雨|が|降り出した|降り出した|降り出した|降り出した|降り出した",
+            "そう|そう|です|です|ね",
+        ].flatMap { $0.split(separator: "|").map(String.init) }
+        var picked: [String] = []
+        for (offset, glyph) in paragraph.utf16.enumerated() where glyph != 0x3000 {
+            let segment = try XCTUnwrap(
+                ReaderWordSegmenter.word(in: paragraph, utf16Offset: offset, language: .japanese),
+                "glyph \(offset)"
+            )
+            picked.append(segment.text)
+        }
+        XCTAssertEqual(picked, expected)
+    }
+
     func testQuickSentenceSegmentationKeepsEnglishTitleWithFirstSentence() throws {
         let paragraph = "Dr. Smith looked up. The evening sky was clear."
         let segment = try XCTUnwrap(
@@ -3533,6 +4267,132 @@ final class ReaderServicesTests: XCTestCase {
             segment.utf16Range,
             0 ..< ("The evening light\nfaded behind the hills." as NSString).length
         )
+    }
+
+    /// The same English tap targets as Android's `ReaderEnglishSentenceTest`
+    /// (2.1.0): titles, initials, ellipses and sentences inside long
+    /// quotations. Each case taps the target word and the first, middle and
+    /// last character of the expected sentence. The two long passages are
+    /// public-domain text from Project Gutenberg (Stevenson; Wilde), shortened.
+    func testEnglishSentenceTapTargetsMatchAndroid() {
+        let enfield = [
+            "“I see you feel as I do,” said Mr. Enfield. “Yes, it’s a bad story. For my man ",
+            "was a fellow that nobody could have to do with, a really damnable man; and the ",
+            "person that drew the cheque is the very pink of the proprieties, celebrated ",
+            "too, and (what makes it worse) one of your fellows who do what they call good. ",
+            "Blackmail, I suppose.”"
+        ].joined()
+        let wotton = [
+            "“Not send it anywhere? My dear fellow, why? Have you any reason? What odd chaps ",
+            "you painters are! You do anything in the world to gain a reputation. As soon as ",
+            "you have one, you seem to want to throw it away. It is silly of you, for there ",
+            "is only one thing in the world worse than being talked about, and that is not ",
+            "being talked about. A portrait like this would set you far above all the young ",
+            "men in England.”"
+        ].joined()
+        let lastClosingQuote = "<last closing quote>"
+        let cases: [(text: String, target: String, expected: String)] = [
+            // titleBeforeANameDoesNotEndTheSentence
+            ("Mr. Bennet was odd. His wife was not.", "Bennet",
+             "Mr. Bennet was odd."),
+            // sentenceAfterATitledNameStartsAfterItsPeriod
+            ("Mr. Bennet was odd. His wife was not.", "wife",
+             "His wife was not."),
+            // pronounIBeforeAPeriodStillEndsTheSentence
+            ("I said so, and so did I. He laughed.", "laughed",
+             "He laughed."),
+            // pronounIBeforeAPeriodKeepsItsOwnSentence
+            ("I said so, and so did I. He laughed.", "said",
+             "I said so, and so did I."),
+            // initialismEndsTheSentenceBeforeAClearStarter
+            ("He lives in the U.S. He moved there.", "moved",
+             "He moved there."),
+            // initialismInsideASentenceKeepsGoing
+            ("The U.S. Army arrived. It was late.", "Army",
+             "The U.S. Army arrived."),
+            // lowerCaseAfterAPeriodContinues
+            ("It was 5 p.m. and dark. Nobody came.", "dark",
+             "It was 5 p.m. and dark."),
+            // ellipsisBeforeALowerCaseWordContinues
+            ("Wait... what is it? Nothing.", "what",
+             "Wait... what is it?"),
+            // ellipsisBeforeACapitalStartsANewSentence
+            ("Wait... What is it?", "What",
+             "What is it?"),
+            // reportingClauseStaysWithTheQuoteBeforeIt
+            ("“Yes,” Holmes said. “I think so.”", "Holmes",
+             "“Yes,” Holmes said."),
+            // quotedSentenceKeepsItsClosingQuote
+            ("“Yes,” Holmes said. “I think so.”", "think",
+             "“I think so.”"),
+            // sentenceInsideAQuoteEndsWithItsReportingClause
+            ("“You go away. It is silly of you,” he said. Then.", "silly",
+             "It is silly of you,” he said."),
+            // tapOnAClosingQuoteBelongsToTheSentenceItCloses
+            ("“You go away. It is silly.” Then he left.", lastClosingQuote,
+             "It is silly.”"),
+            // numberAbbreviationKeepsItsValue
+            ("No. 5 was missing. We searched every room.", "missing",
+             "No. 5 was missing."),
+            // numberAbbreviationBeforeAWordStillEnds
+            ("He said no. Then he left.", "Then",
+             "Then he left."),
+            // severalTitlesInOneSentence
+            ("Dr. Jekyll met Mrs. Poole on St. James Street.", "Poole",
+             "Dr. Jekyll met Mrs. Poole on St. James Street."),
+            // titleAfterADashKeepsTheSentence
+            ("A perfect misanthropist’s Heaven—and Mr. Heathcliff and I are a pair.", "pair",
+             "A perfect misanthropist’s Heaven—and Mr. Heathcliff and I are a pair."),
+            // longQuoteOpeningSentenceEndsAtItsReportingClause
+            (enfield, "feel",
+             "“I see you feel as I do,” said Mr. Enfield."),
+            // longQuoteFirstSpokenSentence
+            (enfield, "bad story",
+             "“Yes, it’s a bad story."),
+            // longQuoteMiddleSentenceIsSelectedAlone
+            (enfield, "damnable",
+             [
+                 "For my man was a fellow that nobody could have to do with, a really damnable ",
+                 "man; and the person that drew the cheque is the very pink of the proprieties, ",
+                 "celebrated too, and (what makes it worse) one of your fellows who do what they ",
+                 "call good."
+             ].joined()),
+            // longQuoteLastSentenceKeepsTheClosingQuote
+            (enfield, "suppose",
+             "Blackmail, I suppose.”"),
+            // longQuoteQuestionIsSelectedAlone
+            (wotton, "why",
+             "My dear fellow, why?"),
+            // longQuoteExclamationIsSelectedAlone
+            (wotton, "painters",
+             "What odd chaps you painters are!"),
+            // longQuoteLongSentenceIsSelectedAlone
+            (wotton, "silly",
+             [
+                 "It is silly of you, for there is only one thing in the world worse than being ",
+                 "talked about, and that is not being talked about."
+             ].joined()),
+        ]
+        for (text, target, expected) in cases {
+            let nsText = text as NSString
+            let start = nsText.range(of: expected).location
+            let targetOffset = target == lastClosingQuote
+                ? nsText.range(of: "”", options: .backwards).location
+                : nsText.range(of: target).location
+            guard start != NSNotFound, targetOffset != NSNotFound else {
+                XCTFail("case text is inconsistent: \(expected)")
+                continue
+            }
+            let length = (expected as NSString).length
+            for offset in [targetOffset, start, start + length / 2, start + length - 1] {
+                let segment = ReaderSentenceSegmenter.sentence(
+                    in: text,
+                    utf16Offset: offset,
+                    language: .english
+                )
+                XCTAssertEqual(segment?.text, expected, "tap at \(offset) in: \(text.prefix(40))")
+            }
+        }
     }
 
     func testQuickSentenceSegmentationSupportsJapaneseAndChinese() throws {
@@ -5996,6 +6856,39 @@ final class ReaderServicesTests: XCTestCase {
 
     private func selection(_ text: String) -> ReaderSelectionPayload {
         ReaderSelectionPayload(text: text, locatorJSON: nil, frame: nil)
+    }
+
+    /// The client rect of a DOM node: an element's own box, or a text node's
+    /// box measured through a Range. `nodeExpression` is evaluated in the page.
+    /// (Detached ruby readings have no text nodes, so an `rt` must be
+    /// measured as an element.)
+    private static func clientRect(
+        of nodeExpression: String,
+        in webView: WKWebView
+    ) async throws -> CGRect {
+        let raw = try await webView.evaluateJavaScript(
+            """
+            (() => {
+              const node = \(nodeExpression);
+              let rect;
+              if (node.nodeType === Node.ELEMENT_NODE) {
+                rect = node.getBoundingClientRect();
+              } else {
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                rect = range.getBoundingClientRect();
+              }
+              return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+            })()
+            """
+        )
+        let json = try XCTUnwrap(raw as? [String: Any])
+        return CGRect(
+            x: CGFloat(truncating: try XCTUnwrap(json["x"] as? NSNumber)),
+            y: CGFloat(truncating: try XCTUnwrap(json["y"] as? NSNumber)),
+            width: CGFloat(truncating: try XCTUnwrap(json["width"] as? NSNumber)),
+            height: CGFloat(truncating: try XCTUnwrap(json["height"] as? NSNumber))
+        )
     }
 
     private func makeResult(

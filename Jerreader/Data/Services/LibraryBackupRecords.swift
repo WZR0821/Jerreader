@@ -256,6 +256,7 @@ extension LibraryBackupService {
             ReaderInterfaceDefaults.immersiveReadingKey,
             ReaderInterfaceDefaults.layoutModeKey,
             ReaderInterfaceDefaults.verticalMarginsKey,
+            ReaderInterfaceDefaults.aiActionBarHiddenKey,
             ReaderTextOrientationDefaults.storageKey,
             JerreaderThemePreferences.storageKey,
             JerreaderThemePreferences.appearanceModeKey,

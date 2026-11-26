@@ -277,7 +277,9 @@ fun ReaderBottomChrome(
     transparency: Float = .15f,
     bottomInset: Dp = 0.dp,
     onInteraction: () -> Unit = {},
-    onScrubbingChanged: (Boolean) -> Unit = {}
+    onScrubbingChanged: (Boolean) -> Unit = {},
+    /** 本章还剩约 N 分钟 under the progress row (2.1.0 §9); null takes no room. */
+    chapterEstimate: String? = null
 ) {
     var scrubbedProgress by remember { mutableStateOf<Double?>(null) }
     var scrubStart by remember { mutableStateOf<Double?>(null) }
@@ -354,6 +356,19 @@ fun ReaderBottomChrome(
                         modifier = Modifier.weight(1f)
                     )
                     ReaderProgressPercent(percent = percent, rolls = scrubbing == null)
+                }
+                chapterEstimate?.takeIf(String::isNotBlank)?.let { estimate ->
+                    Text(
+                        text = estimate,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 6.dp, end = 6.dp, bottom = 2.dp)
+                            .testTag("reader_chapter_estimate"),
+                        style = JerreaderLearningType.caption,
+                        color = jerreaderPalette.secondaryText,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
             Row(modifier = Modifier.fillMaxWidth()) {

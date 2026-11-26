@@ -1010,6 +1010,8 @@ struct TranslationSettingsDetailView: View {
     @Binding var quickSentenceEnabled: Bool
     @Binding var disablesTapPageTurnsDuringQuickTranslation: Bool
     let showsQuickSentenceToggle: Bool
+    /// The reader's own 翻译与 AI also has 翻译卡片显示 AI 按钮 (2.1.0 §7).
+    var showsAIActionBarToggle = false
 
     var body: some View {
         Form {
@@ -1018,7 +1020,8 @@ struct TranslationSettingsDetailView: View {
                 quickSentenceEnabled: $quickSentenceEnabled,
                 disablesTapPageTurnsDuringQuickTranslation:
                     $disablesTapPageTurnsDuringQuickTranslation,
-                showsQuickSentenceToggle: showsQuickSentenceToggle
+                showsQuickSentenceToggle: showsQuickSentenceToggle,
+                showsAIActionBarToggle: showsAIActionBarToggle
             )
             Section {
                 NavigationLink("离线资源") { OfflineDictionaryView() }
@@ -1088,6 +1091,9 @@ struct TranslationPreferencesSection: View {
     @Binding var quickSentenceEnabled: Bool
     @Binding var disablesTapPageTurnsDuringQuickTranslation: Bool
     let showsQuickSentenceToggle: Bool
+    var showsAIActionBarToggle = false
+    @AppStorage(ReaderInterfaceDefaults.aiActionBarHiddenKey)
+    private var aiActionBarHidden = false
     @State private var connectionTestState: TranslationConnectionTestState = .idle
     @State private var connectionTestTask: Task<Void, Never>?
 
@@ -1169,6 +1175,17 @@ struct TranslationPreferencesSection: View {
             Text(settings.displayMode.detail)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            if showsAIActionBarToggle {
+                Toggle(
+                    "翻译卡片显示 AI 按钮",
+                    isOn: Binding(
+                        get: { !aiActionBarHidden },
+                        set: { aiActionBarHidden = !$0 }
+                    )
+                )
+                .accessibilityIdentifier("reader-ai-action-bar-toggle")
+            }
 
             Toggle("翻译完成时触感反馈", isOn: $settings.translationHapticsEnabled)
 

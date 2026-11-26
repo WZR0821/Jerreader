@@ -450,7 +450,8 @@ struct ReaderSettingsView: View {
                     quickSentenceEnabled: quickSentenceTranslationBinding,
                     disablesTapPageTurnsDuringQuickTranslation:
                         disablesTapPageTurnsDuringQuickTranslationBinding,
-                    showsQuickSentenceToggle: false
+                    showsQuickSentenceToggle: false,
+                    showsAIActionBarToggle: true
                 )
             } label: {
                 HStack(spacing: JerreaderSpacing.sm) {

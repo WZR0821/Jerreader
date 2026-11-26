@@ -75,6 +75,21 @@ enum LexicalLookupLanguageResolver {
     }
 }
 
+/// The single word a translation card has already counted, with the card's
+/// 「第 N 次查 · 上次 MM-dd」 (2.1.0 §8): the lookup page opened from that
+/// card shows it and does not count the word a second time. `key` is the
+/// lookup key the card counted it under, the dictionary's lemma when known.
+struct CardCountedLookup: Equatable, Sendable {
+    let key: String
+    let hint: String?
+
+    /// Whether `explanation` is this word: the lookup page's answer has the
+    /// key the card counted.
+    func matches(_ explanation: WordExplanation) -> Bool {
+        WordLookupRecord.makeLookupKey(for: explanation) == key
+    }
+}
+
 @MainActor
 struct LookupView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -101,6 +116,12 @@ struct LookupView: View {
     @State private var referenceDictionaryTerm: ReferenceDictionaryTerm?
     @State private var isLoadingAIAnalysis = false
     @State private var aiAnalysisTask: Task<Void, Never>?
+    /// 「第 N 次查 · 上次 MM-dd」 of the record it was worked out for (2.1.0 §8).
+    @State private var lookupHintText: String?
+    @State private var lookupHintRecordID: UUID?
+    /// The word the opening card already counted; used up by the first
+    /// lookup of it here.
+    @State private var cardCountedLookup: CardCountedLookup?
     @FocusState private var focusedField: LookupField?
 
     private let sourceBookID: UUID?
@@ -118,9 +139,11 @@ struct LookupView: View {
         translationSettings: TranslationSettingsStore,
         lookupService: any LexicalLookupService = OfflineFirstLexicalLookupService(),
         initialWord: String = "", initialContext: String = "",
-        language: LanguageCode? = nil, sourceBookID: UUID? = nil, sourceBookTitle: String? = nil
+        language: LanguageCode? = nil, sourceBookID: UUID? = nil, sourceBookTitle: String? = nil,
+        cardCountedLookup: CardCountedLookup? = nil
     ) {
         _translationSettings = ObservedObject(wrappedValue: translationSettings)
+        _cardCountedLookup = State(initialValue: cardCountedLookup)
         self.lookupService = lookupService
         self.sourceBookID = sourceBookID
         self.sourceBookTitle = sourceBookTitle
@@ -180,7 +203,8 @@ struct LookupView: View {
                                 readerResult(result)
                             } else {
                                 WordRecordCard(record: result, onSpeak: { speak(result) },
-                                    onCopy: { copy(result) }, onToggleFavorite: { toggleFavorite(result) })
+                                    onCopy: { copy(result) }, onToggleFavorite: { toggleFavorite(result) },
+                                    lookupHint: lookupHint(for: result))
                             }
                             aiAnalysisControls(for: result)
                             if opensInReader, let analysis = result.aiAnalysis {
@@ -330,6 +354,12 @@ struct LookupView: View {
             Text(record.surfaceForm)
                 .font(.system(.title, design: .serif, weight: .bold))
                 .textSelection(.enabled)
+            if let hint = lookupHint(for: record) {
+                Text(hint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("lookup-count-hint")
+            }
             Text([record.lemma.map { "词典形：" + $0 }, record.reading, record.partOfSpeech]
                 .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
                 .font(.subheadline).foregroundStyle(.secondary)
@@ -355,17 +385,26 @@ struct LookupView: View {
             .jerreaderPaperCard(padding: JerreaderSpacing.md, radius: JerreaderRadius.card)
     }
 
-    /// 复制词条 as a tinted capsule; 加入生词本 as the filled one, and once the
-    /// word is saved, 取消收藏 as a tinted one.
+    /// 复制词条 as a tinted capsule; 加入生词本 tinted too until the word's
+    /// third lookup, then the filled one (2.1.0 §8); once the word is saved,
+    /// 取消收藏 as a tinted one.
     @ViewBuilder private func readerActions(_ record: WordLookupRecord) -> some View {
         Button("复制词条") { copy(record) }.buttonStyle(JerreaderTintedButtonStyle())
         if record.isFavorite {
             Button("取消收藏") { toggleFavorite(record) }
                 .buttonStyle(JerreaderTintedButtonStyle())
-        } else {
+        } else if LookupHintPolicy.addToVocabularyIsPrimary(lookupCount: record.lookupCount) {
             Button("加入生词本") { toggleFavorite(record) }
                 .buttonStyle(JerreaderPrimaryButtonStyle(height: 44, fullWidth: false))
+        } else {
+            Button("加入生词本") { toggleFavorite(record) }
+                .buttonStyle(JerreaderTintedButtonStyle())
         }
+    }
+
+    /// The count line of the record just looked up; nothing for an older result.
+    private func lookupHint(for record: WordLookupRecord) -> String? {
+        lookupHintRecordID == record.id ? lookupHintText : nil
     }
 
     private func recordStatusText(_ record: WordLookupRecord) -> String {
@@ -659,7 +698,30 @@ struct LookupView: View {
                 guard requestID == currentRequestID else { return }
 
                 transientResult = WordLookupRecord(explanation: explanation, sourceBookID: sourceBookID, sourceBookTitle: sourceBookTitle)
-                let savedRecord = try WordLookupStore.record(explanation, sourceBookID: sourceBookID, sourceBookTitle: sourceBookTitle, in: modelContext)
+                // Read before `record` moves the last lookup to now.
+                let previous = WordLookupStore.previousLookup(for: explanation, in: modelContext)
+                let savedRecord: WordLookupRecord
+                var counted = true
+                if let cardLookup = cardCountedLookup, cardLookup.matches(explanation) {
+                    // The card counted this word already (2.1.0 §8): keep
+                    // its count and its 上次, and show the card's line.
+                    cardCountedLookup = nil
+                    let saved = try WordLookupStore.recordWithoutCounting(
+                        explanation, sourceBookID: sourceBookID, sourceBookTitle: sourceBookTitle, in: modelContext
+                    )
+                    savedRecord = saved.record
+                    counted = saved.counted
+                    if !counted { lookupHintText = cardLookup.hint }
+                } else {
+                    savedRecord = try WordLookupStore.record(explanation, sourceBookID: sourceBookID, sourceBookTitle: sourceBookTitle, in: modelContext)
+                }
+                lookupHintRecordID = savedRecord.id
+                if counted {
+                    lookupHintText = LookupHintPolicy.hint(
+                        lookupCount: savedRecord.lookupCount,
+                        previousLookupAt: previous?.date
+                    )
+                }
                 if shouldAddToVocabulary, !savedRecord.isFavorite {
                     try WordLookupStore.setFavorite(true, for: savedRecord, in: modelContext)
                 }
@@ -709,7 +771,8 @@ struct LookupView: View {
         if translationSettings.provider == .backendProxy, let configuration = translationSettings.backendConfiguration {
             return BackendTranslationService(configuration: configuration)
         }
-        if let configuration = translationSettings.directAPIConfiguration {
+        // An AI feature: a signed-in plan counts (2.1.0 §7).
+        if let configuration = translationSettings.aiFeatureConfiguration {
             return DirectAITranslationService(configuration: configuration)
         }
         if let configuration = translationSettings.backendConfiguration {

@@ -126,6 +126,43 @@ final class ReadingAnnotationStore {
         return record
     }
 
+    /// 存为笔记 of the translation card (2.1.0 §6): adds to the sentence's
+    /// note instead of overwriting it. An existing highlight keeps its color
+    /// and gets a blank line, 「【title】」 and `body` after its note; without
+    /// one, a highlight in `color` is made with this as its note.
+    @discardableResult
+    func appendNote(
+        book: BookRecord,
+        locatorJSON: String,
+        anchorJSON: String?,
+        selectedText: String,
+        title: String,
+        body: String,
+        color: ReadingAnnotationColor,
+        chapterTitle: String,
+        progress: Double
+    ) throws -> ReadingAnnotationRecord {
+        let existing = annotation(
+            bookID: book.id,
+            locatorJSON: locatorJSON,
+            selectedText: selectedText
+        )
+        return try save(
+            book: book,
+            locatorJSON: locatorJSON,
+            anchorJSON: anchorJSON,
+            selectedText: selectedText,
+            noteText: AIReadingActionPolicy.appendedNote(
+                existing: existing?.noteText,
+                title: title,
+                body: body
+            ),
+            color: existing?.color ?? color,
+            chapterTitle: chapterTitle,
+            progress: progress
+        )
+    }
+
     func delete(_ annotation: ReadingAnnotationRecord) throws {
         modelContext.delete(annotation)
         try modelContext.save()

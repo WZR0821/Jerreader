@@ -209,7 +209,20 @@ class MainActivity : ComponentActivity() {
                             )
                         },
                         coverContent = { book -> AndroidBookCover(book) },
-                        bottomBar = bottomBar
+                        bottomBar = bottomBar,
+                        // 本章还剩约 N 分钟 (2.1.0 §9): EPUB only, from where the
+                        // reader last saw this chapter end.
+                        chapterEstimate = { book ->
+                            if (book.sourceFormat.equals("pdf", ignoreCase = true)) {
+                                null
+                            } else {
+                                com.jerreader.shared.learning.ChapterTimeEstimatePolicy.text(
+                                    readingSeconds = book.totalReadingSeconds,
+                                    progression = book.lastReadProgress,
+                                    chapterEnd = graph.appSettings.chapterEnd(book.id)
+                                )
+                            }
+                        }
                     )
 
                     AndroidAppTab.LEARNING -> com.jerreader.android.ui.LearningScreen(

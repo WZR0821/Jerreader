@@ -309,7 +309,8 @@ final class BackendTranslationServiceTests: XCTestCase {
 
         XCTAssertEqual(
             request.url?.absoluteString,
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-test:generateContent"
+            // 2.1.0 streams every direct request; a plain JSON body still decodes.
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-test:streamGenerateContent?alt=sse"
         )
         XCTAssertEqual(
             request.value(forHTTPHeaderField: "x-goog-api-key"),
@@ -633,7 +634,8 @@ final class BackendTranslationServiceTests: XCTestCase {
         )
         XCTAssertEqual((translation["thinking"] as? [String: Any])?["type"] as? String, "disabled")
         XCTAssertNil(translation["reasoning_effort"])
-        XCTAssertEqual(translation["stream"] as? Bool, false)
+        // 2.1.0 streams translations too; the JSON answer above still decodes.
+        XCTAssertEqual(translation["stream"] as? Bool, true)
         XCTAssertEqual(translation["model"] as? String, "deepseek-flash")
 
         let explanationClient = BackendHTTPClientStub(

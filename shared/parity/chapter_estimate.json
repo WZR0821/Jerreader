@@ -1,0 +1,91 @@
+{
+  "rule": {
+    "minimumReadingSeconds": 600,
+    "minimumProgression": 0.02,
+    "maximumMinutes": 120,
+    "underOneMinuteSeconds": 30,
+    "formula": "remainingSeconds = (chapterEnd - progression) * readingSeconds / progression; minutes = floor(remainingSeconds / 60 + 0.5), at least 1"
+  },
+  "cases": [
+    {
+      "name": "no chapter end",
+      "readingSeconds": 3600,
+      "progression": 0.3,
+      "chapterEnd": null,
+      "minutes": null,
+      "text": null
+    },
+    {
+      "name": "too little reading time",
+      "readingSeconds": 540,
+      "progression": 0.3,
+      "chapterEnd": 0.33,
+      "minutes": null,
+      "text": null
+    },
+    {
+      "name": "progress too small",
+      "readingSeconds": 3600,
+      "progression": 0.015,
+      "chapterEnd": 0.05,
+      "minutes": null,
+      "text": null
+    },
+    {
+      "name": "six minutes left",
+      "readingSeconds": 3600,
+      "progression": 0.3,
+      "chapterEnd": 0.33,
+      "minutes": 6,
+      "text": "本章还剩约 6 分钟"
+    },
+    {
+      "name": "rounds to nearest minute",
+      "readingSeconds": 1200,
+      "progression": 0.1,
+      "chapterEnd": 0.1235,
+      "minutes": 5,
+      "text": "本章还剩约 5 分钟"
+    },
+    {
+      "name": "under thirty seconds",
+      "readingSeconds": 6000,
+      "progression": 0.5,
+      "chapterEnd": 0.501,
+      "minutes": 0,
+      "text": "本章还剩不到 1 分钟"
+    },
+    {
+      "name": "about one minute",
+      "readingSeconds": 6000,
+      "progression": 0.5,
+      "chapterEnd": 0.505,
+      "minutes": 1,
+      "text": "本章还剩约 1 分钟"
+    },
+    {
+      "name": "too long to trust",
+      "readingSeconds": 7200,
+      "progression": 0.05,
+      "chapterEnd": 0.2,
+      "minutes": null,
+      "text": null
+    },
+    {
+      "name": "two hours is still shown",
+      "readingSeconds": 7200,
+      "progression": 0.5,
+      "chapterEnd": 1.0,
+      "minutes": 120,
+      "text": "本章还剩约 120 分钟"
+    },
+    {
+      "name": "position past chapter end",
+      "readingSeconds": 3600,
+      "progression": 0.34,
+      "chapterEnd": 0.33,
+      "minutes": null,
+      "text": null
+    }
+  ]
+}

@@ -44,6 +44,45 @@ class JapaneseChineseLexiconTest {
         assertEquals("構成", dictionary.japanese("構成（こうせい）")?.term)
         assertNull(dictionary.chinese("构成部分"))
     }
+    // 2.1.0: a short tap selects a whole word; it finds one headword or none, as on iOS.
+    @Test fun wholeWordsFromAShortTapFindOneHeadword() {
+        val full = JapaneseChineseLexicon(File("../shared/dictionaries/ja-zh-core.tsv").readText(),
+            File("../shared/dictionaries/ja-zh-wiktionary.tsv").readText())
+        val whole = listOf(
+            "勉強しました" to "勉強", "食べたい" to "食べる", "読んでいました" to "読む", "子供たち" to "子供", "ご主人" to "主人",
+            "田中さん" to "田中", "しれない" to "知れる", "飲みすぎた" to "飲む", "使いやすい" to "使う", "した" to "する",
+            "🈳" to "🈳", "空" to "空", "心配しないで" to "心配", "静かそう" to "静か", "だった" to "だ",
+            "なりたい" to "なる", "合わなかった" to "合う", "浮かんで" to "浮かぶ", "聞こえて" to "聞こえる", "できました" to "できる",
+            "入れて" to "入れる", "いれて" to "入れる", "開けた" to "開ける", "ちゃった" to "しまう", "じゃった" to "しまう",
+            "すみませんでした" to "すみません", "走り去った" to "走る", "読み終わった" to "読む", "咲き始めた" to "咲く", "悲し" to "悲しい",
+            "おいし" to "美味しい", "お母様" to "母", "よかった" to "良い", "彼ら" to "彼ら", "話していました" to "話す",
+            "話しましょう" to "話す", "散歩した" to "散歩", "時" to "時", "こと" to "こと", "から" to "から",
+            "らしい" to "らしい", "みんな" to "皆", "ねった" to "練る", "出ていった" to "出る", "持ってきた" to "持つ",
+            "言ってくれた" to "言う",
+        )
+        for ((word, term) in whole) assertEquals(word, term, full.japanese(word)?.term)
+        for ((word, part) in listOf("走り去った" to "复合动词", "お母様" to "敬语后缀", "散歩した" to "散歩する", "すみませんでした" to "でした",
+            "出ていった" to "趋向（ていく）", "言ってくれた" to "授受（てくれる）")) {
+            assertTrue(word, full.inflectionNote(word, checkNotNull(full.japanese(word)))!!.contains(part))
+        }
+        // A lone hiragana is a particle or an ending, not a reading (で is not 出).
+        assertNull(full.japanese("で")); assertTrue(full.matches("で").isEmpty())
+        assertNull(full.japanese("ね")); assertTrue(full.matches("ね").isEmpty())
+        // Two headwords stay choices, and a tie finds none.
+        assertNull(full.japanese("きた")); assertEquals(setOf("北", "来る"), full.matches("きた").map { it.term }.toSet())
+        // Kana 行く and 言う share いった and いって, and a kana word the
+        // supplement lists also offers the core's headword read that way.
+        for (word in listOf("いった", "いって")) {
+            assertNull(word, full.japanese(word)); assertEquals(word, setOf("行く", "言う"), full.matches(word).map { it.term }.toSet())
+        }
+        assertNull(full.japanese("いく")); assertEquals(setOf("行く", "いく"), full.matches("いく").map { it.term }.toSet())
+        // A form only a godan verb has is no 一段 verb's (いらない is not いる).
+        for ((word, term) in listOf("いらない" to "いる", "いります" to "いる", "きった" to "着る")) {
+            assertTrue(word, full.japanese(word)?.term != term && full.matches(word).none { it.term == term })
+        }
+        assertNull(full.japanese("降り出した"))
+        assertNull(full.japanese("毎日、本を読む。"))
+    }
     @Test fun contextualInflectionsAreDictionaryValidated() {
         val full = JapaneseChineseLexicon(File("../shared/dictionaries/ja-zh-core.tsv").readText(),
             File("../shared/dictionaries/ja-zh-wiktionary.tsv").readText())

@@ -135,7 +135,8 @@ def main():
     seen = set()
     markers = {'folder_restore': '从备份文件夹恢复'.encode(), 'combined_models': '中日句段翻译'.encode(),
                'staged_cover': '撤销新封面'.encode(), 'privacy_ui': 'API Key 只保存在本机安全存储'.encode(),
-               'word_detail': '词条内容已复制到剪贴板。'.encode(), 'reader_chrome': '快速调整阅读进度'.encode(), 'interface_controls': '顶部栏透明度'.encode(), 'furigana': '原文注音'.encode()}
+               'word_detail': '词条内容已复制到剪贴板。'.encode(), 'reader_chrome': '快速调整阅读进度'.encode(), 'interface_controls': '顶部栏透明度'.encode(), 'furigana': '原文注音'.encode(),
+               'card_ai': '翻译卡片显示 AI 按钮'.encode()}
     found = set()
     with zipfile.ZipFile(source) as archive:
         if archive.testzip() is not None:

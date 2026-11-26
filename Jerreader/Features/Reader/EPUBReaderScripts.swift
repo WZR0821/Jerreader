@@ -574,8 +574,10 @@ extension EPUBReaderViewController {
     /// inside the annotations themselves. Other publications keep the plain
     /// CSS policy and an untouched DOM.
     ///
-    /// There are deliberately no touch or selectionchange listeners here:
-    /// native ranges and handles remain fully owned by Readium/WebKit.
+    /// The policy itself has no touch or selectionchange listeners: native
+    /// ranges and handles stay owned by Readium/WebKit. The one exception it
+    /// installs is the long-press word guard (`longPressWordGuardScript`),
+    /// which only watches and puts right the word a long press selects.
     /// Supplies the horizontal writing mode that Readium alone cannot deliver.
     ///
     /// Readium switches between the `cjk-vertical` and `cjk-horizontal` Readium
@@ -795,6 +797,431 @@ extension EPUBReaderViewController {
         """#
     }
 
+    /// Installs the long-press word guard (see the comment at its top). iOS
+    /// only: Android's WebView takes the word that starts at the caret, not
+    /// the one that ends there, and a selection changed from script there
+    /// loses WebView's handles and its 翻译/查词 menu, so Android keeps
+    /// WebView's own pick. The selection policy script installs the guard in
+    /// every content document.
+    static let longPressWordGuardScript = #"""
+    // jerreaderInstallLongPressWordGuard()
+    //   Installs, once per document, the check that a long press selects the
+    //   word under the finger, and returns it: { correct(x, y) }.
+    //
+    // WebKit chooses the word for a long press from the caret nearest the
+    // finger, and on a word boundary it takes the word that ends there.
+    // Japanese runs its words together, so a press on the first half of a
+    // word's first character selected the word before it. The guard looks at
+    // the first selection a long press makes. When that selection touches the
+    // character under the finger without holding it, the word holding the
+    // character is selected instead, by WebKit's own word rules
+    // (Selection.modify). When it holds the character but stops at a ruby
+    // inside a word those rules keep whole (each kanji of the word with its
+    // own reading, and the press on the second half of one of them), it grows
+    // to that word. A press in a ruby's blank room, between its kanji or
+    // beside them under a longer reading, counts as the ruby's nearest kanji
+    // (as on Android). While the finger stays down, and as it lifts, WebKit
+    // can make the same pick again; each such pick is put right too. Every
+    // other selection, including one made or adjusted with the handles, is
+    // left alone.
+    function jerreaderInstallLongPressWordGuard() {
+      if (globalThis.__jerreaderLongPressWordGuard) {
+        return globalThis.__jerreaderLongPressWordGuard;
+      }
+      // CSS px a held finger may drift; ms a touch lasts before it is a long
+      // press; ms after lifting, and after touching down, within which the
+      // selection of that press may arrive; ms a corrected press may stay down,
+      // and how many of WebKit's later picks are put right; CSS px around a
+      // selection edge where a touch may be a handle grab.
+      const DRIFT = 10;
+      const HOLD = 350;
+      const AFTER_LIFT = 800;
+      const AFTER_DOWN = 3000;
+      const STAY_DOWN = 10000;
+      const REPICKS = 20;
+      const HANDLE_REACH = 24;
+
+      const root = () => document.body || document.documentElement;
+      const isBaseText = (node) => !!node && node.nodeType === Node.TEXT_NODE &&
+        !!node.data && !node.parentElement?.closest('rt,rp');
+      const isVertical = (node) => {
+        const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+        if (!element) return false;
+        const style = getComputedStyle(element);
+        const mode = (style.writingMode || style.webkitWritingMode || '').toString();
+        return /^(vertical|sideways|tb)/i.test(mode);
+      };
+      const baseTextWalker = (scope) => document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, {
+        acceptNode: (node) => isBaseText(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
+      });
+
+      // A glyph is one character of base text; a surrogate pair stays whole.
+      const glyph = (node, offset) => {
+        let start = Math.max(0, Math.min(offset, node.data.length - 1));
+        const unit = node.data.charCodeAt(start);
+        if (unit >= 0xDC00 && unit <= 0xDFFF && start > 0) start -= 1;
+        const lead = node.data.charCodeAt(start);
+        const end = lead >= 0xD800 && lead <= 0xDBFF && start + 1 < node.data.length
+          ? start + 2
+          : start + 1;
+        return { node, start, end, text: node.data.slice(start, end) };
+      };
+      const glyphAfter = (node, offset) => {
+        if (offset < node.data.length) return glyph(node, offset);
+        const walker = baseTextWalker(root());
+        walker.currentNode = node;
+        const next = walker.nextNode();
+        return next ? glyph(next, 0) : null;
+      };
+      const glyphBefore = (node, offset) => {
+        if (offset > 0) return glyph(node, offset - 1);
+        const walker = baseTextWalker(root());
+        walker.currentNode = node;
+        const previous = walker.previousNode();
+        return previous ? glyph(previous, previous.data.length - 1) : null;
+      };
+      // Along the line the point is on the glyph. Across it the band is one
+      // glyph wider on each side, so a press on the furigana over (or, in
+      // vertical text, beside) a kanji counts as that kanji.
+      const under = (candidate, x, y, vertical) => {
+        const range = document.createRange();
+        range.setStart(candidate.node, candidate.start);
+        range.setEnd(candidate.node, candidate.end);
+        return Array.from(range.getClientRects()).some((rect) => {
+          if (!(rect.width > 0.5 && rect.height > 0.5)) return false;
+          return vertical
+            ? y >= rect.top - 0.5 && y <= rect.bottom + 0.5 &&
+              x >= rect.left - rect.width && x <= rect.right + rect.width
+            : x >= rect.left - 0.5 && x <= rect.right + 0.5 &&
+              y >= rect.top - rect.height && y <= rect.bottom + rect.height;
+        });
+      };
+      const caretAt = (x, y) => {
+        if (document.caretRangeFromPoint) return document.caretRangeFromPoint(x, y);
+        const position = document.caretPositionFromPoint?.(x, y);
+        if (!position) return null;
+        const range = document.createRange();
+        range.setStart(position.offsetNode, position.offset);
+        return range;
+      };
+      // Inside a ruby but on none of its kanji (between two of them, or in
+      // the room a reading longer than its kanji leaves beside them, the part
+      // of that reading over the room included), a press counts as the ruby's
+      // nearest kanji on that line, within one glyph along it; the earlier one
+      // on a tie. Android moves such a press onto that kanji
+      // (ReaderLongPressAim). Readings take no pointer events here, so a
+      // press on one hits what lies beneath it. In that room WebKit hits the
+      // ruby's block, not the ruby, with the caret in or at the reading;
+      // Chromium can put the caret at the edge of the text beside the ruby.
+      const rubyGlyphNear = (x, y, caret) => {
+        const hit = document.elementFromPoint(x, y);
+        if (!hit) return null;
+        const rubies = [];
+        const consider = (item) => {
+          const ruby = item?.nodeType === Node.ELEMENT_NODE ? item.closest('ruby') : null;
+          if (ruby && !rubies.includes(ruby)) rubies.push(ruby);
+        };
+        consider(hit);
+        const node = caret?.startContainer;
+        if (node?.nodeType === Node.TEXT_NODE) {
+          consider(node.parentElement);
+          if (caret.startOffset === 0) consider(node.previousSibling);
+          if (caret.startOffset >= node.data.length) consider(node.nextSibling);
+        } else if (node) {
+          consider(node);
+          consider(node.childNodes[caret.startOffset - 1]);
+          consider(node.childNodes[caret.startOffset]);
+        }
+        rubies.sort((a, b) => a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
+        let nearest = null;
+        for (const ruby of rubies) {
+          const vertical = isVertical(ruby);
+          const along = vertical ? y : x;
+          const walker = baseTextWalker(ruby);
+          while (walker.nextNode()) {
+            const text = walker.currentNode;
+            for (let offset = 0; offset < text.data.length;) {
+              const candidate = glyph(text, offset);
+              offset = candidate.end;
+              if (/^\s+$/.test(candidate.text)) continue;
+              const range = document.createRange();
+              range.setStart(text, candidate.start);
+              range.setEnd(text, candidate.end);
+              for (const rect of Array.from(range.getClientRects())) {
+                if (!(rect.width > 0.5 && rect.height > 0.5)) continue;
+                const onLine = vertical
+                  ? x >= rect.left - rect.width && x <= rect.right + rect.width
+                  : y >= rect.top - rect.height && y <= rect.bottom + rect.height;
+                if (!onLine) continue;
+                const from = vertical ? rect.top : rect.left;
+                const size = vertical ? rect.height : rect.width;
+                const distance = Math.max(from - along, along - from - size, 0);
+                if (distance > size) continue;
+                if (!nearest || distance < nearest.distance - 0.5) nearest = { candidate, distance };
+              }
+            }
+          }
+        }
+        return nearest ? nearest.candidate : null;
+      };
+      const glyphAt = (x, y) => {
+        const caret = caretAt(x, y);
+        const node = caret?.startContainer;
+        if (isBaseText(node)) {
+          const vertical = isVertical(node);
+          const found = [glyphAfter(node, caret.startOffset), glyphBefore(node, caret.startOffset)]
+            .find((candidate) => candidate && under(candidate, x, y, vertical));
+          if (found) return found;
+        }
+        return rubyGlyphNear(x, y, caret);
+      };
+      const isWordGlyph = (candidate) => Array.from(candidate.text)
+        .every((character) => /[\p{L}\p{N}\p{M}]/u.test(character));
+
+      const baseTextIn = (range) => {
+        const common = range.commonAncestorContainer;
+        const scope = common.nodeType === Node.TEXT_NODE ? common.parentNode : common;
+        if (!scope) return '';
+        let text = '';
+        const walker = baseTextWalker(scope);
+        while (walker.nextNode()) {
+          const node = walker.currentNode;
+          let intersects = false;
+          try { intersects = range.intersectsNode(node); } catch (_) {}
+          if (!intersects) continue;
+          const start = node === range.startContainer ? range.startOffset : 0;
+          const end = node === range.endContainer ? range.endOffset : node.data.length;
+          if (end > start) text += node.data.slice(start, end);
+        }
+        return text;
+      };
+      // Where a selection lies against a glyph: 'holds' it, 'touches' it (ends
+      // right before it or starts right after it, with no base text between),
+      // lies 'apart' from it, or is 'other' (cuts through it).
+      const relation = (range, candidate) => {
+        let atStart;
+        let atEnd;
+        try {
+          atStart = range.comparePoint(candidate.node, candidate.start);
+          atEnd = range.comparePoint(candidate.node, candidate.end);
+        } catch (_) {
+          return 'other';
+        }
+        if (atStart === 0 && atEnd === 0) return 'holds';
+        const gap = document.createRange();
+        if (atEnd === 1 && atStart >= 0) {
+          gap.setStart(range.endContainer, range.endOffset);
+          gap.setEnd(candidate.node, candidate.start);
+        } else if (atStart === -1 && atEnd <= 0) {
+          gap.setStart(candidate.node, candidate.end);
+          gap.setEnd(range.startContainer, range.startOffset);
+        } else {
+          return 'other';
+        }
+        return baseTextIn(gap) ? 'apart' : 'touches';
+      };
+      // Whether two ranges select the same text: no base text lies between
+      // their starts, nor between their ends.
+      const textBetween = (aNode, aOffset, bNode, bOffset) => {
+        try {
+          const gap = document.createRange();
+          gap.setStart(aNode, aOffset);
+          gap.collapse(true);
+          if (gap.comparePoint(bNode, bOffset) < 0) {
+            gap.setStart(bNode, bOffset);
+          } else {
+            gap.setEnd(bNode, bOffset);
+          }
+          return baseTextIn(gap);
+        } catch (_) {
+          return '?';
+        }
+      };
+      const sameText = (a, b) =>
+        !textBetween(a.startContainer, a.startOffset, b.startContainer, b.startOffset) &&
+        !textBetween(a.endContainer, a.endOffset, b.endContainer, b.endOffset);
+      const selectWordHolding = (selection, candidate) => {
+        const original = selection.getRangeAt(0).cloneRange();
+        try {
+          selection.collapse(candidate.node, candidate.end);
+          selection.modify('move', 'backward', 'word');
+          selection.modify('extend', 'forward', 'word');
+          if (selection.rangeCount && !selection.isCollapsed &&
+              relation(selection.getRangeAt(0), candidate) === 'holds') {
+            return true;
+          }
+        } catch (_) {}
+        selection.removeAllRanges();
+        selection.addRange(original);
+        return false;
+      };
+      // The base-text glyphs right before and right after a boundary point.
+      const glyphsAround = (node, offset) => {
+        if (node?.nodeType === Node.TEXT_NODE) {
+          return isBaseText(node)
+            ? [glyphBefore(node, offset), glyphAfter(node, offset)]
+            : [null, null];
+        }
+        if (!node?.childNodes) return [null, null];
+        const walker = baseTextWalker(root());
+        const deepestLast = (item) => {
+          let last = item;
+          while (last.lastChild) last = last.lastChild;
+          return last;
+        };
+        const previous = node.childNodes[offset - 1];
+        const next = node.childNodes[offset];
+        let before = previous ? deepestLast(previous) : node;
+        if (!(previous && isBaseText(before))) {
+          walker.currentNode = before;
+          before = walker.previousNode();
+        }
+        let after = next || deepestLast(node);
+        if (!(next && isBaseText(after))) {
+          walker.currentNode = after;
+          after = walker.nextNode();
+        }
+        return [
+          before ? glyph(before, before.data.length - 1) : null,
+          after ? glyph(after, 0) : null
+        ];
+      };
+      // WebKit's own pick can stop at a ruby inside a word that its word rules
+      // keep whole: where each kanji of a word has its own reading, a press on
+      // the second half of one picked that kanji alone, while a press on its
+      // first half was put right to the whole word. A pick that holds the
+      // pressed character may be such a pick when a word character lies right
+      // beyond one of its ends, with a ruby on either side of that end.
+      const inRuby = (candidate) => !!candidate.node.parentElement?.closest('ruby');
+      const mayStopInsideRubyWord = (range) => {
+        try {
+          return [
+            glyphsAround(range.endContainer, range.endOffset),
+            glyphsAround(range.startContainer, range.startOffset).reverse()
+          ].some(([inside, beyond]) => !!inside && !!beyond &&
+            isWordGlyph(inside) && isWordGlyph(beyond) && (inRuby(inside) || inRuby(beyond)));
+        } catch (_) {
+          return false;
+        }
+      };
+      // Grows the selection to the word holding the candidate when that word
+      // holds the whole selection and more; otherwise leaves it as it was.
+      const growToWordHolding = (selection, candidate) => {
+        const pick = selection.getRangeAt(0).cloneRange();
+        if (!selectWordHolding(selection, candidate)) return false;
+        const word = selection.getRangeAt(0);
+        let grows = false;
+        try {
+          const startHeld = word.compareBoundaryPoints(Range.START_TO_START, pick) <= 0 ||
+            !textBetween(pick.startContainer, pick.startOffset, word.startContainer, word.startOffset);
+          const endHeld = word.compareBoundaryPoints(Range.END_TO_END, pick) >= 0 ||
+            !textBetween(pick.endContainer, pick.endOffset, word.endContainer, word.endOffset);
+          grows = startHeld && endHeld && !sameText(word, pick);
+        } catch (_) {}
+        if (grows) return true;
+        selection.removeAllRanges();
+        selection.addRange(pick);
+        return false;
+      };
+      // 'moved' when the word under (x, y) replaced the selection, 'kept' when
+      // the selection stays, 'none' when there is no selection.
+      const correct = (x, y) => {
+        const selection = globalThis.getSelection?.();
+        if (!selection || !selection.rangeCount || selection.isCollapsed ||
+            typeof selection.modify !== 'function') {
+          return 'none';
+        }
+        const pressed = glyphAt(x, y);
+        if (!pressed || !isWordGlyph(pressed)) return 'kept';
+        const range = selection.getRangeAt(0);
+        const where = relation(range, pressed);
+        if (where === 'touches') return selectWordHolding(selection, pressed) ? 'moved' : 'kept';
+        if (where === 'holds' && mayStopInsideRubyWord(range)) {
+          return growToWordHolding(selection, pressed) ? 'moved' : 'kept';
+        }
+        return 'kept';
+      };
+
+      const nearSelectionEdge = (x, y) => {
+        const selection = globalThis.getSelection?.();
+        if (!selection || !selection.rangeCount || selection.isCollapsed) return false;
+        const rects = Array.from(selection.getRangeAt(0).getClientRects())
+          .filter((rect) => rect.width > 0.5 && rect.height > 0.5);
+        if (!rects.length) return false;
+        const vertical = isVertical(selection.anchorNode);
+        const near = (rect, atStart) => vertical
+          ? x >= rect.left - HANDLE_REACH && x <= rect.right + HANDLE_REACH &&
+            Math.abs(y - (atStart ? rect.top : rect.bottom)) <= HANDLE_REACH
+          : y >= rect.top - HANDLE_REACH && y <= rect.bottom + HANDLE_REACH &&
+            Math.abs(x - (atStart ? rect.left : rect.right)) <= HANDLE_REACH;
+        return near(rects[0], true) || near(rects[rects.length - 1], false);
+      };
+      // The engine may cancel the pointer once its long press takes over, with
+      // the finger still down, so a cancel is not a lift.
+      let press = null;
+      const listen = { capture: true, passive: true };
+      const isFinger = (event) => event.pointerType === 'touch' && event.isPrimary;
+      document.addEventListener('pointerdown', (event) => {
+        if (!isFinger(event)) return;
+        press = {
+          x: event.clientX,
+          y: event.clientY,
+          down: performance.now(),
+          lifted: null,
+          done: false,
+          fixed: null,
+          repicks: 0,
+          onHandle: nearSelectionEdge(event.clientX, event.clientY)
+        };
+      }, listen);
+      document.addEventListener('pointermove', (event) => {
+        if (!press || !isFinger(event) || press.lifted !== null) return;
+        if (Math.hypot(event.clientX - press.x, event.clientY - press.y) > DRIFT) press = null;
+      }, listen);
+      document.addEventListener('pointerup', (event) => {
+        if (press && isFinger(event) && press.lifted === null) press.lifted = performance.now();
+      }, listen);
+      // The first selection after a press is WebKit's pick for it. When that
+      // pick was put right, a later pick of the same word, while the finger is
+      // down or as it lifts, is put right the same way.
+      document.addEventListener('selectionchange', () => {
+        const current = press;
+        if (!current || current.done) return;
+        const selection = globalThis.getSelection?.();
+        if (!selection || !selection.rangeCount || selection.isCollapsed) return;
+        const time = performance.now();
+        const open = current.lifted === null
+          ? time - current.down <= (current.fixed ? STAY_DOWN : AFTER_DOWN)
+          : time - current.lifted <= AFTER_LIFT;
+        if (!open) {
+          current.done = true;
+          return;
+        }
+        const range = selection.getRangeAt(0);
+        if (current.fixed) {
+          if (current.repicks >= REPICKS || !sameText(range, current.fixed.wrong)) return;
+          current.repicks += 1;
+          const right = current.fixed.right;
+          selection.setBaseAndExtent(
+            right.startContainer, right.startOffset, right.endContainer, right.endOffset
+          );
+          return;
+        }
+        current.done = true;
+        const held = (current.lifted === null ? time : current.lifted) - current.down;
+        if (current.onHandle || held < HOLD) return;
+        const wrong = range.cloneRange();
+        if (correct(current.x, current.y) !== 'moved') return;
+        current.done = false;
+        current.repicks = 0;
+        current.fixed = { wrong, right: selection.getRangeAt(0).cloneRange() };
+      });
+      const guard = { correct };
+      globalThis.__jerreaderLongPressWordGuard = guard;
+      return guard;
+    }
+    """#
+
     static func selectionPolicyScript(detachRubyAnnotations: Bool) -> String {
         let bookFlag = detachRubyAnnotations ? "true" : "false"
         return #"""
@@ -902,12 +1329,20 @@ extension EPUBReaderViewController {
             ready();
           }
           globalThis.__jerreaderReaderSelectionBridgeVersion = 3;
+
+          // A long press selects the word under the finger, not the word
+          // before it (longPressWordGuardScript).
+          \#(longPressWordGuardScript)
+          jerreaderInstallLongPressWordGuard();
           return true;
         })()
         """#
     }
 
-    private static let quickSentenceDOMHelpers = #"""
+    // The tile merge comes first so every script that measures a selection
+    // (quick sentence, speech, native selection snapshot) paints the same
+    // ruby-aware tiles.
+    private static let quickSentenceDOMHelpers = ReaderSelectionTileScript.source + #"""
     const JERREADER_READER_EXCLUDED_SELECTOR = [
       'rt', 'rp', 'script', 'style', 'noscript', 'svg',
       '[aria-hidden="true"]',
@@ -1356,7 +1791,11 @@ extension EPUBReaderViewController {
       const element = caretNode.nodeType === Node.ELEMENT_NODE
         ? caretNode
         : caretNode.parentElement;
-      const block = jerreaderReaderBlock(element);
+      // Text outside every block (a span, or bare text, right in body) still
+      // reads as its own element, as on Android. The 50000-character cap
+      // below keeps a whole-body fallback bounded.
+      const block = jerreaderReaderBlock(element) ||
+        (element && element !== document.documentElement ? element : null);
       if (!block) return null;
 
       const nodes = jerreaderReaderTextNodes(block);
@@ -1451,22 +1890,74 @@ extension EPUBReaderViewController {
       return ruby.querySelector('rt');
     }
 
-    // Selection geometry = base-text rectangles plus the rectangles of each
-    // paired ruby annotation. The reading is not selectable text, but the
-    // visible highlight must cover the whole ruby unit so a selected kanji
-    // never looks "skipped" under its furigana.
+    // Vertical writing lays lines out top to bottom; the tile merge needs to
+    // know which axis runs along the line. `writing-mode` is inherited, so the
+    // first selected text node's element answers for the selection.
+    function jerreaderReaderIsVerticalText(node) {
+      const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+      if (!element) return false;
+      const style = getComputedStyle(element);
+      const mode = style.writingMode || style.webkitWritingMode || '';
+      return /^(vertical|sideways|tb)/i.test(mode);
+    }
+
+    // Selection geometry, one tile per line run. The base-text boxes are
+    // measured together with the paired ruby annotation of every selected
+    // ruby base: the reading is not selectable text, but the visible
+    // highlight must cover the whole ruby unit so a selected kanji never
+    // looks "skipped" under its furigana. Each annotation box joins the tile
+    // of the kanji it sits over (ReaderSelectionTileScript, rules and cases in
+    // shared/parity/selection_tiles.json), so kanji and kana read as one
+    // region, with no gap and no second outline between them. When only part
+    // of the annotated base is selected, the reading is clipped to the
+    // selected kanji.
     function jerreaderReaderSelectionRects(subRanges) {
-      const rects = [];
-      const annotations = new Set();
+      const base = [];
+      const groups = new Map();
       subRanges.forEach((subRange) => {
-        rects.push(...Array.from(subRange.getClientRects()));
-        const annotation = jerreaderReaderPairedAnnotation(subRange.startContainer);
-        if (annotation && !annotations.has(annotation)) {
-          annotations.add(annotation);
-          rects.push(...Array.from(annotation.getClientRects()));
+        const indices = [];
+        Array.from(subRange.getClientRects()).forEach((rect) => {
+          if (!jerreaderReaderViewportRectFilter(rect)) return;
+          indices.push(base.length);
+          base.push(rect);
+        });
+        const node = subRange.startContainer;
+        const text = node?.nodeType === Node.TEXT_NODE ? (node.data || '') : '';
+        if (!text.trim()) return;
+        const annotation = jerreaderReaderPairedAnnotation(node);
+        if (!annotation) return;
+        let group = groups.get(annotation);
+        if (!group) {
+          group = { base: [], nodes: new Set(), partial: false };
+          groups.set(annotation, group);
+        }
+        group.base.push(...indices);
+        group.nodes.add(node);
+        const leading = text.length - text.trimStart().length;
+        const trailing = text.length - text.trimEnd().length;
+        if (subRange.startOffset > leading ||
+            subRange.endOffset < text.length - trailing) {
+          group.partial = true;
         }
       });
-      return rects.filter(jerreaderReaderViewportRectFilter);
+      const annotations = [];
+      groups.forEach((group, annotation) => {
+        const pairedBase = jerreaderReaderRubyBaseNodes(annotation).filter(
+          (node) => jerreaderReaderPairedAnnotation(node) === annotation
+        );
+        annotations.push({
+          base: group.base,
+          rects: Array.from(annotation.getClientRects())
+            .filter(jerreaderReaderViewportRectFilter),
+          fullySelected: !group.partial &&
+            pairedBase.every((node) => group.nodes.has(node))
+        });
+      });
+      return jerreaderSelectionTiles(
+        base,
+        annotations,
+        jerreaderReaderIsVerticalText(subRanges[0]?.startContainer)
+      );
     }
     """#
 }

@@ -42,7 +42,12 @@ class AppGraph(application: Application, val database: JerreaderDatabase = Jerre
     val publicationStore = ImmutablePublicationStore(application)
     val readium = ReadiumEnvironment(application)
     val importService = LibraryImportService(publicationStore, readium, repository)
-    val bookService = LibraryBookService(publicationStore, repository, application)
+    val bookService = LibraryBookService(
+        publicationStore,
+        repository,
+        application,
+        onDeleted = { bookId -> appSettings.updateChapterEnd(bookId, null) }
+    )
     val learningRecords = LearningRecordRepository(database.learningDao())
     val readerRecords = ReaderRecordRepository(database.readerRecordDao())
     val translationSettings = AndroidTranslationSettingsStore(application)

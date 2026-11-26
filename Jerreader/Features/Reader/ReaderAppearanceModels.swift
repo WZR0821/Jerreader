@@ -176,6 +176,9 @@ enum ReaderInterfaceDefaults {
     static let japaneseFuriganaKey = "translation.japaneseFuriganaEnabled"
     static let immersiveReadingKey = "reader.immersiveReading"
     static let layoutModeKey = "reader.layoutMode"
+    /// 2.1.0: 「翻译卡片显示 AI 按钮」 off. Android stores the same flag under
+    /// the same key.
+    static let aiActionBarHiddenKey = "reader.aiActionBar.hidden"
     static let barTransparency = 0.15
     /// The gap Readium keeps between the text and whatever is above and below
     /// it: a bar in the standard layout, the safe area in the immersive one.

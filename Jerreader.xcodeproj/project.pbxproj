@@ -63,6 +63,12 @@
 		EC120000000000000000000B /* ReadingLens.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED120000000000000000000B /* ReadingLens.swift */; };
 		EC120000000000000000000C /* ReaderCompanionModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED120000000000000000000C /* ReaderCompanionModel.swift */; };
 		EC120000000000000000000D /* ReaderCompanionViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED120000000000000000000D /* ReaderCompanionViews.swift */; };
+		EC120000000000000000000E /* ReaderSelectionTileScript.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED120000000000000000000E /* ReaderSelectionTileScript.swift */; };
+		EC2100000000000000000001 /* ReadingActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED2100000000000000000001 /* ReadingActions.swift */; };
+		EC2100000000000000000002 /* ReadingProgressHints.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED2100000000000000000002 /* ReadingProgressHints.swift */; };
+		EC2100000000000000000003 /* AIStreaming.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED2100000000000000000003 /* AIStreaming.swift */; };
+		EC2100000000000000000004 /* ReaderCardAI.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED2100000000000000000004 /* ReaderCardAI.swift */; };
+		EC2100000000000000000005 /* AIStreamingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED2100000000000000000005 /* AIStreamingTests.swift */; };
 		A00000000000000000000025 /* EPUBReaderHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000025 /* EPUBReaderHost.swift */; };
 		A00000000000000000000026 /* EPUBReaderViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000026 /* EPUBReaderViewModel.swift */; };
 		A00000000000000000000027 /* EPUBReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000027 /* EPUBReaderView.swift */; };
@@ -204,6 +210,12 @@
 		ED120000000000000000000B /* ReadingLens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingLens.swift; sourceTree = "<group>"; };
 		ED120000000000000000000C /* ReaderCompanionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderCompanionModel.swift; sourceTree = "<group>"; };
 		ED120000000000000000000D /* ReaderCompanionViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderCompanionViews.swift; sourceTree = "<group>"; };
+		ED120000000000000000000E /* ReaderSelectionTileScript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderSelectionTileScript.swift; sourceTree = "<group>"; };
+		ED2100000000000000000001 /* ReadingActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingActions.swift; sourceTree = "<group>"; };
+		ED2100000000000000000002 /* ReadingProgressHints.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingProgressHints.swift; sourceTree = "<group>"; };
+		ED2100000000000000000003 /* AIStreaming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIStreaming.swift; sourceTree = "<group>"; };
+		ED2100000000000000000004 /* ReaderCardAI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderCardAI.swift; sourceTree = "<group>"; };
+		ED2100000000000000000005 /* AIStreamingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIStreamingTests.swift; sourceTree = "<group>"; };
 		B00000000000000000000025 /* EPUBReaderHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EPUBReaderHost.swift; sourceTree = "<group>"; };
 		B00000000000000000000026 /* EPUBReaderViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EPUBReaderViewModel.swift; sourceTree = "<group>"; };
 		B00000000000000000000027 /* EPUBReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EPUBReaderView.swift; sourceTree = "<group>"; };
@@ -379,6 +391,7 @@
 			isa = PBXGroup;
 			children = (
 				B00000000000000000000007 /* TranslationService.swift */,
+				ED2100000000000000000001 /* ReadingActions.swift */,
 				B00000000000000000000008 /* LexicalLookupService.swift */,
 				B00000000000000000000009 /* SpeechService.swift */,
 				B00000000000000000000044 /* ContextExplanationService.swift */,
@@ -399,6 +412,7 @@
 			isa = PBXGroup;
 			children = (
 				B00000000000000000000013 /* EPUBImportService.swift */,
+				ED2100000000000000000003 /* AIStreaming.swift */,
 				B000000000000000000000F3 /* LibraryBackupRecords.swift */,
 				B000000000000000000000F2 /* LibraryBackupService.swift */,
 				B000000000000000000000F5 /* LibraryBackupPolicy.swift */,
@@ -448,6 +462,7 @@
 			isa = PBXGroup;
 			children = (
 				B0000000000000000000002C /* LearningHubView.swift */,
+				ED2100000000000000000002 /* ReadingProgressHints.swift */,
 				EB2000000000000000000007 /* LearningDesignViews.swift */,
 				B00000000000000000000018 /* LookupView.swift */,
 				B000000000000000000000F4 /* TranslateToolView.swift */,
@@ -478,6 +493,7 @@
 			isa = PBXGroup;
 			children = (
 				B00000000000000000000024 /* ReaderModels.swift */,
+				ED2100000000000000000004 /* ReaderCardAI.swift */,
 				ED1200000000000000000001 /* ReaderAppearanceModels.swift */,
 				ED1200000000000000000002 /* ReaderNavigationModels.swift */,
 				ED1200000000000000000003 /* ReaderSelectionModels.swift */,
@@ -487,6 +503,7 @@
 				ED1200000000000000000007 /* ReaderSearchModel.swift */,
 				ED120000000000000000000C /* ReaderCompanionModel.swift */,
 				ED120000000000000000000D /* ReaderCompanionViews.swift */,
+				ED120000000000000000000E /* ReaderSelectionTileScript.swift */,
 				B00000000000000000000039 /* PublicationReaderController.swift */,
 				B0000000000000000000003F /* EPUBSelectionBridge.swift */,
 				B00000000000000000000025 /* EPUBReaderHost.swift */,
@@ -517,6 +534,7 @@
 			isa = PBXGroup;
 			children = (
 				B0000000000000000000000E /* MockServicesTests.swift */,
+				ED2100000000000000000005 /* AIStreamingTests.swift */,
 				B00000000000000000000015 /* LibraryTests.swift */,
 				B000000000000000000000F6 /* LibraryBackupServiceTests.swift */,
 				B0000000000000000000001C /* WordLookupStoreTests.swift */,
@@ -763,6 +781,11 @@
 				EC120000000000000000000B /* ReadingLens.swift in Sources */,
 				EC120000000000000000000C /* ReaderCompanionModel.swift in Sources */,
 				EC120000000000000000000D /* ReaderCompanionViews.swift in Sources */,
+				EC120000000000000000000E /* ReaderSelectionTileScript.swift in Sources */,
+				EC2100000000000000000001 /* ReadingActions.swift in Sources */,
+				EC2100000000000000000002 /* ReadingProgressHints.swift in Sources */,
+				EC2100000000000000000003 /* AIStreaming.swift in Sources */,
+				EC2100000000000000000004 /* ReaderCardAI.swift in Sources */,
 				A00000000000000000000039 /* PublicationReaderController.swift in Sources */,
 				A00000000000000000000041 /* EPUBSelectionBridge.swift in Sources */,
 				A00000000000000000000025 /* EPUBReaderHost.swift in Sources */,
@@ -801,6 +824,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A00000000000000000000011 /* MockServicesTests.swift in Sources */,
+				EC2100000000000000000005 /* AIStreamingTests.swift in Sources */,
 				A00000000000000000000016 /* LibraryTests.swift in Sources */,
 				A000000000000000000000F6 /* LibraryBackupServiceTests.swift in Sources */,
 				A0000000000000000000001D /* WordLookupStoreTests.swift in Sources */,
@@ -916,7 +940,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 74;
+				CURRENT_PROJECT_VERSION = 75;
 				DEVELOPMENT_ASSET_PATHS = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -924,7 +948,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Jerreader";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
-				MARKETING_VERSION = 2.0.2;
+				MARKETING_VERSION = 2.1.0;
 				OTHER_SWIFT_FLAGS = "$(inherited) -file-prefix-map \"$(SRCROOT)=.\" -debug-prefix-map \"$(SRCROOT)=.\"";
 				PRODUCT_BUNDLE_IDENTIFIER = com.raydon.Jerreader;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -943,7 +967,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 74;
+				CURRENT_PROJECT_VERSION = 75;
 				DEVELOPMENT_ASSET_PATHS = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -951,7 +975,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Jerreader";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
-				MARKETING_VERSION = 2.0.2;
+				MARKETING_VERSION = 2.1.0;
 				OTHER_SWIFT_FLAGS = "$(inherited) -file-prefix-map \"$(SRCROOT)=.\" -debug-prefix-map \"$(SRCROOT)=.\"";
 				PRODUCT_BUNDLE_IDENTIFIER = com.raydon.Jerreader;
 				PRODUCT_NAME = "$(TARGET_NAME)";

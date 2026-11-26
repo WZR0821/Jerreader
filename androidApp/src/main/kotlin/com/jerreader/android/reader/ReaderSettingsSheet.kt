@@ -259,6 +259,7 @@ internal fun ReaderSettingsSheet(
                         // The same plain Form as 设置 › 翻译 on iOS, spaced the same way.
                         SheetList(spacing = PlainFormGroupSpacing, formSpacing = PlainFormSpacing) {
                             val preferences by graph.translationSettings.preferences.collectAsState()
+                            val appPreferences by graph.appSettings.preferences.collectAsState()
                             val actions = remember { translationSettingsActions(graph.translationSettings) }
                             TranslationSettingsContent(
                                 store = graph.translationSettings,
@@ -268,7 +269,9 @@ internal fun ReaderSettingsSheet(
                                 onTestConnection = { testTranslationConnection(graph, preferences) },
                                 showsQuickSentenceToggle = false,
                                 onOpenAIModels = { page = ReaderSettingsPage.AI_MODELS },
-                                onOpenOffline = { page = ReaderSettingsPage.OFFLINE }
+                                onOpenOffline = { page = ReaderSettingsPage.OFFLINE },
+                                aiActionBarShown = !appPreferences.aiActionBarHidden,
+                                onAIActionBarShownChange = { shown -> graph.appSettings.updateAIActionBarHidden(!shown) }
                             )
                         }
                     }

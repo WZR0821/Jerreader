@@ -54,8 +54,10 @@ final class ReaderCompanionModel {
         )
     }
 
-    func bookOpened(atProgress progress: Double) {
-        hasUpdate = progress > Self.recapMinimumProgress
+    /// `lastOpenedAt` is the previous open, read before this one is
+    /// recorded; a book reopened within six hours keeps the dot off (2.1.0).
+    func bookOpened(atProgress progress: Double, lastOpenedAt: Date? = nil, now: Date = Date()) {
+        hasUpdate = ReaderCompanionDotPolicy.showsDot(progress: progress, lastOpenedAt: lastOpenedAt, now: now)
     }
 
     /// Called when the reader moves from one outline entry straight into the next.

@@ -240,7 +240,7 @@ struct LearningHeroButtonStyle: ButtonStyle {
     }
 }
 
-// MARK: - AI 困惑地图
+// MARK: - 困惑地图
 
 /// The confusion map on the practice page, naming each item's book. The
 /// reader shows the same map with its own card.
@@ -252,7 +252,7 @@ struct LearningConfusionMapCard: View {
             HStack(alignment: .top, spacing: JerreaderSpacing.sm) {
                 JerreaderIconTile(systemImage: "questionmark.circle", tint: JerreaderTheme.vermilion)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("AI 困惑地图")
+                    Text("困惑地图")
                         .font(.headline)
                     Text(confusion.summary)
                         .font(.subheadline)

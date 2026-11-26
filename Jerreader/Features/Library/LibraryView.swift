@@ -541,6 +541,10 @@ struct LibraryView: View {
     private func startSelectionUITestImportIfNeeded() {
         let arguments = ProcessInfo.processInfo.arguments
         guard arguments.contains("--jerreader-selection-ui-test"),
+              // The furigana-region check (2.1.0 §2) runs the selection
+              // harness on the book a tester placed in tmp, which the
+              // sample-book hook below imports.
+              !arguments.contains("--jerreader-ruby-region-ui-test"),
               !didStartSelectionUITestImport,
               let fixtureURL = Bundle.main.url(
                   forResource: "UITestRubyBook",

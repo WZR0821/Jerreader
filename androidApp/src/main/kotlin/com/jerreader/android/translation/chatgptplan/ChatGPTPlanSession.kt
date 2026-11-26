@@ -3,10 +3,13 @@ package com.jerreader.android.translation.chatgptplan
 import com.jerreader.android.translation.TranslationCredentialStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
@@ -21,25 +24,69 @@ class UrlConnectionChatGPTPlanHttpClient : ChatGPTPlanHttpClient {
     override suspend fun send(request: ChatGPTPlanHttpRequest): ChatGPTPlanHttpResponse = withContext(Dispatchers.IO) {
         val connection = URL(request.url).openConnection() as HttpURLConnection
         try {
-            connection.requestMethod = request.method
-            connection.connectTimeout = minOf(request.timeoutMillis, CONNECT_TIMEOUT_MILLIS)
-            connection.readTimeout = request.timeoutMillis
-            connection.instanceFollowRedirects = false
-            connection.useCaches = false
-            for ((name, value) in request.headers) connection.setRequestProperty(name, value)
-            val body = request.body
-            if (body != null) {
-                val bytes = body.toByteArray(Charsets.UTF_8)
-                connection.doOutput = true
-                connection.setFixedLengthStreamingMode(bytes.size)
-                connection.outputStream.use { output -> output.write(bytes) }
-            }
+            prepare(connection, request)
             val status = connection.responseCode
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
             val text = stream?.use { input -> input.readBytes().decodeToString() }.orEmpty()
             ChatGPTPlanHttpResponse(status, text, connection.getHeaderField("x-request-id"))
         } finally {
             connection.disconnect()
+        }
+    }
+
+    /**
+     * Reads the answer line by line while it arrives (2.1.0). Cancelling the
+     * request closes the connection at once, which also ends a read that is
+     * waiting for the next line.
+     */
+    override suspend fun sendStreaming(
+        request: ChatGPTPlanHttpRequest,
+        onLine: (String) -> Unit
+    ): ChatGPTPlanHttpResponse = coroutineScope {
+        val connection = URL(request.url).openConnection() as HttpURLConnection
+        val closer = launch(Dispatchers.IO, start = CoroutineStart.UNDISPATCHED) {
+            try {
+                awaitCancellation()
+            } finally {
+                connection.disconnect()
+            }
+        }
+        try {
+            withContext(Dispatchers.IO) {
+                prepare(connection, request)
+                val status = connection.responseCode
+                val requestID = connection.getHeaderField("x-request-id")
+                if (status !in 200..299) {
+                    val text = connection.errorStream?.use { input -> input.readBytes().decodeToString() }.orEmpty()
+                    return@withContext ChatGPTPlanHttpResponse(status, text, requestID)
+                }
+                connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                    while (true) {
+                        val line = reader.readLine() ?: break
+                        ensureActive()
+                        onLine(line)
+                    }
+                }
+                ChatGPTPlanHttpResponse(status, "", requestID)
+            }
+        } finally {
+            closer.cancel()
+        }
+    }
+
+    private fun prepare(connection: HttpURLConnection, request: ChatGPTPlanHttpRequest) {
+        connection.requestMethod = request.method
+        connection.connectTimeout = minOf(request.timeoutMillis, CONNECT_TIMEOUT_MILLIS)
+        connection.readTimeout = request.timeoutMillis
+        connection.instanceFollowRedirects = false
+        connection.useCaches = false
+        for ((name, value) in request.headers) connection.setRequestProperty(name, value)
+        val body = request.body
+        if (body != null) {
+            val bytes = body.toByteArray(Charsets.UTF_8)
+            connection.doOutput = true
+            connection.setFixedLengthStreamingMode(bytes.size)
+            connection.outputStream.use { output -> output.write(bytes) }
         }
     }
 

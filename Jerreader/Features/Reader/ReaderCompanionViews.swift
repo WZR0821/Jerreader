@@ -255,7 +255,7 @@ struct ReadingConfusionMapCard: View {
                 JerreaderSymbol(name: "SPARKLES", size: 16)
                     .foregroundStyle(JerreaderTheme.accent)
                     .accessibilityHidden(true)
-                Text("AI 困惑地图")
+                Text("困惑地图")
                     .font(.title3.weight(.semibold))
             }
             Text(confusion.summary)

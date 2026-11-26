@@ -408,6 +408,22 @@ class ChatGPTPlanHttpResponse(val status: Int, val body: String, val requestID: 
 /** Sends one request. Tests pass a fake; nothing here touches the network by itself. */
 fun interface ChatGPTPlanHttpClient {
     suspend fun send(request: ChatGPTPlanHttpRequest): ChatGPTPlanHttpResponse
+
+    /**
+     * Sends a streamed request (2.1.0) and hands a 2xx body to [onLine] a line
+     * at a time, without line breaks, as it arrives; the response then has an
+     * empty body. Any other answer comes back whole. A client that cannot
+     * stream, such as a test's, answers at once and splits the whole body.
+     */
+    suspend fun sendStreaming(
+        request: ChatGPTPlanHttpRequest,
+        onLine: (String) -> Unit
+    ): ChatGPTPlanHttpResponse {
+        val response = send(request)
+        if (!response.isSuccess) return response
+        response.body.replace("\r\n", "\n").replace('\r', '\n').split('\n').forEach(onLine)
+        return ChatGPTPlanHttpResponse(response.status, "", response.requestID)
+    }
 }
 
 internal fun planJsonObject(text: String): JSONObject? = try {
@@ -487,11 +503,27 @@ object ChatGPTPlanRequests {
         input: String,
         extra: JSONObject? = null,
         timeoutMillis: Int = 30_000
+    ): ChatGPTPlanHttpRequest = responses(accessToken, model, instructions, listOf("user" to input), extra, timeoutMillis)
+
+    /**
+     * The same request with a conversation as its input (2.1.0 追问): each
+     * (role, text) pair is one message, oldest first, the roles `user` and
+     * `assistant`.
+     */
+    fun responses(
+        accessToken: String,
+        model: String,
+        instructions: String,
+        input: List<Pair<String, String>>,
+        extra: JSONObject? = null,
+        timeoutMillis: Int = 30_000
     ): ChatGPTPlanHttpRequest {
         val body = JSONObject()
         body.put("model", model)
         body.put("instructions", instructions)
-        body.put("input", JSONArray().put(JSONObject().put("role", "user").put("content", input)))
+        val messages = JSONArray()
+        input.forEach { (role, text) -> messages.put(JSONObject().put("role", role).put("content", text)) }
+        body.put("input", messages)
         body.put("store", false)
         body.put("stream", true)
         val reasoning = extra?.opt("reasoning")

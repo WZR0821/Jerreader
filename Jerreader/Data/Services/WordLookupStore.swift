@@ -82,6 +82,76 @@ enum WordLookupStore {
         }
     }
 
+    /// When the word was last looked up, before this lookup is recorded
+    /// (2.1.0 §8): `record` moves `lastLookedUpAt` to now.
+    static func previousLookup(
+        for explanation: WordExplanation,
+        in modelContext: ModelContext
+    ) -> (count: Int, date: Date)? {
+        let key = WordLookupRecord.makeLookupKey(for: explanation)
+        var descriptor = FetchDescriptor<WordLookupRecord>(
+            predicate: #Predicate { $0.lookupKey == key }
+        )
+        descriptor.fetchLimit = 1
+        guard let existing = try? modelContext.fetch(descriptor).first else { return nil }
+        return (existing.lookupCount, existing.lastLookedUpAt)
+    }
+
+    /// The lookup page opened from a translation card that already counted
+    /// this word (2.1.0 §8): the dictionary's answer goes on the word's
+    /// record, found by its key or else by its surface form or lemma,
+    /// without counting a second lookup or moving 上次. A record found by
+    /// its surface form takes the dictionary's key, so the two stay one
+    /// word. A word with no record yet is recorded as usual.
+    /// - Returns: the record, and whether this lookup was counted after all.
+    @discardableResult
+    static func recordWithoutCounting(
+        _ explanation: WordExplanation,
+        sourceBookID: UUID? = nil,
+        sourceBookTitle: String? = nil,
+        in modelContext: ModelContext
+    ) throws -> (record: WordLookupRecord, counted: Bool) {
+        let key = WordLookupRecord.makeLookupKey(for: explanation)
+        let languageRawValue = explanation.language.rawValue
+        let descriptor = FetchDescriptor<WordLookupRecord>(
+            predicate: #Predicate { $0.languageRawValue == languageRawValue }
+        )
+        let surface = normalizedTerm(explanation.surfaceForm)
+        let found: WordLookupRecord?
+        do {
+            let records = try modelContext.fetch(descriptor)
+            found = records.first { $0.lookupKey == key }
+                ?? records.first { normalizedTerm($0.surfaceForm) == surface }
+                ?? records.first { $0.lemma.map { normalizedTerm($0) } == surface }
+        } catch {
+            throw WordLookupStoreError.persistenceFailed
+        }
+        guard let existing = found else {
+            let inserted = try Self.record(
+                explanation,
+                sourceBookID: sourceBookID,
+                sourceBookTitle: sourceBookTitle,
+                in: modelContext
+            )
+            return (inserted, true)
+        }
+        let count = existing.lookupCount
+        existing.recordLookup(
+            explanation: explanation,
+            sourceBookID: sourceBookID,
+            sourceBookTitle: sourceBookTitle,
+            at: existing.lastLookedUpAt
+        )
+        existing.lookupCount = count
+        // Looked up by key first: no other record holds `key` when this
+        // one was found by its surface form or lemma.
+        if existing.lookupKey != key {
+            existing.lookupKey = key
+        }
+        try save(modelContext)
+        return (existing, false)
+    }
+
     static func setFavorite(
         _ isFavorite: Bool,
         for record: WordLookupRecord,
@@ -92,6 +162,31 @@ enum WordLookupStore {
             modelContext.delete(record)
         }
         try save(modelContext)
+    }
+
+    /// Stars the record a translation card has already counted, found by
+    /// its key, without counting another lookup (2.1.0 §8), as Android's
+    /// 加入生词本 does.
+    /// - Returns: false when no record has that key any more.
+    @discardableResult
+    static func setFavorite(
+        _ isFavorite: Bool,
+        forKey key: String,
+        in modelContext: ModelContext
+    ) throws -> Bool {
+        var descriptor = FetchDescriptor<WordLookupRecord>(
+            predicate: #Predicate { $0.lookupKey == key }
+        )
+        descriptor.fetchLimit = 1
+        let found: WordLookupRecord?
+        do {
+            found = try modelContext.fetch(descriptor).first
+        } catch {
+            throw WordLookupStoreError.persistenceFailed
+        }
+        guard let found else { return false }
+        try setFavorite(isFavorite, for: found, in: modelContext)
+        return true
     }
 
     static func removeFromHistory(

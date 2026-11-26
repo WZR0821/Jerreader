@@ -29,6 +29,8 @@ REGRESSION_CLASSES = [
     "translation.TranslationCacheTest",
     # 2026-11-18, GitHub issue #2: sideways swipes while a book scrolls.
     "reader.ReaderScrollGestureTest",
+    # 2026-11-22, 2.1.0: furigana painted as one region with their kanji.
+    "reader.ReaderRubySelectionTest",
     # 2026-11-21: 2.0.1's PDF fixes on a generated text PDF (last: it closes
     # the reader mid-OCR, and a crash there would end the run).
     "reader.ReaderPdfTapTranslationTest",
@@ -47,9 +49,20 @@ UI_CLASSES = [
     "learning.LearningUiParityTest#contextualPersistenceFailure",
     "learning.LearningUiParityTest#japaneseAndChineseLookupWorkWithoutNetwork",
     "learning.LearningUiParityTest#bundledDictionaryFindsNonCoreWordsAndHandlesMisses",
+    # 2.1.0 §11: a tapped sentence, 读懂 streaming, a 追问 preset, a half-screen card.
+    "reader.ReaderAIActionBarTest#comprehensionAndFollowUpStreamIntoAHalfScreenCard",
 ]
 # The UI tasks that run at the large system font; every other one runs at 1.0.
 LARGE_FONT_UI_CLASSES = ("#largeDarkLearningPages", "#contextualLargeFont")
+
+# ReaderRealRubyBookTest checks furigana selections in a real Japanese book.
+# It runs only when JERREADER_ANDROID_REAL_RUBY_EPUB names the developer's own
+# copy, kept outside the repository (safe_ios_validation.py checks the path).
+# The book is pushed into the disposable guest for that one class and removed
+# right after it.
+REAL_RUBY_CLASS = "reader.ReaderRealRubyBookTest"
+REAL_RUBY_DEVICE_PATH = "/data/local/tmp/JerreaderRealRubyBook.epub"
+
 
 def preserve_screenshots(command, output, label):
     # Pull into a fresh path: adb nests the remote directory when its target
@@ -208,7 +221,7 @@ def verify_release_components(logcat):
 
 def main():
     destination, output_arg, scope = sys.argv[1:]
-    if scope not in ("full", "ui"): raise RuntimeError("Unexpected Android validation scope")
+    if scope not in ("full", "ui", "ruby"): raise RuntimeError("Unexpected Android validation scope")
     match = re.fullmatch(r"platform=Android,serial=(emulator-5580),avd=([A-Za-z0-9_-]+)", destination)
     if not match or os.environ.get("JERREADER_ALLOW_SIMULATOR") != "1":
         raise RuntimeError("Missing approved single emulator destination")
@@ -229,6 +242,10 @@ def main():
     release_app = ROOT / RELEASE_APK
     for path in (adb, emulator, app, test, *([release_app] if release_smoke else [])):
         if not path.is_file(): raise RuntimeError("Required prebuilt artifact or SDK tool missing: " + str(path))
+    real_ruby = os.environ.get("JERREADER_ANDROID_REAL_RUBY_EPUB", "")
+    real_ruby_book = Path(real_ruby) if real_ruby else None
+    if real_ruby_book and (scope not in ("full", "ruby") or not real_ruby_book.is_file()):
+        raise RuntimeError("The real ruby EPUB needs scope full or ruby and an existing file")
     def command(args, timeout=60):
         result = subprocess.run([str(adb), "-s", serial, *args], text=True, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, timeout=timeout)
@@ -305,10 +322,11 @@ def main():
                 density=command(["shell", "wm", "density"]).strip(),
             ), indent=2) + "\n")
             reports = []
-            def instrument(names, label, minimum, managed_font=False):
+            def instrument(names, label, minimum, managed_font=False, extra=()):
                 classes = ",".join("com.jerreader.android." + name for name in names)
                 args = ["shell", "am", "instrument", "-w", "-r", "-e", "class", classes]
                 if managed_font: args += ["-e", "jerreaderFontScaleManaged", "true"]
+                args += list(extra)
                 report = command(args + ["com.jerreader.android.test/androidx.test.runner.AndroidJUnitRunner"], timeout=1200)
                 (output / ("instrumentation-" + label + ".txt")).write_text(report)
                 reports.append(report)
@@ -316,17 +334,32 @@ def main():
                 print(report, flush=True)
                 verify_report(report, minimum_tests=minimum)
             if scope == "full": instrument(REGRESSION_CLASSES, "regression", 17)
+            if scope == "ruby":
+                # Only the furigana selection checks: the synthetic book here,
+                # the real one below when it is given.
+                instrument(["reader.ReaderRubySelectionTest"], "ruby", 1)
+                preserve_screenshots(command, output, "ruby")
             # Global font changes can restart System UI while UiAutomation is
             # attached. Prepare each size outside instrumentation, then run
             # each reviewed UI task once in its own fresh process, serially.
-            for index, test_class in enumerate(UI_CLASSES):
+            for index, test_class in enumerate(UI_CLASSES if scope != "ruby" else []):
                 font = "1.5" if test_class.endswith(LARGE_FONT_UI_CLASSES) else "1.0"
                 command(["shell", "settings", "put", "system", "font_scale", font])
                 time.sleep(2)
                 print("Prepared UI task %s with system font scale %s" % (index + 1, font), flush=True)
                 instrument([test_class], "ui-" + str(index + 1), 1, managed_font=True)
                 preserve_screenshots(command, output, "ui-" + str(index + 1))
-            verify_report("\n".join(reports), minimum_tests=len(UI_CLASSES) + (17 if scope == "full" else 0))
+            if scope != "ruby":
+                verify_report("\n".join(reports), minimum_tests=len(UI_CLASSES) + (17 if scope == "full" else 0))
+            if real_ruby_book:
+                command(["push", str(real_ruby_book), REAL_RUBY_DEVICE_PATH], timeout=180)
+                try:
+                    instrument([REAL_RUBY_CLASS], "real-ruby", 1,
+                               extra=["-e", "jerreaderRealRubyBytes", str(real_ruby_book.stat().st_size)])
+                finally:
+                    try: command(["shell", "rm", "-f", REAL_RUBY_DEVICE_PATH], timeout=30)
+                    except (RuntimeError, subprocess.TimeoutExpired): pass
+                preserve_screenshots(command, output, "real-ruby")
             if release_smoke:
                 # Same owned disposable guest; use the actual deliverable after the
                 # instrumented Debug suite. An in-place upgrade also verifies that

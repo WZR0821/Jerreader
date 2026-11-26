@@ -14,7 +14,10 @@ data class ContextExplanationRequest(
 
 data class ContextExplanationResult(
     val explanation: String,
-    val providerIdentifier: String
+    val providerIdentifier: String,
+    /** Who answered, for the source badge (2.1.0); null when unknown. */
+    val answerSource: AIAnswerSource? = null,
+    val usage: AIUsage? = null
 )
 
 interface ContextExplanationService {

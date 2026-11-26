@@ -18,6 +18,13 @@ import com.jerreader.shared.learning.WordReviewState
 import com.jerreader.shared.library.LibraryBackupArchiveInfo
 import com.jerreader.shared.library.LibraryBackupPolicy
 import com.jerreader.shared.library.LibraryBackupPruner
+import com.jerreader.shared.learning.CalendarDay
+import com.jerreader.shared.learning.ChapterTimeEstimatePolicy
+import com.jerreader.shared.learning.LookupHintPolicy
+import com.jerreader.shared.learning.ReaderCompanionDotPolicy
+import com.jerreader.shared.translation.AIFollowUpTurn
+import com.jerreader.shared.translation.AIReadingAction
+import com.jerreader.shared.translation.AIReadingActionPolicy
 import com.jerreader.shared.translation.AIReadingLensMode
 import com.jerreader.shared.translation.AIReadingLensPromptPolicy
 import com.jerreader.shared.translation.ReadingLensOptions
@@ -204,6 +211,143 @@ class ParityFixturesTest {
                     grammarPrompt = case.nullableString("grammarPrompt")
                 ),
                 name
+            )
+        }
+    }
+
+    @Test
+    fun aiActionsMatchFixtures() {
+        val root = fixture("ai_actions.json")
+        assertEquals(root.getString("guard"), AIReadingActionPolicy.GUARD)
+        assertEquals(root.getInt("maximumFollowUpTurns"), AIReadingActionPolicy.MAXIMUM_FOLLOW_UP_TURNS)
+
+        root.getJSONArray("actions").objects().forEach { case ->
+            val source = case.nullableString("sourceLanguage")?.let(::language)
+            val expected = case.getJSONArray("expected").objects().map { it.getString("id") to it.getString("title") }
+            assertEquals(expected, AIReadingActionPolicy.actions(source).map { it.id to it.title }, "actions $source")
+        }
+        root.getJSONArray("presets").objects().forEach { case ->
+            val source = case.nullableString("sourceLanguage")?.let(::language)
+            assertEquals(case.getJSONArray("expected").strings(), AIReadingActionPolicy.presets(source), "presets $source")
+        }
+        root.getJSONArray("instructions").objects().forEach { case ->
+            val action = requireNotNull(AIReadingAction.fromId(case.getString("action")))
+            assertEquals(
+                case.getString("expected"),
+                AIReadingActionPolicy.instruction(
+                    action,
+                    case.nullableString("sourceLanguage")?.let(::language),
+                    language(case.getString("responseLanguage"))
+                ),
+                case.getString("name")
+            )
+        }
+        root.getJSONArray("material").objects().forEach { case ->
+            assertEquals(
+                case.getString("expected"),
+                AIReadingActionPolicy.material(
+                    case.getString("source"),
+                    case.nullableString("translation"),
+                    case.nullableString("context")
+                ),
+                case.getString("name")
+            )
+        }
+        root.getJSONArray("followUp").objects().forEach { case ->
+            val name = case.getString("name")
+            val turns = case.getJSONArray("turns").objects().map {
+                AIFollowUpTurn(it.getString("question"), it.nullableString("answer"))
+            }
+            val messages = AIReadingActionPolicy.followUpMessages(
+                source = case.getString("source"),
+                translation = case.nullableString("translation"),
+                context = case.nullableString("context"),
+                sourceLanguage = case.nullableString("sourceLanguage")?.let(::language),
+                responseLanguage = language(case.getString("responseLanguage")),
+                turns = turns
+            )
+            assertEquals(
+                case.getJSONArray("messages").objects().map { it.getString("role") to it.getString("text") },
+                messages.map { it.role.id to it.text },
+                "$name messages"
+            )
+            assertEquals(
+                case.getString("flattened"),
+                AIReadingActionPolicy.followUpFlattened(
+                    source = case.getString("source"),
+                    translation = case.nullableString("translation"),
+                    context = case.nullableString("context"),
+                    turns = turns
+                ),
+                "$name flattened"
+            )
+        }
+        root.getJSONArray("badge").objects().forEach { case ->
+            assertEquals(
+                case.getString("expected"),
+                AIReadingActionPolicy.badge(case.getString("model"), case.getBoolean("usedContext"))
+            )
+        }
+    }
+
+    @Test
+    fun chapterEstimateMatchesFixtures() {
+        val root = fixture("chapter_estimate.json")
+        val rule = root.getJSONObject("rule")
+        assertEquals(rule.getDouble("minimumReadingSeconds"), ChapterTimeEstimatePolicy.MINIMUM_READING_SECONDS)
+        assertEquals(rule.getDouble("minimumProgression"), ChapterTimeEstimatePolicy.MINIMUM_PROGRESSION)
+        assertEquals(rule.getInt("maximumMinutes"), ChapterTimeEstimatePolicy.MAXIMUM_MINUTES)
+        assertEquals(rule.getDouble("underOneMinuteSeconds"), ChapterTimeEstimatePolicy.UNDER_ONE_MINUTE_SECONDS)
+        root.getJSONArray("cases").objects().forEach { case ->
+            val name = case.getString("name")
+            val chapterEnd = if (case.isNull("chapterEnd")) null else case.getDouble("chapterEnd")
+            val minutes = ChapterTimeEstimatePolicy.minutes(
+                readingSeconds = case.getDouble("readingSeconds"),
+                progression = case.getDouble("progression"),
+                chapterEnd = chapterEnd
+            )
+            assertEquals(if (case.isNull("minutes")) null else case.getInt("minutes"), minutes, name)
+            assertEquals(case.nullableString("text"), ChapterTimeEstimatePolicy.text(minutes), name)
+        }
+    }
+
+    @Test
+    fun lookupHintMatchesFixtures() {
+        val root = fixture("lookup_hint.json")
+        val zone = java.time.ZoneId.of(root.getString("timeZone"))
+        fun day(iso: String): CalendarDay {
+            val local = java.time.OffsetDateTime.parse(iso).atZoneSameInstant(zone).toLocalDate()
+            return CalendarDay(local.year, local.monthValue, local.dayOfMonth)
+        }
+        val today = day(root.getString("now"))
+        root.getJSONArray("cases").objects().forEach { case ->
+            val name = case.getString("name")
+            val count = case.getInt("lookupCount")
+            assertEquals(
+                case.nullableString("hint"),
+                LookupHintPolicy.hint(count, case.nullableString("previousLookupAt")?.let(::day), today),
+                name
+            )
+            assertEquals(case.getBoolean("addToVocabularyIsPrimary"), LookupHintPolicy.addToVocabularyIsPrimary(count), name)
+        }
+    }
+
+    @Test
+    fun companionDotMatchesFixtures() {
+        val root = fixture("companion_dot.json")
+        assertEquals(root.getDouble("minimumProgress"), ReaderCompanionDotPolicy.MINIMUM_PROGRESS)
+        assertEquals(root.getInt("quietHours"), ReaderCompanionDotPolicy.QUIET_HOURS)
+        fun millis(iso: String) = java.time.OffsetDateTime.parse(iso).toInstant().toEpochMilli()
+        val now = millis(root.getString("now"))
+        root.getJSONArray("cases").objects().forEach { case ->
+            assertEquals(
+                case.getBoolean("expected"),
+                ReaderCompanionDotPolicy.showsDot(
+                    progress = case.getDouble("progress"),
+                    lastOpenedAtMillis = case.nullableString("lastOpenedAt")?.let(::millis),
+                    nowMillis = now
+                ),
+                case.getString("name")
             )
         }
     }

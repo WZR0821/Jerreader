@@ -183,6 +183,8 @@ struct WordRecordCard: View {
     let onSpeak: () -> Void
     let onCopy: () -> Void
     let onToggleFavorite: () -> Void
+    /// 「第 N 次查 · 上次 MM-dd」 under the headword (2.1.0 §8).
+    var lookupHint: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: JerreaderSpacing.lg) {
@@ -195,6 +197,13 @@ struct WordRecordCard: View {
                     Spacer(minLength: 12)
 
                     LearningChip(text: record.language.displayName)
+                }
+
+                if let lookupHint {
+                    Text(lookupHint)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("lookup-count-hint")
                 }
 
                 if let lemma = record.lemma, lemma != record.surfaceForm {

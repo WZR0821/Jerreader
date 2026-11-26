@@ -1301,7 +1301,10 @@ internal fun TranslationSettingsContent(
     onTestConnection: suspend () -> String?,
     showsQuickSentenceToggle: Boolean,
     onOpenAIModels: () -> Unit,
-    onOpenOffline: () -> Unit
+    onOpenOffline: () -> Unit,
+    /** 翻译卡片显示 AI 按钮 (2.1.0 §7), shown by the reader's sheet only; null leaves the row out. */
+    aiActionBarShown: Boolean? = null,
+    onAIActionBarShownChange: (Boolean) -> Unit = {}
 ) {
     // The 2.0 section titles wherever this page opens, the reader's sheet included, as on iOS.
     CompositionLocalProvider(LocalSettingsHeader provides true) {
@@ -1312,7 +1315,9 @@ internal fun TranslationSettingsContent(
             actions = actions,
             onTestConnection = onTestConnection,
             onOpenAIModels = onOpenAIModels,
-            showsQuickSentenceToggle = showsQuickSentenceToggle
+            showsQuickSentenceToggle = showsQuickSentenceToggle,
+            aiActionBarShown = aiActionBarShown,
+            onAIActionBarShownChange = onAIActionBarShownChange
         )
         SettingsGroup(title = "", footer = "基础查词无需下载；句段翻译语言包和扩展词典按需准备。") {
             SettingsLinkRow("离线资源", "", onOpenOffline, showDivider = false)
@@ -1386,7 +1391,9 @@ private fun TranslationSettings(
     actions: TranslationSettingsActions,
     onTestConnection: suspend () -> String?,
     onOpenAIModels: () -> Unit,
-    showsQuickSentenceToggle: Boolean = true
+    showsQuickSentenceToggle: Boolean = true,
+    aiActionBarShown: Boolean? = null,
+    onAIActionBarShownChange: (Boolean) -> Unit = {}
 ) {
     val providers by store.aiProviders.collectAsState()
     val keyed by store.keyedProviderIDs.collectAsState()
@@ -1528,6 +1535,9 @@ private fun TranslationSettings(
                 TranslationDisplayMode.TOP_BANNER -> "译文优先显示在页面上方；靠近顶部选词时会自动避让选区。"
             }
         )
+        aiActionBarShown?.let { shown ->
+            SettingsToggleRow("翻译卡片显示 AI 按钮", shown, onAIActionBarShownChange)
+        }
 
         SettingsToggleRow(
             "翻译完成时触感反馈",

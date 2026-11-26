@@ -32,6 +32,9 @@ interface ReaderRecordDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAnnotation(record: ReadingAnnotationEntity)
 
+    @Query("SELECT * FROM reading_annotations WHERE annotationKey = :key LIMIT 1")
+    suspend fun annotation(key: String): ReadingAnnotationEntity?
+
     @Query("DELETE FROM reading_annotations WHERE id = :id")
     suspend fun deleteAnnotation(id: String)
 

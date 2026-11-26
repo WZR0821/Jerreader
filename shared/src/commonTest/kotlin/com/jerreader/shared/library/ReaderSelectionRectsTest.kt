@@ -139,4 +139,103 @@ class ReaderSelectionRectsTest {
 
         assertEquals(0, merged.size)
     }
+
+    // Ruby: the reading joins the tile of the kanji it sits over. The full set
+    // of shared cases runs in SelectionTilesParityTest.
+
+    @Test
+    fun `furigana join the kanji below into one tile`() {
+        val merged = ReaderSelectionRectMerger.merge(
+            listOf(
+                ReaderSelectionRect(x = 20.0, y = 100.0, width = 40.0, height = 24.0),
+                ReaderSelectionRect(x = 60.0, y = 100.0, width = 32.0, height = 24.0),
+                ReaderSelectionRect(x = 92.0, y = 100.0, width = 48.0, height = 24.0)
+            ),
+            vertical = false,
+            annotations = listOf(
+                ReaderRubyAnnotationRects(
+                    baseIndices = listOf(1),
+                    rects = listOf(ReaderSelectionRect(x = 61.0, y = 88.0, width = 30.0, height = 11.0))
+                )
+            )
+        )
+
+        assertEquals(listOf(ReaderSelectionRect(x = 20.0, y = 88.0, width = 120.0, height = 36.0)), merged)
+    }
+
+    @Test
+    fun `without annotations ruby boxes stay where they were`() {
+        // The plain merge treats a reading as a line of its own: the gap the
+        // annotation-aware merge closes.
+        val base = listOf(ReaderSelectionRect(x = 60.0, y = 100.0, width = 32.0, height = 24.0))
+        val reading = ReaderSelectionRect(x = 61.0, y = 88.0, width = 30.0, height = 11.0)
+
+        assertEquals(2, ReaderSelectionRectMerger.merge(base + reading, vertical = false).size)
+        assertEquals(
+            1,
+            ReaderSelectionRectMerger.merge(
+                base,
+                vertical = false,
+                annotations = listOf(ReaderRubyAnnotationRects(listOf(0), listOf(reading)))
+            ).size
+        )
+    }
+
+    @Test
+    fun `a partly selected reading is clipped to the selected kanji`() {
+        val merged = ReaderSelectionRectMerger.merge(
+            listOf(ReaderSelectionRect(x = 200.0, y = 68.0, width = 24.0, height = 24.0)),
+            vertical = true,
+            annotations = listOf(
+                ReaderRubyAnnotationRects(
+                    baseIndices = listOf(0),
+                    rects = listOf(ReaderSelectionRect(x = 225.0, y = 44.0, width = 11.0, height = 48.0)),
+                    baseFullySelected = false
+                )
+            )
+        )
+
+        assertEquals(listOf(ReaderSelectionRect(x = 200.0, y = 68.0, width = 36.0, height = 24.0)), merged)
+    }
+
+    @Test
+    fun `a ruby line grows without swallowing the line above`() {
+        val merged = ReaderSelectionRectMerger.merge(
+            listOf(
+                ReaderSelectionRect(x = 20.0, y = 60.0, width = 240.0, height = 24.0),
+                ReaderSelectionRect(x = 20.0, y = 92.0, width = 60.0, height = 24.0),
+                ReaderSelectionRect(x = 80.0, y = 92.0, width = 32.0, height = 24.0),
+                ReaderSelectionRect(x = 112.0, y = 92.0, width = 40.0, height = 24.0)
+            ),
+            vertical = false,
+            annotations = listOf(
+                ReaderRubyAnnotationRects(
+                    baseIndices = listOf(2),
+                    rects = listOf(ReaderSelectionRect(x = 81.0, y = 80.0, width = 30.0, height = 11.0))
+                )
+            )
+        )
+
+        assertEquals(2, merged.size)
+        assertNoOverlap(merged)
+        assertEquals(82.0, merged[0].bottom)
+        assertEquals(82.0, merged[1].y)
+    }
+
+    @Test
+    fun `a reading far from its kanji stays a tile of its own`() {
+        val merged = ReaderSelectionRectMerger.merge(
+            listOf(ReaderSelectionRect(x = 20.0, y = 100.0, width = 40.0, height = 24.0)),
+            vertical = false,
+            annotations = listOf(
+                ReaderRubyAnnotationRects(
+                    baseIndices = listOf(0, 9),
+                    rects = listOf(ReaderSelectionRect(x = 20.0, y = 40.0, width = 40.0, height = 11.0))
+                )
+            )
+        )
+
+        assertEquals(2, merged.size)
+        assertNoOverlap(merged)
+    }
 }

@@ -46,13 +46,31 @@ internal class ReadingSessionRecorder(
     private var debounceJob: Job? = null
     private var clockStartedAt: Long? = null
     private var unsavedSeconds = 0.0
+    // Every second counted since begin(), saved or not.
+    private var secondsSinceBegin = 0.0
 
     // Guarded by writes.
     private var lastWrittenSequence = 0L
 
-    /** Positions and time recorded before this are dropped: there is no book to save them to. */
+    /**
+     * Positions and time recorded before this are dropped: there is no book to
+     * save them to. The reader calls it right after reading the book record,
+     * so [sessionSeconds] starts again from zero here.
+     */
     fun begin(bookId: String) {
-        synchronized(lock) { this.bookId = bookId }
+        synchronized(lock) {
+            this.bookId = bookId
+            secondsSinceBegin = 0.0
+        }
+    }
+
+    /**
+     * The time read since [begin], saved or not, with the running clock: what
+     * the book record read at [begin] does not hold yet (2.1.0 §9).
+     */
+    fun sessionSeconds(): Double = synchronized(lock) {
+        val running = clockStartedAt?.let { started -> (clock() - started).coerceAtLeast(0L) / 1000.0 } ?: 0.0
+        secondsSinceBegin + running
     }
 
     /** Starts the reading clock unless it is already running. */
@@ -84,7 +102,9 @@ internal class ReadingSessionRecorder(
         val time: Pair<String, Double>?
         synchronized(lock) {
             clockStartedAt?.let { started ->
-                unsavedSeconds += (clock() - started).coerceAtLeast(0L) / 1000.0
+                val elapsed = (clock() - started).coerceAtLeast(0L) / 1000.0
+                unsavedSeconds += elapsed
+                secondsSinceBegin += elapsed
             }
             clockStartedAt = null
             debounceJob?.cancel()

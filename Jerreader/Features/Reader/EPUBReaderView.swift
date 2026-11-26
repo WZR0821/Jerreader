@@ -108,7 +108,24 @@ struct EPUBReaderScreen: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.96)))
                     .zIndex(3)
             }
+
+            // 已存为笔记 and the other short notices of the card's AI bar.
+            if let toast = model.cardAI.toast, model.readerActivityMessage == nil {
+                VStack {
+                    ReaderCardAIToastView(text: toast.text)
+                    Spacer(minLength: 0)
+                }
+                .safeAreaPadding(.top, 8)
+                .allowsHitTesting(false)
+                .id(toast.id)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .zIndex(3)
+            }
         }
+        // The follow-up field's keyboard must not resize the page, which
+        // would make Readium paginate again; the card moves above the
+        // keyboard by itself (ReaderTranslationLayer).
+        .ignoresSafeArea(.keyboard)
         .background(readerBackground.ignoresSafeArea())
         .animation(
             reduceMotion ? nil : JerreaderMotion.stateChange,
@@ -117,6 +134,10 @@ struct EPUBReaderScreen: View {
         .animation(
             reduceMotion ? nil : JerreaderMotion.stateChange,
             value: model.readerActivityMessage
+        )
+        .animation(
+            reduceMotion ? nil : JerreaderMotion.stateChange,
+            value: model.cardAI.toast?.id
         )
         // The immersive layout is full screen by definition; the standard one
         // keeps the separate status-bar choice.
@@ -178,7 +199,8 @@ struct EPUBReaderScreen: View {
                         ?? model.translationState.request?.sourceText ?? "",
                     language: model.shortTapLookup?.language
                         ?? model.translationState.request?.sourceLanguage,
-                    sourceBookID: model.book.id, sourceBookTitle: model.book.title)
+                    sourceBookID: model.book.id, sourceBookTitle: model.book.title,
+                    cardCountedLookup: model.cardCountedLookup)
                     .navigationTitle("语境查词")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar { ToolbarItem(placement: .confirmationAction) {
@@ -196,6 +218,7 @@ struct EPUBReaderScreen: View {
             navigationSection = .search
             isShowingNavigation = true
         })
+        .modifier(ReaderCardAISheets(model: model, cardAI: model.cardAI))
         .alert(
             "阅读器提示",
             isPresented: Binding(
@@ -458,6 +481,21 @@ struct EPUBReaderScreen: View {
                 .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
                 .padding(.horizontal, 6)
                 .frame(minHeight: 32)
+
+                // 本章还剩约 N 分钟 (2.1.0 §9, EPUB only): a caption under the
+                // progress row that takes no room while there is no estimate.
+                if let estimate = model.chapterTimeEstimate {
+                    Text(estimate)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                        .padding(.horizontal, 6)
+                        .padding(.bottom, 2)
+                        .accessibilityIdentifier("chapter-time-estimate")
+                }
             }
 
             HStack(spacing: 0) {
@@ -747,6 +785,10 @@ private struct ReaderTranslationLayer: View {
     @State private var latestSelectionMovementAt = Date.distantPast
     @State private var selectionSettleTask: Task<Void, Never>?
     @GestureState private var dragState = TranslationOverlayDragState.inactive
+    @AppStorage(ReaderInterfaceDefaults.aiActionBarHiddenKey)
+    private var aiActionBarHidden = false
+    /// Where the keyboard is on screen while it shows, for the follow-up field.
+    @State private var keyboardFrame: CGRect?
 
     init(model: EPUBReaderViewModel, topChromeHeight: CGFloat, bottomChromeHeight: CGFloat) {
         self.model = model
@@ -763,15 +805,26 @@ private struct ReaderTranslationLayer: View {
                 cardWidth: proposedCardWidth
             )
             let cardWidth = overlayLayout.cardWidth
+            // While a follow-up is being typed the card sits just above the
+            // keyboard and may cover the text for that time (2.1.0 §5); once
+            // the keyboard goes, it keeps clear of the selection again.
+            let keyboardTop = composingKeyboardTop(in: geometry)
+            let maximumCardHeight = keyboardTop.map {
+                composingMaximumCardHeight(above: $0, in: geometry)
+            } ?? overlayLayout.maximumCardHeight
             // Position against the card's measured height. The expanded
             // policy only raises the *maximum* available to long translations;
             // it must never force a short result to fill that viewport.
             let positioningCardHeight = min(
                 max(cardHeight, 108),
-                overlayLayout.maximumCardHeight
+                maximumCardHeight
             )
-            let automaticPosition = overlayLayout.position
-            let basePosition = manualPosition ?? automaticPosition
+            let automaticPosition = keyboardTop.map {
+                CGPoint(x: geometry.size.width / 2, y: $0 - 12 - positioningCardHeight / 2)
+            } ?? overlayLayout.position
+            let basePosition = keyboardTop == nil
+                ? manualPosition ?? automaticPosition
+                : automaticPosition
             let targetPosition = clamp(
                 CGPoint(
                     x: basePosition.x + dragState.translation.width,
@@ -779,11 +832,12 @@ private struct ReaderTranslationLayer: View {
                 ),
                 in: geometry,
                 cardWidth: cardWidth,
-                cardHeight: positioningCardHeight
+                cardHeight: positioningCardHeight,
+                keyboardTop: keyboardTop
             )
             ReaderTranslationOverlay(
                 model: model,
-                maximumCardHeight: overlayLayout.maximumCardHeight,
+                maximumCardHeight: maximumCardHeight,
                 usesCompactHeader: cardWidth < 238,
                 isDragging: dragState.isActive || isSelectionMoving,
                 handleGesture: dragGesture(
@@ -867,10 +921,52 @@ private struct ReaderTranslationLayer: View {
             selectionSettleTask?.cancel()
             selectionSettleTask = nil
         }
+        // The screen ignores the keyboard's safe area so the page never
+        // re-paginates; the card follows the keyboard from its frame instead.
+        .onReceive(
+            NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)
+        ) { notification in
+            keyboardFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)
+        ) { _ in
+            keyboardFrame = nil
+        }
+        .onChange(of: model.cardAI.isComposing) { _, isComposing in
+            // Back from typing, the card keeps clear of the selection again.
+            if !isComposing { manualPosition = nil }
+        }
         .onDisappear {
             selectionSettleTask?.cancel()
             selectionSettleTask = nil
         }
+    }
+
+    /// The keyboard's top edge in this layer while a follow-up is being
+    /// typed; nil while the field is not in use or the keyboard is away.
+    private func composingKeyboardTop(in geometry: GeometryProxy) -> CGFloat? {
+        guard model.cardAI.isComposing,
+              let keyboardFrame,
+              !keyboardFrame.isNull,
+              !keyboardFrame.isEmpty
+        else { return nil }
+        let top = keyboardFrame.minY - geometry.frame(in: .global).minY
+        guard top.isFinite, top < geometry.size.height - 1 else { return nil }
+        // A hardware keyboard leaves only its small bar: then the bottom bar
+        // still limits the card. Leave room for the card's smallest height.
+        let line = min(top, geometry.size.height - bottomInset(in: geometry) + 12)
+        return max(line, topInset(in: geometry) + 120)
+    }
+
+    /// The room between the top bar and the keyboard, up to the card's usual
+    /// limit, while a follow-up is being typed.
+    private func composingMaximumCardHeight(
+        above keyboardTop: CGFloat,
+        in geometry: GeometryProxy
+    ) -> CGFloat {
+        let room = keyboardTop - 12 - topInset(in: geometry)
+        return max(min(preferredMaximumCardHeight(in: geometry), room), 108)
     }
 
     private func layout(
@@ -938,19 +1034,25 @@ private struct ReaderTranslationLayer: View {
         switch model.translationState {
         case .idle:
             preferredWidth = minimumWidth
-        case .loading:
-            preferredWidth = 304
+        case let .loading(request):
+            // A streamed translation widens with its text as the result
+            // would, so the card does not jump when it completes.
+            if let streaming = model.streamingTranslation,
+               streaming.requestID == request.id {
+                preferredWidth = resultWidth(
+                    characterCount: streaming.text.count,
+                    in: geometry
+                )
+            } else {
+                preferredWidth = 304
+            }
         case .failure:
             preferredWidth = 340
         case let .success(_, result, _):
-            switch result.translatedText.count {
-            case ...24:
-                preferredWidth = 300
-            case ...90:
-                preferredWidth = 334
-            default:
-                preferredWidth = geometry.size.width >= 700 ? 420 : 376
-            }
+            preferredWidth = resultWidth(
+                characterCount: result.translatedText.count,
+                in: geometry
+            )
         }
 
         let resolvedWidth = min(
@@ -969,6 +1071,20 @@ private struct ReaderTranslationLayer: View {
             resolvedWidth,
             geometry.size.width >= 700 ? 320 : 220
         )
+    }
+
+    private func resultWidth(
+        characterCount: Int,
+        in geometry: GeometryProxy
+    ) -> CGFloat {
+        switch characterCount {
+        case ...24:
+            return 300
+        case ...90:
+            return 334
+        default:
+            return geometry.size.width >= 700 ? 420 : 376
+        }
     }
 
     private func usesVerticalSideAvoidance(
@@ -1000,6 +1116,21 @@ private struct ReaderTranslationLayer: View {
     }
 
     private func preferredMaximumCardHeight(
+        in geometry: GeometryProxy
+    ) -> CGFloat {
+        // A chip's answer (2.1.0 §4) may take half the height outside the
+        // safe areas; the placement still keeps the card off the selection
+        // and shrinks it to the larger side when half does not fit.
+        guard model.isCardAIResultShowing, !aiActionBarHidden else {
+            return standardMaximumCardHeight(in: geometry)
+        }
+        let available = geometry.size.height
+            - geometry.safeAreaInsets.top
+            - geometry.safeAreaInsets.bottom
+        return max(available / 2, standardMaximumCardHeight(in: geometry))
+    }
+
+    private func standardMaximumCardHeight(
         in geometry: GeometryProxy
     ) -> CGFloat {
         if prefersExpandedMaximumHeight {
@@ -1055,14 +1186,16 @@ private struct ReaderTranslationLayer: View {
         _ position: CGPoint,
         in geometry: GeometryProxy,
         cardWidth: CGFloat,
-        cardHeight: CGFloat
+        cardHeight: CGFloat,
+        keyboardTop: CGFloat? = nil
     ) -> CGPoint {
         ReaderTranslationOverlayPlacement.clampedPosition(
             position,
             viewportSize: geometry.size,
             cardSize: CGSize(width: cardWidth, height: cardHeight),
             topInset: topInset(in: geometry),
-            bottomInset: bottomInset(in: geometry),
+            bottomInset: keyboardTop.map { geometry.size.height - $0 + 12 }
+                ?? bottomInset(in: geometry),
             horizontalInset: horizontalInset(in: geometry)
         )
     }
@@ -1153,6 +1286,8 @@ private struct TranslationTextHeightKey: PreferenceKey {
 private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
     @AppStorage(ReaderInterfaceDefaults.japaneseFuriganaKey)
     private var japaneseFuriganaEnabled = false
+    @AppStorage(ReaderInterfaceDefaults.aiActionBarHiddenKey)
+    private var aiActionBarHidden = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     let model: EPUBReaderViewModel
@@ -1161,6 +1296,8 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
     let isDragging: Bool
     let handleGesture: HandleGesture
     @State private var translatedContentHeight: CGFloat = 54
+    /// The AI bar's height, chips and result together (2.1.0 §4).
+    @State private var cardAIBarHeight: CGFloat = 0
     /// Bumped by the star button only: its bounce and success haptic.
     @State private var favoriteAddedCount = 0
 
@@ -1212,7 +1349,9 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
                 && oldValue != newValue
                 && newValue.hasPrefix("success")
         }
-        .onChange(of: translationPhaseIdentity) {
+        // A streamed translation keeps its measured height into its result,
+        // so the card does not shrink and grow again when it completes.
+        .onChange(of: model.translationState.request?.id) {
             translatedContentHeight = 54
         }
         .jerreaderReveal(order: 0)
@@ -1221,6 +1360,22 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
 
     private var showsShadow: Bool {
         colorScheme != .dark && !isDragging
+    }
+
+    /// The AI bar (2.1.0 §4): under a whole translation, unless it was
+    /// turned off in 阅读设置 or with 不再显示这些按钮.
+    private var showsAIBar: Bool {
+        guard case .success = model.translationState else { return false }
+        return !aiActionBarHidden
+    }
+
+    /// A streamed translation's text so far, while it is still the request
+    /// on the card.
+    private func streamingText(for request: ReaderTranslationRequest) -> String? {
+        guard let streaming = model.streamingTranslation,
+              streaming.requestID == request.id
+        else { return nil }
+        return TranslationOutputPolicy.displayText(streaming.text)
     }
 
     /// Every state with a request has the action row (the 更多 menu works
@@ -1294,6 +1449,10 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
 
             Spacer(minLength: 0)
 
+            if model.showsPrimaryAddToVocabulary {
+                primaryAddToVocabularyButton
+            }
+
             translationActionsMenu
         }
         .padding(.horizontal, 6)
@@ -1305,6 +1464,28 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
                 .padding(.horizontal, JerreaderSpacing.md)
                 .accessibilityHidden(true)
         }
+    }
+
+    /// From a word's third lookup (2.1.0 §8): the solid 加入生词本 beside 更多,
+    /// 32pt high in a 44pt target, as Android's card has it.
+    private var primaryAddToVocabularyButton: some View {
+        Button {
+            model.addCurrentSelectionToVocabulary()
+        } label: {
+            Text("加入生词本")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(JerreaderTheme.onPrimaryAction)
+                .lineLimit(1)
+                .padding(.horizontal, 14)
+                .frame(height: 32)
+                .background(JerreaderTheme.accent, in: Capsule(style: .continuous))
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(JerreaderPressButtonStyle(pressedScale: 0.96))
+        .disabled(model.isAddingCurrentSelectionToVocabulary)
+        .padding(.trailing, 4)
+        .accessibilityIdentifier("card-primary-add-vocabulary")
     }
 
     private var speechButton: some View {
@@ -1395,10 +1576,13 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
                 }
             }
 
-            Button {
-                model.requestContextExplanation()
-            } label: {
-                Label("AI 句子结构分析", systemImage: "text.line.magnify")
+            // The AI bar's 结构 does this while the bar shows (2.1.0 §4).
+            if !showsAIBar {
+                Button {
+                    model.requestContextExplanation()
+                } label: {
+                    Label("AI 句子结构分析", systemImage: "text.line.magnify")
+                }
             }
 
             Button {
@@ -1530,67 +1714,216 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
         return max(maximumCardHeight - reserved, 54)
     }
 
+    /// What the body shows. A streamed translation and its result are one
+    /// text view, so the text does not cross-fade with itself when the
+    /// stream completes; the badge and the AI bar join it then.
+    private enum BodyContent {
+        case text(String, isStreaming: Bool)
+        case invalid
+        case status
+    }
+
+    private var bodyContent: BodyContent {
+        switch model.translationState {
+        case let .success(_, result, _):
+            guard let text = TranslationOutputPolicy.displayText(result.translatedText) else {
+                return .invalid
+            }
+            return .text(text, isStreaming: false)
+        case let .loading(request):
+            guard let partial = streamingText(for: request) else { return .status }
+            return .text(partial, isStreaming: true)
+        case .idle, .failure:
+            return .status
+        }
+    }
+
+    /// The body's identity: a streamed translation keeps its view into its
+    /// result; every other change of phase replaces the body, as before.
+    private var translationBodyIdentity: String {
+        switch model.translationState {
+        case let .loading(request):
+            return streamingText(for: request) == nil
+                ? translationPhaseIdentity
+                : "text-\(request.id.uuidString)"
+        case let .success(request, _, _):
+            return "text-\(request.id.uuidString)"
+        case .idle, .failure:
+            return translationPhaseIdentity
+        }
+    }
+
     @ViewBuilder
     private var translationBody: some View {
         Group {
-            switch model.translationState {
-            case let .success(_, result, _):
-                if let text = TranslationOutputPolicy.displayText(
-                    result.translatedText
+            switch bodyContent {
+            case let .text(text, isStreaming):
+                measuredScrollView(
+                    identifier: isStreaming
+                        ? "translation-streaming-scroll-view"
+                        : "translation-result-scroll-view"
                 ) {
-                    ScrollView(.vertical) {
-                        translatedText(text)
-                            .background {
-                                GeometryReader { proxy in
-                                    Color.clear.preference(
-                                        key: TranslationTextHeightKey.self,
-                                        value: proxy.size.height
-                                    )
-                                }
-                            }
-                    }
-                    .frame(
-                        height: ReaderTranslationContentMetric.height(
-                            measured: translatedContentHeight,
-                            maximum: maximumContentHeight
-                        )
-                    )
-                    .scrollIndicators(
-                        translatedContentHeight > maximumContentHeight + 0.5
-                            ? .visible
-                            : .hidden
-                    )
-                    .scrollBounceBehavior(.basedOnSize)
-                    .accessibilityIdentifier("translation-result-scroll-view")
-                    .scrollDisabled(
-                        translatedContentHeight
-                            <= ReaderTranslationContentMetric.height(
-                                measured: translatedContentHeight,
-                                maximum: maximumContentHeight
-                            ) + 0.5
-                    )
-                    .onPreferenceChange(TranslationTextHeightKey.self) { value in
-                        Task { @MainActor in
-                            guard value.isFinite,
-                                  value > 0,
-                                  abs(value - translatedContentHeight) > 0.5
-                            else { return }
-                            translatedContentHeight = value
-                        }
-                    }
-                } else {
-                    invalidTranslationContent
-                        .frame(maxHeight: maximumContentHeight)
+                    translationTextContent(text, isStreaming: isStreaming)
                 }
-            default:
+            case .invalid:
+                invalidTranslationContent
+                    .frame(maxHeight: maximumContentHeight)
+            case .status:
                 statusContent
                     .frame(maxHeight: maximumContentHeight)
             }
         }
-        .id(translationPhaseIdentity)
+        .id(translationBodyIdentity)
         .transition(
             .opacity.combined(with: .scale(scale: 0.985, anchor: .top))
         )
+    }
+
+    /// The scrolling part of the card, as tall as its content up to
+    /// `maximumContentHeight`. With a chip's result open it follows the
+    /// answer as it grows (2.1.0 §4, `scrollToCardAIBar`).
+    private func measuredScrollView<Content: View>(
+        identifier: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        let shownHeight = ReaderTranslationContentMetric.height(
+            measured: translatedContentHeight,
+            maximum: maximumContentHeight
+        )
+        let scrolledContent = content()
+        return ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                scrolledContent
+                    .background {
+                        GeometryReader { geometry in
+                            Color.clear.preference(
+                                key: TranslationTextHeightKey.self,
+                                value: geometry.size.height
+                            )
+                        }
+                    }
+            }
+            .frame(height: shownHeight)
+            .scrollIndicators(
+                translatedContentHeight > maximumContentHeight + 0.5
+                    ? .visible
+                    : .hidden
+            )
+            .scrollBounceBehavior(.basedOnSize)
+            .scrollDismissesKeyboard(.interactively)
+            .accessibilityIdentifier(identifier)
+            .scrollDisabled(translatedContentHeight <= shownHeight + 0.5)
+            .onPreferenceChange(TranslationTextHeightKey.self) { value in
+                Task { @MainActor in
+                    guard value.isFinite,
+                          value > 0,
+                          abs(value - translatedContentHeight) > 0.5
+                    else { return }
+                    translatedContentHeight = value
+                }
+            }
+            .onChange(of: cardAIScrollToken) { _, token in
+                guard token != nil else { return }
+                withAnimation(reduceMotion ? nil : JerreaderMotion.stateChange) {
+                    scrollToCardAIBar(proxy, viewport: shownHeight)
+                }
+            }
+            // The answer that grew the bar past the card was scrolled to
+            // with the bar's height before it grew: settle on its chips.
+            .onChange(of: cardAIBarHeight + Self.cardAIBarScrollMargin > shownHeight + 0.5) { _, isTaller in
+                guard isTaller, cardAIScrollToken != nil else { return }
+                withAnimation(reduceMotion ? nil : JerreaderMotion.stateChange) {
+                    scrollToCardAIBar(proxy, viewport: shownHeight)
+                }
+            }
+        }
+    }
+
+    private static var cardAIBarScrollID: String { "card-ai-bar-scroll-anchor" }
+
+    /// The spacing above the AI bar, a view of its own the card scrolls to.
+    private static var cardAIBarTopScrollID: String { "card-ai-bar-top-scroll-anchor" }
+
+    /// The spacing above the AI bar, kept in view with its chips when the
+    /// card scrolls to them: more than a chip's 7 pt touch margin.
+    private static var cardAIBarScrollMargin: CGFloat { 10 }
+
+    /// Where the card scrolls the AI bar (2.1.0 §4), as Android's: its end
+    /// at the bottom, so the answer stays in view as it is written, until
+    /// the bar is taller than the card. Then its chips stay at the top, under
+    /// the spacing above them, and the rest of the answer is a scroll away.
+    /// 追问 keeps its latest answer in view instead.
+    private func scrollToCardAIBar(_ proxy: ScrollViewProxy, viewport: CGFloat) {
+        if model.cardAI.selectedAction != .followUp,
+           cardAIBarHeight + Self.cardAIBarScrollMargin > viewport + 0.5 {
+            proxy.scrollTo(Self.cardAIBarTopScrollID, anchor: .top)
+        } else {
+            proxy.scrollTo(Self.cardAIBarScrollID, anchor: .bottom)
+        }
+    }
+
+    /// Changes when a chip opens, a question goes out, an answer grows or
+    /// completes, so the card keeps the end of the result area in view.
+    private var cardAIScrollToken: String? {
+        let cardAI = model.cardAI
+        guard showsAIBar,
+              cardAI.isShowing(card: model.cardAIKey),
+              let selected = cardAI.selectedAction
+        else { return nil }
+        if selected == .followUp {
+            let last = cardAI.followUps.last
+            return "\(selected.rawValue)-\(cardAI.followUps.count)-\(last?.phase.text.count ?? 0)-\(last?.phase.isGenerating == true)"
+        }
+        let phase = cardAI.answers[selected]?.phase
+        return "\(selected.rawValue)-\(phase?.text.count ?? 0)-\(phase?.isGenerating == true)"
+    }
+
+    /// The lookup line of a one-word card, the translation, then (once it is
+    /// whole) the source badge and the AI bar (2.1.0 §4, §6, §8).
+    private func translationTextContent(_ text: String, isStreaming: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 10) {
+                if !isStreaming, let hint = model.currentLookupHint {
+                    Text(hint)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("lookup-count-hint")
+                }
+
+                translatedText(text)
+
+                if !isStreaming, let source = model.translationAnswerSource {
+                    ReaderAISourceBadge(
+                        source: source,
+                        onShowSource: { model.cardAI.presentedSource = $0 },
+                        identifier: "translation-source-badge"
+                    )
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+            }
+
+            if !isStreaming, showsAIBar {
+                // The spacing above the bar, as a view of its own: a card
+                // scrolled to its chips scrolls to this, so they show whole,
+                // outline and touch area, instead of flush with its top edge.
+                // (scrollTo goes by the bar's own frame: padding the bar
+                // and taking it back left the chips flush all the same.)
+                Color.clear
+                    .frame(height: Self.cardAIBarScrollMargin)
+                    .id(Self.cardAIBarTopScrollID)
+                ReaderCardAIBar(model: model)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                        cardAIBarHeight = height
+                    }
+                    .id(Self.cardAIBarScrollID)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        // The eyebrow above already gives the text its top margin.
+        .padding(.top, 2)
+        .padding(.bottom, 14)
     }
 
     private func translatedText(_ text: String) -> some View {
@@ -1612,10 +1945,6 @@ private struct ReaderTranslationOverlay<HandleGesture: Gesture>: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 16)
-        // The eyebrow above already gives the text its top margin.
-        .padding(.top, 2)
-        .padding(.bottom, 14)
         .accessibilityLabel("译文：\(text)")
     }
 

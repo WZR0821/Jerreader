@@ -1,0 +1,56 @@
+{
+  "description": "Red dot on the reading-companion button when a book is opened: progress must be above 0.01, and the book must not have been opened within the last 6 hours (never opened counts as long ago; a last-open time in the future counts as recent). Finishing a chapter still lights the dot as before.",
+  "minimumProgress": 0.01,
+  "quietHours": 6,
+  "now": "2026-11-22T10:00:00+09:00",
+  "cases": [
+    {
+      "name": "first open after reading a little",
+      "progress": 0.3,
+      "lastOpenedAt": null,
+      "expected": true
+    },
+    {
+      "name": "progress too small",
+      "progress": 0.005,
+      "lastOpenedAt": "2026-11-20T10:00:00+09:00",
+      "expected": false
+    },
+    {
+      "name": "exactly at the progress floor",
+      "progress": 0.01,
+      "lastOpenedAt": null,
+      "expected": false
+    },
+    {
+      "name": "reopened three hours later",
+      "progress": 0.3,
+      "lastOpenedAt": "2026-11-22T07:00:00+09:00",
+      "expected": false
+    },
+    {
+      "name": "reopened one second short of six hours",
+      "progress": 0.3,
+      "lastOpenedAt": "2026-11-22T04:00:01+09:00",
+      "expected": false
+    },
+    {
+      "name": "reopened exactly six hours later",
+      "progress": 0.3,
+      "lastOpenedAt": "2026-11-22T04:00:00+09:00",
+      "expected": true
+    },
+    {
+      "name": "reopened two days later",
+      "progress": 0.3,
+      "lastOpenedAt": "2026-11-20T09:00:00+09:00",
+      "expected": true
+    },
+    {
+      "name": "last open is in the future after a clock change",
+      "progress": 0.3,
+      "lastOpenedAt": "2026-11-22T12:00:00+09:00",
+      "expected": false
+    }
+  ]
+}

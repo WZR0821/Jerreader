@@ -1712,6 +1712,248 @@ final class JerreaderReaderLayoutUITests: XCTestCase {
         app.terminate()
     }
 
+    /// 2.1.0 §11 on the sample text, with the Mock standing in for an AI
+    /// model: a tapped sentence is translated, 读懂 streams its answer (part
+    /// of it shows while 生成中… is still there), then 追问 with its first
+    /// preset question gets its answer. After each answer the card is at
+    /// most half the screen and keeps clear of the selection. The frames are
+    /// kept for the side-by-side check against Android.
+    func testCardAIBarStreamsComprehensionAndAFollowUp() {
+        executionTimeAllowance = 180
+        launchSampleTextWithMockTranslation(cardAI: true)
+        translateASentence()
+        attach("card-ai-translation")
+
+        tapCardControl(app.buttons["card-ai-chip-comprehension"], "the card offers 读懂")
+        let generating = app.descendants(matching: .any).matching(identifier: "card-ai-generating").firstMatch
+        XCTAssertTrue(generating.waitForExistence(timeout: 3), "读懂 shows 生成中… while it streams")
+        let partial = streamedPartialAnswer(containing: "Mock 读懂", timeout: 8)
+        XCTAssertNotNil(partial, "part of the 读懂 answer shows while 生成中… is still there")
+        waitUntilGone(generating, timeout: 8, "读懂 finishes")
+        let answer = app.staticTexts
+            .matching(NSPredicate(format: "label CONTAINS %@", "当前选句："))
+            .firstMatch
+        XCTAssertTrue(answer.waitForExistence(timeout: 5), "the whole 读懂 answer shows")
+        if let partial {
+            XCTAssertTrue(
+                compact(answer.label).hasPrefix(compact(partial)),
+                "the streamed text \(partial) begins the answer \(answer.label)"
+            )
+            if compact(partial).count >= compact(answer.label).count {
+                XCTContext.runActivity(named: "The partial seen was already the whole answer") { _ in }
+            }
+        }
+        checkCardGeometry("读懂")
+        attach("card-ai-comprehension")
+
+        tapCardControl(app.buttons["card-ai-chip-followUp"], "the card offers 追问")
+        tapCardControl(app.buttons["card-ai-preset-0"], "追问 offers preset questions")
+        let reply = app.staticTexts
+            .matching(NSPredicate(format: "label CONTAINS %@", "Mock 追问回答"))
+            .firstMatch
+        XCTAssertTrue(reply.waitForExistence(timeout: 10), "the follow-up answer arrives")
+        waitUntilGone(generating, timeout: 8, "追问 finishes")
+        let whole = app.staticTexts
+            .matching(NSPredicate(format: "label == %@", "Mock 追问回答：先给结论，再指出原文依据。"))
+            .firstMatch
+        XCTAssertTrue(whole.waitForExistence(timeout: 5), "the whole follow-up answer shows")
+        checkCardGeometry("追问")
+        attach("card-ai-follow-up")
+        app.terminate()
+    }
+
+    /// 2.1.0 §11 also wants the card side by side with Android's in light and
+    /// dark, across the page and in vertical text. The walk above keeps light
+    /// across the page; these keep the other three with 读懂's answer on the
+    /// card, as step 8 of Android's `ReaderAIActionBarTest` does: a sentence
+    /// is tapped, 读懂 answers, the card is checked and its frame kept as
+    /// card-ai-<paper>-<orientation>. Across the page the card is at most
+    /// half the screen and clear of the selection. Beside a vertical column
+    /// it is the narrow side card, its chips wrap onto more rows within it
+    /// instead of scrolling sideways, and it keeps clear of the sentence.
+    ///
+    /// The sample text has no vertical styles of its own, so the vertical
+    /// runs open it as a vertical publication
+    /// (`--jerreader-sample-vertical-ui-test`, Debug only; the book's record
+    /// keeps its own layout). One state per test for the runner's
+    /// three-minute cap; they run in name order and end on 浅色.
+    func testCardAIOn1DarkHorizontal() {
+        checkCardAIAnswer(paper: "深色", vertical: false, name: "dark-horizontal")
+    }
+
+    func testCardAIOn2DarkVertical() {
+        checkCardAIAnswer(paper: "深色", vertical: true, name: "dark-vertical")
+    }
+
+    func testCardAIOn3LightVertical() {
+        checkCardAIAnswer(paper: "浅色", vertical: true, name: "light-vertical")
+    }
+
+    private func checkCardAIAnswer(paper: String, vertical: Bool, name: String) {
+        executionTimeAllowance = 180
+        launchSampleTextWithMockTranslation(cardAI: true, vertical: vertical)
+        choosePaper(paper)
+        translateASentence()
+        // Measured before 读懂, while every chip shows, and judged once the
+        // frame is kept, so a failed check still leaves its frame.
+        let sideCard = vertical ? measureSideCard() : nil
+
+        tapCardControl(app.buttons["card-ai-chip-comprehension"], "\(name): the card offers 读懂")
+        let answer = app.staticTexts
+            .matching(NSPredicate(format: "label CONTAINS %@", "当前选句："))
+            .firstMatch
+        XCTAssertTrue(answer.waitForExistence(timeout: 10), "\(name): the 读懂 answer shows")
+        let generating = app.descendants(matching: .any).matching(identifier: "card-ai-generating").firstMatch
+        waitUntilGone(generating, timeout: 8, "\(name): 读懂 finishes")
+        checkChipsStayInView(name)
+        attach("card-ai-\(name)")
+
+        if let sideCard {
+            assertSideCard(sideCard, name)
+            checkCardClearOfTheSentence("读懂, \(name)")
+        } else {
+            checkCardGeometry("读懂, \(name)")
+        }
+        app.terminate()
+    }
+
+    /// The chips stay in view with the answer (2.1.0 §4): the card follows
+    /// the answer until its chips reach the top, as Android's does, so 读懂
+    /// is still on screen in the card's scrolling part once it has answered.
+    private func checkChipsStayInView(_ step: String) {
+        let viewport = app.descendants(matching: .any)
+            .matching(identifier: "translation-result-scroll-view").firstMatch
+        let chip = app.buttons["card-ai-chip-comprehension"]
+        guard viewport.waitForExistence(timeout: 3), chip.waitForExistence(timeout: 3) else {
+            XCTFail("\(step): the card's scrolling part or its 读懂 chip is missing")
+            return
+        }
+        // The last scroll to the answer is animated.
+        var inView = false
+        var frames = (chip: CGRect.zero, viewport: CGRect.zero)
+        for _ in 0 ..< 15 {
+            frames = (chip.frame, viewport.frame)
+            inView = frames.chip.minY >= frames.viewport.minY - 1
+                && frames.chip.maxY <= frames.viewport.maxY + 1
+            if inView { break }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        print("CARD-AI \(step): 读懂 chip \(frames.chip), scrolling part \(frames.viewport)")
+        XCTAssertTrue(
+            inView,
+            "\(step): the 读懂 chip \(frames.chip) is out of the card's view \(frames.viewport)"
+        )
+    }
+
+    /// The card, the sentence and every chip the card offers, in window
+    /// points, read before 读懂 opens an answer.
+    private struct SideCardLayout {
+        var card: CGRect?
+        var sentence: CGRect?
+        var chips: [String: CGRect] = [:]
+    }
+
+    /// Measures the card once it holds still (a streamed translation grows
+    /// it, and the placement may move it once more). Nothing is judged here.
+    private func measureSideCard() -> SideCardLayout {
+        var layout = SideCardLayout()
+        _ = app.buttons["card-ai-chip-comprehension"].waitForExistence(timeout: 5)
+        let card = app.descendants(matching: .any).matching(identifier: "translation-card-diagnostic").firstMatch
+        let sentence = app.descendants(matching: .any).matching(identifier: "translation-source-diagnostic").firstMatch
+        if card.waitForExistence(timeout: 5) {
+            layout.card = settledFrame(of: card)
+        }
+        if sentence.waitForExistence(timeout: 5) {
+            layout.sentence = sentence.frame
+        }
+        let chips = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "card-ai-chip-"))
+        for chip in chips.allElementsBoundByIndex where chip.exists {
+            layout.chips[chip.identifier] = chip.frame
+        }
+        return layout
+    }
+
+    /// Beside a vertical column (§4): the sentence runs down the page, so
+    /// the text really is vertical; the card is the narrow side card
+    /// (144–220); and its chips wrap onto more than one row within the card
+    /// instead of scrolling sideways. As Android's
+    /// `assertChipsWrapWithinTheCard`, here with every chip the card offers:
+    /// the sample text is Japanese, so 指代 is among them.
+    private func assertSideCard(_ layout: SideCardLayout, _ step: String) {
+        guard let card = layout.card, let sentence = layout.sentence else {
+            XCTFail("\(step): the card or the selection marker was missing before 读懂")
+            return
+        }
+        print("CARD-AI \(step): card \(card), sentence \(sentence), chips \(layout.chips)")
+        XCTAssertGreaterThan(
+            sentence.height, sentence.width,
+            "\(step): the sentence \(sentence) does not run down the page; the text is not vertical"
+        )
+        XCTAssertLessThanOrEqual(card.width, 221, "\(step): the card \(card) is wider than a side card")
+        let required = ["structure", "comprehension", "literal", "followUp"].map { "card-ai-chip-\($0)" }
+        let missing = required.filter { layout.chips[$0] == nil }
+        XCTAssertTrue(missing.isEmpty, "\(step): the card has no \(missing)")
+        let chips = Array(layout.chips.values)
+        guard !chips.isEmpty else { return }
+        XCTAssertTrue(
+            chips.allSatisfy { $0.width > 0 && $0.height > 0 },
+            "\(step): a chip is not laid out: \(layout.chips)"
+        )
+        let centres = chips.map(\.midY).sorted()
+        let rowGap = (chips.map(\.height).min() ?? 0) / 2
+        let rows = 1 + zip(centres, centres.dropFirst()).filter { $1 - $0 > rowGap }.count
+        print("CARD-AI \(step): \(chips.count) chips on \(rows) rows")
+        XCTAssertGreaterThanOrEqual(
+            rows, 2,
+            "\(step): the chips sit on one row of a card \(card.width) pt wide: \(layout.chips)"
+        )
+        let span = (chips.map(\.maxX).max() ?? 0) - (chips.map(\.minX).min() ?? 0)
+        XCTAssertLessThanOrEqual(
+            span, card.width + 2,
+            "\(step): the chips span \(span) pt, wider than the card (\(card.width) pt)"
+        )
+        for (identifier, chip) in layout.chips {
+            XCTAssertTrue(
+                chip.minX >= card.minX - 1 && chip.maxX <= card.maxX + 1,
+                "\(step): \(identifier) \(chip) sticks out of the card \(card)"
+            )
+        }
+    }
+
+    /// Beside a vertical column the card stays in the window and off the
+    /// sentence it was opened from, as Android's `assertClearOfTheSentence`.
+    private func checkCardClearOfTheSentence(_ step: String) {
+        let card = app.descendants(matching: .any).matching(identifier: "translation-card-diagnostic").firstMatch
+        let sentence = app.descendants(matching: .any).matching(identifier: "translation-source-diagnostic").firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 5), "\(step): the card marker must exist")
+        XCTAssertTrue(sentence.waitForExistence(timeout: 5), "\(step): the selection marker must exist")
+        let cardFrame = settledFrame(of: card)
+        let sentenceFrame = sentence.frame
+        let window = app.windows.firstMatch.frame
+        print("CARD-AI \(step): card \(cardFrame), sentence \(sentenceFrame), window \(window)")
+        XCTAssertTrue(
+            window.insetBy(dx: -1, dy: -1).contains(cardFrame),
+            "\(step): card \(cardFrame) leaves the window \(window)"
+        )
+        XCTAssertFalse(
+            cardFrame.intersects(sentenceFrame),
+            "\(step): card \(cardFrame) covers the selection \(sentenceFrame)"
+        )
+    }
+
+    /// The element's frame once two reads 0.3 s apart agree, or the last
+    /// read after about six seconds.
+    private func settledFrame(of element: XCUIElement) -> CGRect {
+        var previous = element.frame
+        for _ in 0 ..< 20 {
+            Thread.sleep(forTimeInterval: 0.3)
+            let frame = element.frame
+            if frame == previous { return frame }
+            previous = frame
+        }
+        return previous
+    }
+
     private func checkSelectionFill(paper: String, name: String) {
         // The runner's cap; the default is two minutes.
         executionTimeAllowance = 180
@@ -1723,7 +1965,7 @@ final class JerreaderReaderLayoutUITests: XCTestCase {
         app.terminate()
     }
 
-    private func launchSampleTextWithMockTranslation() {
+    private func launchSampleTextWithMockTranslation(cardAI: Bool = false, vertical: Bool = false) {
         app = XCUIApplication()
         app.launchArguments = [
             "--jerreader-sample-book-ui-test", "--jerreader-sample-text-ui-test",
@@ -1731,9 +1973,105 @@ final class JerreaderReaderLayoutUITests: XCTestCase {
             "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN",
             "-ApplePersistenceIgnoreState", "YES",
         ]
+        if cardAI {
+            // The Mock stands in for an AI model and streams its answers;
+            // the bar is shown whatever an earlier run left in 阅读设置.
+            app.launchArguments += ["--jerreader-card-ai-ui-test", "-reader.aiActionBar.hidden", "NO"]
+        }
+        if vertical {
+            // This launch reads the sample text in vertical columns.
+            app.launchArguments += ["--jerreader-sample-vertical-ui-test"]
+        }
         app.launch()
         XCTAssertTrue(readerSettings.waitForExistence(timeout: 60), "The sample book must open")
         chooseLayout("标准")
+    }
+
+    /// Taps a control of the card at its centre, after scrolling the card's
+    /// result area until the control is in it. The card floats over the web
+    /// view, whose accessibility hit test can swallow an element tap.
+    private func tapCardControl(_ element: XCUIElement, _ message: String) {
+        XCTAssertTrue(element.waitForExistence(timeout: 5), message)
+        revealInCard(element)
+        let frame = element.frame
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: frame.midX, dy: frame.midY))
+            .tap()
+    }
+
+    /// Drags the card's result area a short way at a time, without a fling,
+    /// until `element`'s centre is inside it.
+    private func revealInCard(_ element: XCUIElement) {
+        let scroll = app.descendants(matching: .any)
+            .matching(identifier: "translation-result-scroll-view")
+            .firstMatch
+        guard scroll.exists else { return }
+        for _ in 0 ..< 5 {
+            let visible = scroll.frame.insetBy(dx: 0, dy: 8)
+            let centre = CGPoint(x: element.frame.midX, y: element.frame.midY)
+            if visible.contains(centre) { return }
+            let distance = min(visible.height * 0.5, 200)
+            let dy = centre.y < visible.minY ? distance : -distance
+            let start = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: dy)))
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+    }
+
+    /// The answer text of the AI bar while 生成中… still shows beside it, or
+    /// nil when the answer finished before a partial one was seen. Read from
+    /// one snapshot of the bar, so the two are seen at the same moment.
+    private func streamedPartialAnswer(containing marker: String, timeout: TimeInterval) -> String? {
+        let bar = app.descendants(matching: .any).matching(identifier: "card-ai-bar").firstMatch
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let snapshot = try? bar.snapshot() {
+                var generating = false
+                var text: String?
+                func walk(_ element: any XCUIElementSnapshot) {
+                    if element.identifier == "card-ai-generating" || element.label == "生成中…" {
+                        generating = true
+                    }
+                    if element.label.contains(marker),
+                       text == nil || element.identifier == "card-ai-result-text" {
+                        text = element.label
+                    }
+                    for child in element.children {
+                        walk(child)
+                    }
+                }
+                walk(snapshot)
+                if let text { return generating ? text : nil }
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        return nil
+    }
+
+    /// 2.1.0 §11: the card is at most half the screen high and keeps clear
+    /// of the selection, read off the two diagnostic markers.
+    private func checkCardGeometry(_ step: String) {
+        // Let the card settle at its new height first.
+        Thread.sleep(forTimeInterval: 0.6)
+        let card = app.descendants(matching: .any).matching(identifier: "translation-card-diagnostic").firstMatch
+        let source = app.descendants(matching: .any).matching(identifier: "translation-source-diagnostic").firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 5), "\(step): the card marker must exist")
+        XCTAssertTrue(source.waitForExistence(timeout: 5), "\(step): the selection marker must exist")
+        let window = app.windows.firstMatch.frame
+        let cardFrame = card.frame
+        let sourceFrame = source.frame
+        XCTAssertLessThanOrEqual(
+            cardFrame.height, window.height / 2 + 1,
+            "\(step): card \(cardFrame) in window \(window)"
+        )
+        XCTAssertFalse(
+            cardFrame.intersects(sourceFrame),
+            "\(step): card \(cardFrame) covers the selection \(sourceFrame)"
+        )
+    }
+
+    private func compact(_ text: String) -> String {
+        text.filter { !$0.isWhitespace }
     }
 
     /// 2.0.1 follow-up: the selection fill on a real book's own stylesheets
@@ -2268,4 +2606,638 @@ final class JerreaderReaderLayoutUITests: XCTestCase {
             field.typeText(text)
         }
     }
+}
+
+/// 2.1.0 §2 on a real book: a selection over Japanese with furigana is one
+/// region. Each selected kanji and its reading lie in one tile, with no gap
+/// and no second outline between them, and each selected line is one tile;
+/// for a tapped sentence and for a long-press selection, in vertical and in
+/// horizontal text. The book is the one a tester placed in the simulator's
+/// `tmp/JerreaderUITestBook.epub`, never kept in the project, and it is only
+/// read. The run needs `JERREADER_RUN_REAL_RUBY_UI_TESTS=1` (passed through
+/// xcodebuild as `TEST_RUNNER_JERREADER_RUN_REAL_RUBY_UI_TESTS`). Each case
+/// keeps the whole screen and a crop around the selection,
+/// `ios-ruby-<quick|native>-<vertical|horizontal>` and `…-crop`, and prints
+/// what was painted as counts and frames: no log line, message or text
+/// attachment quotes the book. Android checks the same four cases in
+/// ReaderRubySelectionTest, on a book of its own.
+@MainActor
+final class JerreaderRubyRegionUITests: XCTestCase {
+    private var app: XCUIApplication!
+
+    override func setUpWithError() throws {
+        // A fault in the first case still leaves the second its frames.
+        continueAfterFailure = true
+        executionTimeAllowance = 180
+    }
+
+    // Each case keeps well inside the 3-minute allowance. On the real book
+    // every query takes seconds, so launching takes about 30 s, the tap about
+    // 20 s and each long press with its checks 40-50 s: all three presses in
+    // one case ran to 175-180 s on 11-23 and past 180 s on 11-24. So each
+    // writing direction has four cases: the tap and the quarter press, then
+    // the centre, then three quarters, all on the ruby's first kanji; then a
+    // press in the middle of a ruby of two or more kanji.
+    func testRubyRegionsOnARealBook1Vertical() throws {
+        try checkRubyRegions(orientation: "publication", name: "vertical", quickTap: true, presses: [("quarter", 0.25)])
+    }
+
+    func testRubyRegionsOnARealBook2VerticalCentre() throws {
+        try checkRubyRegions(orientation: "publication", name: "vertical", quickTap: false, presses: [("centre", 0.5)])
+    }
+
+    func testRubyRegionsOnARealBook3VerticalThreeQuarters() throws {
+        try checkRubyRegions(
+            orientation: "publication", name: "vertical", quickTap: false, presses: [("three-quarters", 0.75)]
+        )
+    }
+
+    func testRubyRegionsOnARealBook4Horizontal() throws {
+        try checkRubyRegions(orientation: "horizontal", name: "horizontal", quickTap: true, presses: [("quarter", 0.25)])
+    }
+
+    func testRubyRegionsOnARealBook5HorizontalCentre() throws {
+        try checkRubyRegions(orientation: "horizontal", name: "horizontal", quickTap: false, presses: [("centre", 0.5)])
+    }
+
+    func testRubyRegionsOnARealBook6HorizontalThreeQuarters() throws {
+        try checkRubyRegions(
+            orientation: "horizontal", name: "horizontal", quickTap: false, presses: [("three-quarters", 0.75)]
+        )
+    }
+
+    func testRubyRegionsOnARealBook7VerticalMiddle() throws {
+        try checkRubyRegions(orientation: "publication", name: "vertical", quickTap: false, presses: [], middle: true)
+    }
+
+    func testRubyRegionsOnARealBook8HorizontalMiddle() throws {
+        try checkRubyRegions(orientation: "horizontal", name: "horizontal", quickTap: false, presses: [], middle: true)
+    }
+
+    private func checkRubyRegions(
+        orientation: String,
+        name: String,
+        quickTap: Bool,
+        presses: [(place: String, fraction: CGFloat)],
+        middle: Bool = false
+    ) throws {
+        guard ProcessInfo.processInfo.environment["JERREADER_RUN_REAL_RUBY_UI_TESTS"] == "1" else {
+            throw XCTSkip(
+                "Place a Japanese EPUB with furigana in the app's tmp/JerreaderUITestBook.epub "
+                    + "and set JERREADER_RUN_REAL_RUBY_UI_TESTS=1"
+            )
+        }
+        // The book's first text chapter; in the book this was written on it
+        // is p-001.
+        let href = ProcessInfo.processInfo.environment["JERREADER_RUBY_BOOK_HREF"] ?? "p-001"
+        app = XCUIApplication()
+        app.launchArguments = [
+            "--jerreader-selection-ui-test",
+            "--jerreader-sample-book-ui-test",
+            "--jerreader-ruby-region-ui-test",
+            "--jerreader-selection-test-href=\(href)",
+            "--jerreader-selection-orientation=\(orientation)",
+            "-ApplePersistenceIgnoreState",
+            "YES"
+        ]
+        app.launch()
+
+        guard app.otherElements["selection-ruby-target"].waitForExistence(timeout: 60) else {
+            capture("ios-ruby-page-\(name)", around: [])
+            XCTFail("The placed book showed no ruby on the first page of \(href)")
+            return
+        }
+        let layout = app.otherElements["layout-diagnostic-status"]
+        let expectedLayout = orientation == "publication"
+            ? "publication|vertical-rl|"
+            : "horizontal|horizontal-tb|"
+        XCTAssertTrue(
+            waitUntil(timeout: 20) { (layout.value as? String)?.hasPrefix(expectedLayout) == true },
+            "The page is not laid out \(name): \(String(describing: layout.value))"
+        )
+        let geometry = app.otherElements["ruby-region-geometry"]
+        XCTAssertTrue(geometry.waitForExistence(timeout: 5))
+        // Vertical text can still be settling: the ruby is measured until it
+        // holds still.
+        guard let page = settled(geometry, timeout: 20, where: { $0.target != nil }),
+              let target = page.target
+        else {
+            capture("ios-ruby-page-\(name)", around: [])
+            XCTFail("The ruby to press was never measured: \(RubyRegionGeometry.summary(of: geometry.value))")
+            return
+        }
+        print("RUBY-REGION \(name) layout=\(String(describing: layout.value)) target at \(target.firstRect)")
+        // The page as it opened, before anything is pressed, to tell a page
+        // drawn out of place from the start from one moved by a press.
+        let openedName = "ios-ruby-opened-\(name)-\(presses.first?.place ?? (middle ? "middle" : "tap"))"
+        let opened = XCTAttachment(screenshot: app.screenshot())
+        opened.name = openedName
+        opened.lifetime = .keepAlways
+        add(opened)
+        let openedValue = geometry.value as? String
+        print("RUBY-REGION \(name) when opened: \(RubyRegionGeometry.summary(of: openedValue))")
+        if let report = openedValue.flatMap(RubyRegionGeometry.decode)?.layerReport {
+            print("RUBY-REGION \(name) layers when opened:\n\(report)")
+        }
+
+        if quickTap { checkQuickTap(on: target, geometry: geometry, name: name) }
+        if !presses.isEmpty { checkLongPress(geometry: geometry, name: name, presses: presses) }
+        if middle {
+            guard page.twoKanji != nil else {
+                app.terminate()
+                throw XCTSkip("The first page of the book shows no ruby of two or more kanji")
+            }
+            checkMiddlePress(geometry: geometry, name: name)
+        }
+        app.terminate()
+    }
+
+    /// A long press in the middle of a ruby of two or more kanji selects a
+    /// word that holds one of them, its furigana inside one region. Where the
+    /// first kanji's reading is longer than it, the middle lies in the blank
+    /// room the reading leaves between the kanji; Android's WebView selected
+    /// nothing there, or a word further on (11-24), and both readers now
+    /// count such a press as the ruby's nearest kanji. The log says whether
+    /// the point was in that room, by frames only.
+    private func checkMiddlePress(geometry: XCUIElement, name: String) {
+        let label = "native \(name) middle"
+        let shot = "ios-ruby-native-\(name)-middle"
+        guard let page = settled(geometry, timeout: 8, where: { $0.twoKanji != nil }),
+              let ruby = page.twoKanji
+        else {
+            XCTFail("\(label): the ruby to press was lost: \(RubyRegionGeometry.summary(of: geometry.value))")
+            return
+        }
+        let point = ruby.frameRect.center
+        let inRoom = !ruby.glyphRects.contains { $0.contains(point) }
+        print(
+            "RUBY-REGION \(label) at \(point): \(ruby.glyphRects.count) kanji at \(ruby.glyphRects), "
+                + "in the room between them=\(inRoom)"
+        )
+        guard let painted = longPress(at: point, geometry: geometry, label: label) else {
+            capture(shot, around: [])
+            XCTFail("\(label): a long press at \(point) in the middle of the ruby at \(ruby.frameRect) painted no selection")
+            return
+        }
+        let holdsKanji = painted.tileRects.contains { tile in
+            ruby.glyphRects.contains { tile.insetBy(dx: -0.5, dy: -0.5).contains($0.center) }
+        }
+        print("RUBY-REGION \(label): tiles hold a kanji of the ruby=\(holdsKanji)")
+        XCTAssertTrue(
+            holdsKanji,
+            "\(label): a long press at \(point) must select a kanji of the ruby at \(ruby.glyphRects), "
+                + "the tiles are \(painted.tileRects)"
+        )
+        let highlight = app.otherElements["epub-base-selection-highlight"]
+        let highlighted = highlight.exists ? (highlight.value as? String ?? "") : ""
+        capture(shot, around: painted.regionRects + ruby.glyphRects)
+        report(painted, label, highlighted: highlighted)
+        assertOneRegion(painted, label)
+        checkPageHeldStill(geometry: geometry, painted: painted, label: label, shot: shot)
+    }
+
+    /// The page holds still under a painted selection. The selection view is
+    /// drawn once in window points and follows the page only when the
+    /// selection or the reading position changes; on 11-25 the screenshot of
+    /// the vertical three-quarters press showed the text 33 pt above its
+    /// selection and cut off along the top of the reader, though the frames
+    /// read just before it were right. So the frames are read again after the
+    /// screenshot and, with a second screenshot, 3 s later: each selected
+    /// kanji must stay where it was painted and inside a tile.
+    private func checkPageHeldStill(
+        geometry: XCUIElement,
+        painted: RubyRegionGeometry,
+        label: String,
+        shot: String
+    ) {
+        let after = geometry.value as? String
+        print("RUBY-REGION \(label) after the screenshot: \(RubyRegionGeometry.summary(of: after))")
+        Thread.sleep(forTimeInterval: 3)
+        let later = XCTAttachment(screenshot: app.screenshot())
+        later.name = shot + "-later"
+        later.lifetime = .keepAlways
+        add(later)
+        let last = geometry.value as? String
+        print("RUBY-REGION \(label) 3 s later: \(RubyRegionGeometry.summary(of: last))")
+        if let report = last.flatMap(RubyRegionGeometry.decode)?.layerReport {
+            print("RUBY-REGION \(label) layers 3 s later:\n\(report)")
+        }
+        let selected = painted.rubies.filter { $0.selected == "whole" }
+        for (when, raw) in [("after the screenshot", after), ("3 s later", last)] {
+            guard let now = raw.flatMap(RubyRegionGeometry.decode) else {
+                XCTFail("\(label): \(when) the frames could not be read: \(RubyRegionGeometry.summary(of: raw))")
+                continue
+            }
+            let held = now.rubies.filter { $0.selected == "whole" }
+            guard held.count == selected.count else {
+                XCTFail("\(label): \(when) \(held.count) kanji are selected whole, \(selected.count) were painted")
+                continue
+            }
+            for (was, ruby) in zip(selected, held) {
+                let moved = max(
+                    abs(ruby.kanjiRect.minX - was.kanjiRect.minX),
+                    abs(ruby.kanjiRect.minY - was.kanjiRect.minY)
+                )
+                XCTAssertLessThanOrEqual(
+                    moved,
+                    2,
+                    "\(label): \(when) the selected kanji moved from \(was.kanjiRect) to \(ruby.kanjiRect)"
+                )
+                XCTAssertTrue(
+                    now.tileRects.contains { $0.insetBy(dx: -0.5, dy: -0.5).contains(ruby.kanjiRect.center) },
+                    "\(label): \(when) the selected kanji at \(ruby.kanjiRect) lies outside the tiles \(now.tileRects)"
+                )
+            }
+        }
+    }
+
+    /// A tap on the ruby's first kanji highlights its sentence.
+    private func checkQuickTap(
+        on target: RubyRegionGeometry.Target,
+        geometry: XCUIElement,
+        name: String
+    ) {
+        let label = "quick \(name)"
+        let card = app.staticTexts
+            .matching(NSPredicate(format: "label CONTAINS %@", "Mock 翻译结果"))
+            .firstMatch
+        for attempt in 1 ... 2 {
+            coordinate(target.firstRect.center).tap()
+            if card.waitForExistence(timeout: 8) { break }
+            print("RUBY-REGION \(label): no card after tap \(attempt)")
+        }
+        XCTAssertTrue(card.exists, "\(label): a tap on the ruby at \(target.firstRect) must translate its sentence")
+        guard let painted = settled(geometry, timeout: 8, where: {
+            $0.kind == "quick" && !$0.tiles.isEmpty
+        }) else {
+            capture("ios-ruby-\(label.replacingOccurrences(of: " ", with: "-"))", around: [])
+            XCTFail("\(label): the tapped sentence was never painted: \(RubyRegionGeometry.summary(of: geometry.value))")
+            return
+        }
+        capture("ios-ruby-quick-\(name)", around: painted.regionRects)
+        report(painted, label)
+        assertOneRegion(painted, label)
+
+        // The card and its highlight go before the long press.
+        let close = app.buttons["关闭翻译"]
+        if close.waitForExistence(timeout: 5) {
+            close.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+        XCTAssertNotNil(
+            settled(geometry, timeout: 8, where: { $0.kind == "none" }),
+            "\(label): 关闭翻译 must clear the sentence's highlight"
+        )
+        Thread.sleep(forTimeInterval: 0.8)
+    }
+
+    /// A long press anywhere on the ruby's first kanji selects a word that
+    /// holds that kanji, its furigana inside one region.
+    ///
+    /// WebKit takes the word that ends at the caret it finds under the finger
+    /// when that caret sits on a word boundary, so a press on the first half
+    /// of a word's first character used to select the word before it (on
+    /// 11-23 the centre of the vertical kanji selected the character above
+    /// it). The page's long-press word guard now selects the word under the
+    /// finger. Every press is judged: a quarter of the way along the line
+    /// (the case that used to fail), the centre, and three quarters, each in
+    /// a case of its own (the test cases above say why). Were a case to press
+    /// more than once, the card is closed between presses, so each press
+    /// makes a selection of its own.
+    private func checkLongPress(geometry: XCUIElement, name: String, presses: [(place: String, fraction: CGFloat)]) {
+        let label = "native \(name)"
+        guard let page = settled(geometry, timeout: 8, where: { $0.target != nil }),
+              let target = page.target
+        else {
+            XCTFail("\(label): the ruby to press was lost: \(RubyRegionGeometry.summary(of: geometry.value))")
+            return
+        }
+        let kanji = target.firstRect
+        for (index, press) in presses.enumerated() {
+            let point = page.vertical
+                ? CGPoint(x: kanji.midX, y: kanji.minY + kanji.height * press.fraction)
+                : CGPoint(x: kanji.minX + kanji.width * press.fraction, y: kanji.midY)
+            let pressLabel = "\(label) \(press.place)"
+            let last = index == presses.count - 1
+            let shot = "ios-ruby-native-\(name)-\(press.place)"
+            guard let painted = longPress(at: point, geometry: geometry, label: pressLabel) else {
+                capture(shot, around: [])
+                XCTFail("\(pressLabel): a long press at \(point) on the kanji at \(kanji) painted no selection")
+                closeCard(geometry: geometry, label: pressLabel)
+                continue
+            }
+            let holdsKanji = painted.tileRects.contains {
+                $0.insetBy(dx: -0.5, dy: -0.5).contains(kanji.center)
+            }
+            print("RUBY-REGION \(pressLabel) at \(point): tiles hold the pressed kanji=\(holdsKanji)")
+            XCTAssertTrue(
+                holdsKanji,
+                "\(pressLabel): a long press at \(point) must select the kanji at \(kanji), "
+                    + "the tiles are \(painted.tileRects)"
+            )
+            let highlight = app.otherElements["epub-base-selection-highlight"]
+            let highlighted = highlight.exists ? (highlight.value as? String ?? "") : ""
+            capture(shot, around: painted.regionRects + [kanji])
+            report(painted, pressLabel, highlighted: highlighted)
+            assertOneRegion(painted, pressLabel)
+            checkPageHeldStill(geometry: geometry, painted: painted, label: pressLabel, shot: shot)
+            if !last { closeCard(geometry: geometry, label: pressLabel) }
+        }
+    }
+
+    /// One long press, and the selection it paints once that holds still.
+    private func longPress(
+        at point: CGPoint,
+        geometry: XCUIElement,
+        label: String
+    ) -> RubyRegionGeometry? {
+        for attempt in 1 ... 2 {
+            let before = geometry.value as? String
+            coordinate(point).press(forDuration: 0.85)
+            _ = waitUntil(timeout: 3) { (geometry.value as? String) != before }
+            if let painted = settled(geometry, timeout: 8, where: {
+                $0.kind == "native" && !$0.tiles.isEmpty
+            }) {
+                return painted
+            }
+            print("RUBY-REGION \(label): nothing painted after press \(attempt): \(RubyRegionGeometry.summary(of: geometry.value))")
+        }
+        return nil
+    }
+
+    /// 关闭翻译 ends the selection with the card, so the next press starts
+    /// from nothing selected.
+    private func closeCard(geometry: XCUIElement, label: String) {
+        let close = app.buttons["关闭翻译"]
+        if close.waitForExistence(timeout: 5) {
+            close.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        } else {
+            XCTFail("\(label): the long press opened no card to close")
+        }
+        XCTAssertNotNil(
+            settled(geometry, timeout: 8, where: { $0.kind == "none" }),
+            "\(label): 关闭翻译 must clear the selection: \(RubyRegionGeometry.summary(of: geometry.value))"
+        )
+        Thread.sleep(forTimeInterval: 0.8)
+    }
+
+    /// Every reading of a selected kanji lies in the tile that holds that
+    /// kanji, and each selected line is one tile: kanji, readings and the
+    /// kana between them painted once, under one outline.
+    private func assertOneRegion(_ geometry: RubyRegionGeometry, _ label: String) {
+        let tiles = geometry.tileRects
+        XCTAssertFalse(tiles.isEmpty, "\(label): nothing was painted")
+        let checked = geometry.checkedRubies
+        XCTAssertFalse(checked.isEmpty, "\(label): the selection holds no kanji with a reading: \(geometry.summary)")
+        // The frames name each ruby: the messages leave the book's words out.
+        for ruby in checked {
+            let reading = ruby.readingRect
+            let kanji = ruby.kanjiRect
+            XCTAssertTrue(
+                reading.width > 0.5 && reading.height > 0.5,
+                "\(label): the reading of the kanji at \(kanji) was not laid out: \(reading)"
+            )
+            guard let holder = tiles.first(where: { $0.insetBy(dx: -0.5, dy: -0.5).contains(reading.center) })
+            else {
+                XCTFail("\(label): the reading \(reading) of the kanji at \(kanji) lies outside every tile \(tiles)")
+                continue
+            }
+            XCTAssertTrue(
+                holder.insetBy(dx: -0.5, dy: -0.5).contains(kanji.center),
+                "\(label): the reading \(reading) and its kanji \(kanji) are in different tiles \(tiles)"
+            )
+        }
+        if geometry.lines > 0 {
+            XCTAssertEqual(
+                tiles.count,
+                geometry.lines,
+                "\(label): \(geometry.lines) selected line(s) painted as \(tiles.count) tiles \(tiles)"
+            )
+        }
+        for (index, tile) in tiles.enumerated() {
+            for other in tiles[(index + 1)...] where sharesLine(tile, other, vertical: geometry.vertical) {
+                XCTFail("\(label): two tiles on one line, \(tile) and \(other)")
+            }
+        }
+    }
+
+    /// Two tiles are on one line when they share at least 55% of the shorter
+    /// cross extent, the rule the tiles themselves are grouped by.
+    private func sharesLine(_ first: CGRect, _ second: CGRect, vertical: Bool) -> Bool {
+        let firstSpan = vertical ? (first.minX, first.maxX) : (first.minY, first.maxY)
+        let secondSpan = vertical ? (second.minX, second.maxX) : (second.minY, second.maxY)
+        let overlap = min(firstSpan.1, secondSpan.1) - max(firstSpan.0, secondSpan.0)
+        let shorter = min(firstSpan.1 - firstSpan.0, secondSpan.1 - secondSpan.0)
+        return overlap > 0 && shorter > 0 && overlap / shorter >= 0.55
+    }
+
+    /// What was painted, as counts and frames: the real book is the
+    /// user's own copy, so neither the log nor the result bundle quotes it.
+    private func report(_ geometry: RubyRegionGeometry, _ label: String, highlighted: String? = nil) {
+        print(
+            "RUBY-REGION \(label): \(geometry.summary)"
+                + (highlighted.map { " highlighted=\($0.count) characters" } ?? "")
+        )
+        let attachment = XCTAttachment(string: geometry.details)
+        attachment.name = "ios-ruby-\(label.replacingOccurrences(of: " ", with: "-"))-geometry"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    /// The whole screen, then a crop around `rects` (window points).
+    private func capture(_ name: String, around rects: [CGRect]) {
+        let screenshot = app.screenshot()
+        let whole = XCTAttachment(screenshot: screenshot)
+        whole.name = name
+        whole.lifetime = .keepAlways
+        add(whole)
+        let window = app.windows.firstMatch.frame
+        guard let first = rects.first,
+              let image = screenshot.image.cgImage,
+              window.width > 0
+        else { return }
+        let scale = CGFloat(image.width) / window.width
+        let union = rects.dropFirst().reduce(first) { $0.union($1) }
+        let area = union.insetBy(dx: -56, dy: -56)
+            .intersection(CGRect(origin: .zero, size: window.size))
+        guard !area.isNull, !area.isEmpty,
+              let cropped = image.cropping(to: CGRect(
+                  x: area.minX * scale,
+                  y: area.minY * scale,
+                  width: area.width * scale,
+                  height: area.height * scale
+              ).integral)
+        else { return }
+        let crop = XCTAttachment(image: UIImage(cgImage: cropped, scale: scale, orientation: .up))
+        crop.name = name + "-crop"
+        crop.lifetime = .keepAlways
+        add(crop)
+    }
+
+    private func coordinate(_ point: CGPoint) -> XCUICoordinate {
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+            .withOffset(CGVector(dx: point.x, dy: point.y))
+    }
+
+    private func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        return condition()
+    }
+
+    /// The geometry once two reads in a row agree and `condition` holds.
+    private func settled(
+        _ element: XCUIElement,
+        timeout: TimeInterval,
+        where condition: (RubyRegionGeometry) -> Bool
+    ) -> RubyRegionGeometry? {
+        let deadline = Date().addingTimeInterval(timeout)
+        var previous: String?
+        while Date() < deadline {
+            let raw = element.value as? String
+            if let raw, raw == previous,
+               let geometry = RubyRegionGeometry.decode(raw),
+               condition(geometry) {
+                return geometry
+            }
+            previous = raw
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        return nil
+    }
+}
+
+/// What `ruby-region-geometry` reports, in window points.
+private struct RubyRegionGeometry: Decodable {
+    struct Ruby: Decodable {
+        let base: String
+        let reading: String
+        let kanji: [CGFloat]
+        let readingFrame: [CGFloat]
+        let selected: String
+
+        var kanjiRect: CGRect { RubyRegionGeometry.rect(kanji) }
+        var readingRect: CGRect { RubyRegionGeometry.rect(readingFrame) }
+    }
+
+    struct Target: Decodable {
+        let base: String
+        let first: [CGFloat]
+        let frame: [CGFloat]
+
+        var firstRect: CGRect { RubyRegionGeometry.rect(first) }
+    }
+
+    /// A ruby of two or more kanji on the page: its base's frame and each
+    /// kanji's.
+    struct TwoKanji: Decodable {
+        let frame: [CGFloat]
+        let glyphs: [[CGFloat]]
+
+        var frameRect: CGRect { RubyRegionGeometry.rect(frame) }
+        var glyphRects: [CGRect] { glyphs.map(RubyRegionGeometry.rect) }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case kind, text, vertical, lines, tiles, rubies, target, twoKanji, scroll, webFrame, page, offsets
+        case layers, webViews
+    }
+
+    let kind: String
+    let text: String
+    let vertical: Bool
+    let lines: Int
+    let tiles: [[CGFloat]]
+    let rubies: [Ruby]
+    let target: Target?
+    let twoKanji: TwoKanji?
+    /// Where the page sat, numbers only: the scroll view's offset x and y,
+    /// content width and height, height and top and bottom insets; the web
+    /// view's frame; the page's scroll x and y, viewport width and height,
+    /// visual viewport's offset and page top, scroll and client heights, the
+    /// body's top, the root's scroll top, and the body's scroll top and left,
+    /// scroll and client heights; and the vertical offsets the reader had to
+    /// correct.
+    let scroll: [CGFloat]?
+    let webFrame: [CGFloat]?
+    let page: [CGFloat]?
+    let offsets: [[CGFloat]]?
+    /// How WebKit put the page on screen (class names and numbers, one view
+    /// or layer a line) and every web view Readium holds; see
+    /// `rubyRegionUITestLayers(of:)` in the reader.
+    let layers: [String]?
+    let webViews: [[CGFloat]]?
+    var raw = ""
+
+    /// `layers` and `webViews` for the log, one a line.
+    var layerReport: String {
+        (["webViews=\(webViews ?? [])"] + (layers ?? [])).joined(separator: "\n")
+    }
+
+    var tileRects: [CGRect] { tiles.map(Self.rect) }
+
+    /// The kanji the selection holds whole; without a range to read, the
+    /// ones the tiles cover.
+    var checkedRubies: [Ruby] {
+        if lines >= 0 {
+            return rubies.filter { $0.selected == "whole" }
+        }
+        return rubies.filter { ruby in
+            tileRects.contains { $0.insetBy(dx: -0.5, dy: -0.5).contains(ruby.kanjiRect.center) }
+        }
+    }
+
+    /// What a crop around the selection has to show.
+    var regionRects: [CGRect] {
+        tileRects + checkedRubies.flatMap { [$0.kanjiRect, $0.readingRect] }
+    }
+
+    /// The geometry without the book's words, for logs and messages:
+    /// kind, layout, counts and frames.
+    var summary: String {
+        let whole = rubies.filter { $0.selected == "whole" }.count
+        let pressed = target.map { String(describing: $0.firstRect) } ?? "none"
+        let counts = "lines=\(lines) text=\(text.count) characters rubies=\(rubies.count) whole=\(whole)"
+        return "kind=\(kind) vertical=\(vertical) \(counts) checked=\(checkedRubies.count) "
+            + "tiles=\(tileRects) target=\(pressed)"
+            + " scroll=\(scroll ?? []) web=\(webFrame ?? []) page=\(page ?? []) offsets=\(offsets ?? [])"
+    }
+
+    /// `summary`, then each ruby's selection state and frames, one a line.
+    var details: String {
+        var rows = [summary]
+        for (index, ruby) in rubies.enumerated() {
+            let kanji = "kanji (\(ruby.base.count)) at \(ruby.kanjiRect)"
+            let reading = "reading (\(ruby.reading.count)) at \(ruby.readingRect)"
+            rows.append("ruby \(index) \(ruby.selected): \(kanji), \(reading)")
+        }
+        return rows.joined(separator: "\n")
+    }
+
+    /// `summary` of what the marker holds now: its status word until a page
+    /// is measured.
+    static func summary(of value: Any?) -> String {
+        guard let raw = value as? String else { return "no value" }
+        if raw == "pending" || raw == "unavailable" { return raw }
+        return decode(raw)?.summary ?? "undecodable (\(raw.count) characters)"
+    }
+
+    static func decode(_ raw: String) -> RubyRegionGeometry? {
+        guard let data = raw.data(using: .utf8),
+              var geometry = try? JSONDecoder().decode(RubyRegionGeometry.self, from: data)
+        else { return nil }
+        geometry.raw = raw
+        return geometry
+    }
+
+    static func rect(_ numbers: [CGFloat]) -> CGRect {
+        guard numbers.count == 4 else { return .null }
+        return CGRect(x: numbers[0], y: numbers[1], width: numbers[2], height: numbers[3])
+    }
+}
+
+private extension CGRect {
+    var center: CGPoint { CGPoint(x: midX, y: midY) }
 }

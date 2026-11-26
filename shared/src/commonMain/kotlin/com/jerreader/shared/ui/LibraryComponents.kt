@@ -305,7 +305,9 @@ internal fun LibraryShelfDashboard(
     revealOpen: Boolean,
     onOpenRecent: (coverBoundsInWindow: Rect?) -> Unit,
     modifier: Modifier = Modifier,
-    coverContent: (@Composable (LibraryBook) -> Unit)? = null
+    coverContent: (@Composable (LibraryBook) -> Unit)? = null,
+    /** 本章还剩约 N 分钟 for the 继续阅读 book (2.1.0 §9). */
+    recentChapterEstimate: String? = null
 ) {
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -325,7 +327,8 @@ internal fun LibraryShelfDashboard(
                 modifier = Modifier
                     .widthIn(max = 760.dp)
                     .libraryShelfReveal(order = 1, isEnabled = revealOpen),
-                coverContent = coverContent
+                coverContent = coverContent,
+                chapterEstimate = recentChapterEstimate
             )
         }
         LibraryReadingStatsCard(
@@ -345,13 +348,16 @@ internal fun LibraryContinueReadingCard(
     nowMillis: Long,
     onOpen: (coverBoundsInWindow: Rect?) -> Unit,
     modifier: Modifier = Modifier,
-    coverContent: (@Composable (LibraryBook) -> Unit)? = null
+    coverContent: (@Composable (LibraryBook) -> Unit)? = null,
+    /** A line under the progress row, as in the reader's bottom bar (2.1.0 §9). */
+    chapterEstimate: String? = null
 ) {
     val source = remember { MutableInteractionSource() }
     val coverBounds = remember { LibraryCoverBounds() }
     val author = book.shelfAuthor
     val progressText = LibraryShelfFormat.progressText(book.lastReadProgress)
     val relative = book.lastOpenedAtEpochMillis?.let { JerreaderRelativeTime.format(it, nowMillis) }
+    val estimate = chapterEstimate?.takeIf(String::isNotBlank)
     val caption = MaterialTheme.typography.bodySmall
     val captionColor = Color.White.copy(alpha = 0.75f)
     Row(
@@ -367,7 +373,7 @@ internal fun LibraryContinueReadingCard(
             ) { onOpen(coverBounds.inWindow()) }
             .clearAndSetSemantics {
                 contentDescription = "继续阅读，${book.title}，作者 $author"
-                stateDescription = listOfNotNull("已读 $progressText", relative).joinToString("，")
+                stateDescription = listOfNotNull("已读 $progressText", relative, estimate).joinToString("，")
             }
             .padding(18.dp),
         horizontalArrangement = Arrangement.spacedBy(JerreaderSpacing.md),
@@ -450,6 +456,16 @@ internal fun LibraryContinueReadingCard(
                         maxLines = 1
                     )
                 }
+            }
+            if (estimate != null) {
+                Text(
+                    text = estimate,
+                    modifier = Modifier.padding(top = 6.dp),
+                    style = caption,
+                    color = captionColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
     }

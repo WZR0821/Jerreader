@@ -270,6 +270,24 @@ final class TranslationSettingsStore: ObservableObject {
         return try? configuration(entry: entry, model: entry.activeModel, key: apiKey(for: entry.id))
     }
 
+    /// What the AI features call (the translation card's AI buttons, the
+    /// sentence analysis, AI lookups): the AI provider in use, or else a
+    /// signed-in ChatGPT plan, so signing in from the reader is enough to use
+    /// them (2.1.0 §7). Translation still goes by `provider` and
+    /// `directAPIConfiguration`, as the user chose.
+    var aiFeatureConfiguration: DirectAITranslationConfiguration? {
+        directAPIConfiguration ?? signedInPlanConfiguration
+    }
+
+    /// The signed-in plan with its chosen model, whether or not it is the
+    /// provider in use; nil when signed out or while it has no model.
+    var signedInPlanConfiguration: DirectAITranslationConfiguration? {
+        guard chatGPTPlanAccount != nil,
+              let entry = aiProviders.entry(Self.chatGPTPlanID)
+        else { return nil }
+        return try? configuration(entry: entry, model: entry.activeModel, key: Self.planKeyPlaceholder)
+    }
+
     /// One line on the state of the provider in use.
     var directAPIConfigurationMessage: String {
         let entry = aiProviders.active

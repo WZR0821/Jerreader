@@ -79,7 +79,7 @@ scripts/safe_xcodebuild.sh ui-test
 
 `JerreaderSelectionUITests/testIPadShellUsesWholePortraitAndLandscapeWindow` 只在 iPad 上运行，在 iPhone 上会跳过；要单独以 iPad 模拟器为 destination，用上面的筛选跑这一项。2026-11-16 之前 UI 测试目标只设了 iPhone（`TARGETED_DEVICE_FAMILY = 1`），运行器在 iPad 上走 iPhone 兼容模式，读到的设备类型是 iPhone，这一项在 iPad 上也会跳过；现已改成与 App 相同的 `"1,2"`。
 
-Android 设备验收同样通过共享入口 `scripts/safe_android_build.sh test`。默认执行已审核的 51 项离线设备与 UI 用例（39 项功能回归、12 项界面用例，含 9 项备份、千条列表详情/筛选回归与翻译卡片几何场景；2026-11-16 补入了此前写好却没列进运行清单的 5 个回归类和 6 项界面用例）；只复验界面时可设置 `JERREADER_ANDROID_VALIDATION_SCOPE=ui`，执行固定的 12 个界面用例，不接受任意命令或测试类。先完成 APK 与测试 APK 编译，再显式指定单一 AVD。入口在持锁、资源稳定后启动只读临时设备，使用 2 个虚拟核心、请求 2 GiB 内存、当前 SDK 支持的 `swiftshader` 软件渲染，无窗口、无快照，关闭本轮不需要的 guest Vulkan。SDK 可能提高镜像最低内存，设备记录同时保存请求值与 guest 实际 MemTotal，不能将请求值当作硬限制。
+Android 设备验收同样通过共享入口 `scripts/safe_android_build.sh test`。默认执行已审核的 51 项离线设备与 UI 用例（39 项功能回归、12 项界面用例，含 9 项备份、千条列表详情/筛选回归与翻译卡片几何场景；2026-11-16 补入了此前写好却没列进运行清单的 5 个回归类和 6 项界面用例）；只复验界面时可设置 `JERREADER_ANDROID_VALIDATION_SCOPE=ui`，执行固定的 12 个界面用例，不接受任意命令或测试类。只复验注音选区时可设置 `JERREADER_ANDROID_VALIDATION_SCOPE=ruby`，只跑 `ReaderRubySelectionTest`。另把 `JERREADER_ANDROID_REAL_RUBY_EPUB` 设为仓库外的真书路径时（只在 `full` / `ruby` 范围有效），入口把书推进本次临时设备，单独运行 `ReaderRealRubyBookTest`，跑完删除，见 `docs/DEVELOPMENT_MAINTENANCE_GUIDE.md` §8.3。先完成 APK 与测试 APK 编译，再显式指定单一 AVD。入口在持锁、资源稳定后启动只读临时设备，使用 2 个虚拟核心、请求 2 GiB 内存、当前 SDK 支持的 `swiftshader` 软件渲染，无窗口、无快照，关闭本轮不需要的 guest Vulkan。SDK 可能提高镜像最低内存，设备记录同时保存请求值与 guest 实际 MemTotal，不能将请求值当作硬限制。
 
 临时设备开机完成后先等待资源稳定、核验开机窗口及 events，再切换飞行模式、关闭 Wi-Fi 和安装 APK。测试前再次等待稳定并确认系统设置；诊断缺失、超时、开机 events 中有 ANR 或存在无响应窗口时不启动测试。这一流程兼容缺少 telephony 服务的 AOSP 镜像。命令依据 [AOSP ConnectivityService](https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/heads/main/service/src/com/android/server/ConnectivityService.java)。仅在本次拥有的只读覆盖层中卸载预装的 Jerreader 与 androidTest 两个包，再装预编译 APK，避免原 AVD 预装更高版本或不同调试证书导致安装失败；其他包及原 AVD 数据保留。
 
@@ -172,6 +172,13 @@ python3 scripts/test_safe_ios_validation.py
 - `scripts/background_build.py submit doctor`：后台域内预检通过，监测数据齐全。
 - `scripts/background_build.py submit`：任务在后台域运行（`launchctl managername` 为 `Background`），副本内 Release 全量编译加打包共 8 分 36 秒，`BUILD SUCCEEDED`。采样 100 次，负载最高 8.25，可用内存最低 65%，没有出现温控降频。产物 `Jerreader-1.5.0-build67-20261113-094835-unsigned.ipa`，13,973,715 字节，SHA-256 `56d92d7e3c68fa282660eb687a499d5e5fc9a055f884853cc68d3c069f74da40`；`collect` 后摘要一致。包内 53 个文件，文件清单与仓库里上一次 Release 构建的 App 相同。
 - 没有验证的：登录会话真的崩溃时这个任务能否继续。崩溃无法人为制造，目前只有 2026-11-13 09:08 幸存进程都属于后台域这一条旁证。IPA 没有签名，也没有装到设备上运行。高负载或温控降频下的实际构建这次没有遇到，新规则在这两种情况下的行为只有离线回归覆盖。
+
+## 2026-11-26 外部占用检测改读进程名
+
+- 问题：外部任务检测读的是 `ps -axo pid=,ppid=,pgid=,comm=,args=`。comm 是可执行文件的完整路径，而 macOS 的 ps 会把不在最后一列的 comm 截到 16 个字符。Xcode 不在 `/usr/bin`、Android 模拟器装在共享文件夹这类长路径下时，只剩路径开头，所以按名字认 `xcodebuild`、`swiftc`、`swift-frontend`、`qemu-system*`、`emulator` 的几条从没命中过。11-26 另一个项目先开了 Android 模拟器，两分钟后本项目的界面测试照常开始构建；排队检查和运行中的检查都没发现，只好手动中止。按设备清单认 iOS 模拟器、按参数认 Gradle 的两类检查没受影响。
+- 修改：改读 `ucomm`，也就是可执行文件自己的名字（同样最多 16 个字符，如 `qemu-system-x86_`），要认的名字都放得下，或者按前缀比。认出 `xcodebuild` 后，`-find`、`-version`、`-showsdks`、`-checkFirstLaunchStatus`、`-license` 这几种查询不算构建：xcrun 和 Xcode 工具会顺手调用它们，一下就结束。
+- 影响：这几条检查从这次起才真正生效。别的项目在编译或开着 Android 模拟器时，本项目的任务排队等它结束；运行中途出现的，照原设计中止本次任务，原因里写明是哪个进程。
+- 验证：离线回归 78 项通过，新增 2 项：一项读真实进程表，确认这一列是名字而不是路径；另一项确认查询类的 `xcodebuild` 不算构建。11-26 run-ios-paint-2b（增量构建加 8 项界面测试，05:52–06:06）期间，另起一个只读进程每隔几秒按新读法查一次（排除这次任务自己的进程组），256 次采样都没把本次任务自己的编译器、`xcodebuild` 或模拟器进程当成外部任务。那次是增量构建，编译进程不多。11-26 09:05–09:15 打 2.1.0 的 IPA（后台入口，在源码副本里做 Release 构建和打包，约 10 分钟）时又这样查了 185 次，也没有一次把这次任务自己的编译器、`xcodebuild` 当成外部任务。
 
 ## 2026-09-09 实际验证记录
 

@@ -235,7 +235,32 @@ struct LibraryContinueReadingCard: View {
                 continueCapsule
             }
             .padding(.top, 10)
+
+            if let chapterEstimate {
+                Text(chapterEstimate)
+                    .font(.footnote)
+                    .foregroundStyle(Color.white.opacity(0.75))
+                    .lineLimit(1)
+                    .padding(.top, 6)
+                    .accessibilityIdentifier("shelf-chapter-time-estimate")
+            }
         }
+    }
+
+    /// 本章还剩约 N 分钟 (2.1.0 §9), from the chapter end the reader last saw
+    /// for this book and the pace on its record; nothing for a PDF or before
+    /// the pace is known.
+    private var chapterEstimate: String? {
+        guard book.format != .pdf,
+              let chapterEnd = UserDefaults.standard.object(
+                  forKey: ChapterTimeEstimatePolicy.chapterEndKey(bookID: book.id)
+              ) as? Double
+        else { return nil }
+        return ChapterTimeEstimatePolicy.text(
+            readingSeconds: book.totalReadingSeconds,
+            progression: book.lastReadProgress,
+            chapterEnd: chapterEnd
+        )
     }
 
     private var progressCaption: some View {
@@ -268,6 +293,9 @@ struct LibraryContinueReadingCard: View {
         var parts = ["已读 \(LibraryShelfFormat.progressText(book.lastReadProgress))"]
         if let lastOpenedAt = book.lastOpenedAt {
             parts.append(JerreaderRelativeTime.string(from: lastOpenedAt))
+        }
+        if let chapterEstimate {
+            parts.append(chapterEstimate)
         }
         return parts.joined(separator: "，")
     }

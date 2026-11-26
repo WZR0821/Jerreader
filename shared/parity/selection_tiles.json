@@ -1,0 +1,490 @@
+{
+  "description": "Ruby-aware selection tiles. Rects are [x, y, width, height] in CSS px. Each annotation box is joined to the selected base box it sits over (largest overlap along the line, then the smallest gap across it) when it overlaps that box along the line and the gap across the line is no larger than the base box's own thickness; otherwise it stays a box of its own. When only part of the annotated base is selected the annotation is first clipped, along the line, to the selected base. Lines are grouped by the base boxes (shared cross extent >= 0.55 of the shorter), painted from the joined boxes, runs closer than 1.5 px merge, and overlapping neighbouring lines meet at the midpoint. Compare with a tolerance of 0.001.",
+  "cases": [
+    {
+      "name": "horizontal kana over a two-kanji word join the line into one tile",
+      "vertical": false,
+      "base": [
+        [
+          20,
+          100,
+          40,
+          24
+        ],
+        [
+          60,
+          100,
+          32,
+          24
+        ],
+        [
+          92,
+          100,
+          48,
+          24
+        ]
+      ],
+      "annotations": [
+        {
+          "base": [
+            1
+          ],
+          "rects": [
+            [
+              61,
+              88,
+              30,
+              11
+            ]
+          ],
+          "fullySelected": true
+        }
+      ],
+      "tiles": [
+        [
+          20,
+          88,
+          120,
+          36
+        ]
+      ]
+    },
+    {
+      "name": "vertical kana right of the column join the column into one tile",
+      "vertical": true,
+      "base": [
+        [
+          200,
+          20,
+          24,
+          48
+        ],
+        [
+          200,
+          68,
+          24,
+          48
+        ],
+        [
+          200,
+          116,
+          24,
+          72
+        ]
+      ],
+      "annotations": [
+        {
+          "base": [
+            1
+          ],
+          "rects": [
+            [
+              225,
+              70,
+              11,
+              44
+            ]
+          ],
+          "fullySelected": true
+        }
+      ],
+      "tiles": [
+        [
+          200,
+          20,
+          36,
+          168
+        ]
+      ]
+    },
+    {
+      "name": "a reading wider than its kanji widens the tile along the line",
+      "vertical": false,
+      "base": [
+        [
+          36,
+          100,
+          24,
+          24
+        ],
+        [
+          60,
+          100,
+          24,
+          24
+        ],
+        [
+          84,
+          100,
+          24,
+          24
+        ]
+      ],
+      "annotations": [
+        {
+          "base": [
+            1
+          ],
+          "rects": [
+            [
+              42,
+              88,
+              60,
+              11
+            ]
+          ],
+          "fullySelected": true
+        }
+      ],
+      "tiles": [
+        [
+          36,
+          88,
+          72,
+          36
+        ]
+      ]
+    },
+    {
+      "name": "a partly selected group ruby only covers the kana over the selected kanji",
+      "vertical": false,
+      "base": [
+        [
+          76,
+          100,
+          24,
+          24
+        ],
+        [
+          100,
+          100,
+          48,
+          24
+        ]
+      ],
+      "annotations": [
+        {
+          "base": [
+            0
+          ],
+          "rects": [
+            [
+              52,
+              88,
+              48,
+              11
+            ]
+          ],
+          "fullySelected": false
+        }
+      ],
+      "tiles": [
+        [
+          76,
+          88,
+          72,
+          36
+        ]
+      ]
+    },
+    {
+      "name": "vertical partial selection clips the kana down the column",
+      "vertical": true,
+      "base": [
+        [
+          200,
+          68,
+          24,
+          24
+        ]
+      ],
+      "annotations": [
+        {
+          "base": [
+            0
+          ],
+          "rects": [
+            [
+              225,
+              44,
+              11,
+              48
+            ]
+          ],
+          "fullySelected": false
+        }
+      ],
+      "tiles": [
+        [
+          200,
+          68,
+          36,
+          24
+        ]
+      ]
+    },
+    {
+      "name": "mono ruby: each reading joins its own kanji",
+      "vertical": false,
+      "base": [
+        [
+          20,
+          100,
+          40,
+          24
+        ],
+        [
+          60,
+          100,
+          24,
+          24
+        ],
+        [
+          84,
+          100,
+          24,
+          24
+        ],
+        [
+          108,
+          100,
+          40,
+          24
+        ]
+      ],
+      "annotations": [
+        {
+          "base": [
+            1
+          ],
+          "rects": [
+            [
+              62,
+              88,
+              20,
+              11
+            ]
+          ],
+          "fullySelected": true
+        },
+        {
+          "base": [
+            2
+          ],
+          "rects": [
+            [
+              84,
+              88,
+              24,
+              11
+            ]
+          ],
+          "fullySelected": true
+        }
+      ],
+      "tiles": [
+        [
+          20,
+          88,
+          128,
+          36
+        ]
+      ]
+    },
+    {
+      "name": "only the line with ruby grows and the two lines stay apart",
+      "vertical": false,
+      "base": [
+        [
+          20,
+          60,
+          240,
+          24
+        ],
+        [
+          20,
+          100,
+          60,
+          24
+        ],
+        [
+          80,
+          100,
+          32,
+          24
+        ],
+        [
+          112,
+          100,
+          40,
+          24
+        ]
+      ],
+      "annotations": [
+        {
+          "base": [
+            2
+          ],
+          "rects": [
+            [
+              81,
+              88,
+              30,
+              11
+            ]
+          ],
+          "fullySelected": true
+        }
+      ],
+      "tiles": [
+        [
+          20,
+          60,
+          240,
+          24
+        ],
+        [
+          20,
+          88,
+          132,
+          36
+        ]
+      ]
+    },
+    {
+      "name": "tight lines meet at the midpoint instead of overlapping",
+      "vertical": false,
+      "base": [
+        [
+          20,
+          60,
+          240,
+          24
+        ],
+        [
+          20,
+          92,
+          60,
+          24
+        ],
+        [
+          80,
+          92,
+          32,
+          24
+        ],
+        [
+          112,
+          92,
+          40,
+          24
+        ]
+      ],
+      "annotations": [
+        {
+          "base": [
+            2
+          ],
+          "rects": [
+            [
+              81,
+              80,
+              30,
+              11
+            ]
+          ],
+          "fullySelected": true
+        }
+      ],
+      "tiles": [
+        [
+          20,
+          60,
+          240,
+          22
+        ],
+        [
+          20,
+          82,
+          132,
+          34
+        ]
+      ]
+    },
+    {
+      "name": "an annotation far from its base stays a tile of its own",
+      "vertical": false,
+      "base": [
+        [
+          20,
+          100,
+          40,
+          24
+        ]
+      ],
+      "annotations": [
+        {
+          "base": [
+            0
+          ],
+          "rects": [
+            [
+              20,
+              40,
+              40,
+              11
+            ]
+          ],
+          "fullySelected": true
+        }
+      ],
+      "tiles": [
+        [
+          20,
+          40,
+          40,
+          11
+        ],
+        [
+          20,
+          100,
+          40,
+          24
+        ]
+      ]
+    },
+    {
+      "name": "plain text without ruby is merged as before",
+      "vertical": false,
+      "base": [
+        [
+          20,
+          100,
+          80,
+          24
+        ],
+        [
+          100,
+          100,
+          60,
+          24
+        ],
+        [
+          159,
+          101,
+          40,
+          22
+        ]
+      ],
+      "annotations": [],
+      "tiles": [
+        [
+          20,
+          100,
+          179,
+          24
+        ]
+      ]
+    }
+  ]
+}

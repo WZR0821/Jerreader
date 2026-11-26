@@ -6,7 +6,6 @@ import android.view.ActionMode
 import android.view.Menu
 import android.view.MenuItem
 import com.jerreader.android.translation.AndroidTranslationSettingsStore
-import com.jerreader.android.translation.chatgptplan.ChatGPTPlanMessages
 import com.jerreader.shared.domain.LanguageCode
 import com.jerreader.shared.library.ReaderAppearance
 import com.jerreader.shared.library.ReaderSelectionRect
@@ -16,18 +15,14 @@ import com.jerreader.shared.library.ReaderTextOrientation
 import com.jerreader.shared.translation.QuickTranslationUnit
 import com.jerreader.shared.translation.ReaderSentenceSegmenter
 import com.jerreader.shared.translation.ReaderTextNormalizer
+import com.jerreader.shared.translation.ReaderTranslationContext
 import com.jerreader.shared.translation.TranslationFailure
 import com.jerreader.shared.translation.TranslationInputPolicy
 import com.jerreader.shared.translation.TranslationRequest
 import com.jerreader.shared.translation.TranslationService
 import com.jerreader.shared.ui.TranslationCardState
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import org.json.JSONTokener
@@ -77,6 +72,19 @@ class ReaderTapTranslationController(
     private var currentState: TranslationCardState? = null
     private val manualRetryAt = mutableMapOf<String, Long>()
 
+    /**
+     * WebView's selection menus opened so far, and the one open now. Tests
+     * use them to tell that a long press kept WebView's own selection: one
+     * made from script gets no menu.
+     */
+    var selectionMenusOpened = 0
+        private set
+    private var openSelectionMenu: ActionMode? = null
+
+    internal fun closeSelectionMenuForTesting() {
+        openSelectionMenu?.finish()
+    }
+
     val selectionActionModeCallback: ActionMode.Callback = object : BaseActionModeCallback() {
         override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
             // The system action mode is created after WebView has a native
@@ -84,6 +92,8 @@ class ReaderTapTranslationController(
             // during attach, because a selection can be created by a long
             // press before the Readium page finishes settling.
             installNativeSelectionBridge()
+            selectionMenusOpened += 1
+            openSelectionMenu = mode
             menu.add(Menu.NONE, TRANSLATE_MENU_ITEM_ID, Menu.NONE, "翻译")
                 .setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
             if (onLookupRequested != null) {
@@ -119,6 +129,10 @@ class ReaderTapTranslationController(
                 }
                 else -> false
             }
+        }
+
+        override fun onDestroyActionMode(mode: ActionMode) {
+            if (openSelectionMenu === mode) openSelectionMenu = null
         }
     }
 
@@ -168,6 +182,28 @@ class ReaderTapTranslationController(
     private fun installNativeSelectionBridge() {
         val target = navigator ?: return
         scope.launch { target.evaluateJavascript(nativeSelectionBridgeScript()) }
+    }
+
+    /**
+     * Puts the selection bridge into the page Readium is showing unless it is
+     * there already, so its style is in a page before the first long press.
+     * A selection WebView painted before the style arrived kept its stock blue
+     * on the base text of every ruby once the style came (the rest of the text
+     * was repainted), a darker block on each annotated kanji inside the one
+     * selection tile. Called as each page loads and when the reader moves to
+     * another resource; attach() alone is too early, because Readium's
+     * evaluateJavascript runs nothing while it has no page.
+     */
+    fun ensureNativeSelectionBridge() {
+        val target = navigator ?: return
+        scope.launch {
+            val installed = target.evaluateJavascript(
+                "typeof globalThis.__jerreaderNativeSelectionSchedule === 'function'"
+            )
+            if (installed == "false" && navigator === target) {
+                target.evaluateJavascript(nativeSelectionBridgeScript())
+            }
+        }
     }
 
     fun detach() {
@@ -276,9 +312,17 @@ class ReaderTapTranslationController(
         """.trimIndent()
     }
 
-    /** Issues exactly one request for a locally completed cross-page segment. */
-    suspend fun translateExpanded(request: TranslationRequest): TranslationCardState =
-        translateNow(request)
+    /**
+     * Issues exactly one request for a locally completed cross-page segment.
+     * The sentence's own request stops first, as PDF's does: its pieces were
+     * dropped once the card moved on, but it kept the connection and the
+     * provider's quota until it ended.
+     */
+    suspend fun translateExpanded(request: TranslationRequest): TranslationCardState {
+        translationJob?.cancel()
+        translationJob = null
+        return translateNow(request)
+    }
 
     fun focusPoint(): PointF? = lastTapPoint?.let { PointF(it.x, it.y) }
 
@@ -360,8 +404,11 @@ class ReaderTapTranslationController(
             onHighlightChanged?.invoke(emptyList())
             return null
         }
-        return translateSelection(selection)
+        return translateSelection(selection, TappedSentence(text, start, end))
     }
+
+    /** The base text of a tapped block and where its sentence lies in it. */
+    private class TappedSentence(val paragraph: String, val start: Int, val end: Int)
 
     private fun decodeJson(raw: String): JSONObject? {
         if (raw == "null") return null
@@ -401,6 +448,7 @@ class ReaderTapTranslationController(
     /** Reads the tapped block's text and caret offset, excluding ruby. */
     private fun blockTextScript(point: PointF): String = """
         (() => {
+              ${ReaderBlockScript.FUNCTION}
               const textNodes = (root) => {
                 const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
                   acceptNode(node) {
@@ -498,9 +546,11 @@ class ReaderTapTranslationController(
                 if (!resolvedElement || resolvedElement.closest(
                       'a,button,input,textarea,select,option,video,audio,canvas,svg,rt,rp,script,style'
                     )) return null;
-                const block = resolvedElement.closest(
-                  'p,li,blockquote,dd,dt,figcaption,h1,h2,h3,h4,h5,h6,td,th,pre'
-                ) || resolvedElement;
+                // The paragraph as iOS finds it: in a book whose paragraphs
+                // are div, a tap on a ruby, rb or em takes the whole paragraph,
+                // not that element. With no block below the body (text set
+                // straight into it) the element stays, as before 2.1.0.
+                const block = readerBlockOf(resolvedElement) || resolvedElement;
                 return {block: block, caret: caret};
               };
           const hit = blockAt(${point.x}, ${point.y});
@@ -533,8 +583,11 @@ class ReaderTapTranslationController(
         val palette = ReaderSelectionVisualStyle.palette(appearance())
         val tint = palette.fillCss
         val stroke = palette.strokeCss
+        val configuredVertical = appearance().orientation == ReaderTextOrientation.VERTICAL
         return """
         (() => {
+              ${ReaderSelectionTileScript.ALL}
+              ${ReaderBlockScript.FUNCTION}
               const textNodes = (root) => {
                 const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
                   acceptNode(node) {
@@ -632,9 +685,11 @@ class ReaderTapTranslationController(
                 if (!resolvedElement || resolvedElement.closest(
                       'a,button,input,textarea,select,option,video,audio,canvas,svg,rt,rp,script,style'
                     )) return null;
-                const block = resolvedElement.closest(
-                  'p,li,blockquote,dd,dt,figcaption,h1,h2,h3,h4,h5,h6,td,th,pre'
-                ) || resolvedElement;
+                // The paragraph as iOS finds it: in a book whose paragraphs
+                // are div, a tap on a ruby, rb or em takes the whole paragraph,
+                // not that element. With no block below the body (text set
+                // straight into it) the element stays, as before 2.1.0.
+                const block = readerBlockOf(resolvedElement) || resolvedElement;
                 return {block: block, caret: caret};
               };
           const hit = blockAt(${point.x}, ${point.y});
@@ -673,33 +728,7 @@ class ReaderTapTranslationController(
           // box of every `ruby` element it crosses, and that box sits on top of
           // the base characters it contains, so painting the raw list stacks
           // the fill and the outline over every annotated word.
-          const rects = [];
-          const rubyAnnotations = new Set();
-          const pairedRubyAnnotation = (node) => {
-            const parent = node?.nodeType === Node.TEXT_NODE
-              ? node.parentElement
-              : node;
-            const ruby = parent?.closest?.('ruby');
-            if (!ruby) return null;
-            let top = node;
-            while (top && top.parentNode && top.parentNode !== ruby) {
-              top = top.parentNode;
-            }
-            let sibling = top?.nextSibling;
-            while (sibling) {
-              if (sibling.nodeType === Node.ELEMENT_NODE) {
-                if (sibling.matches('rt')) return sibling;
-                if (sibling.matches('rp')) {
-                  sibling = sibling.nextSibling;
-                  continue;
-                }
-                break;
-              }
-              if (sibling.nodeType === Node.TEXT_NODE && sibling.data?.trim()) break;
-              sibling = sibling.nextSibling;
-            }
-            return ruby.querySelector('rt');
-          };
+          const pieces = [];
           let consumed = 0;
           for (const node of nodes) {
             const nodeStart = consumed;
@@ -710,105 +739,18 @@ class ReaderTapTranslationController(
             const piece = document.createRange();
             piece.setStart(node, from - nodeStart);
             piece.setEnd(node, to - nodeStart);
-            for (const rect of piece.getClientRects()) {
-              if (rect.width > 0.5 && rect.height > 0.5) {
-                rects.push({x: rect.left, y: rect.top, w: rect.width, h: rect.height});
-              }
-            }
-            // A ruby reading is deliberately not part of the selectable text,
-            // but iOS paints the selected kanji and its furigana as one visual
-            // unit. Return the annotation's rect too so Android's transparent
-            // native selection can be replaced by the same overlay.
-            const annotation = pairedRubyAnnotation(node);
-            if (annotation && !rubyAnnotations.has(annotation)) {
-              rubyAnnotations.add(annotation);
-              for (const rect of annotation.getClientRects()) {
-                if (rect.width > 0.5 && rect.height > 0.5) {
-                  rects.push({x: rect.left, y: rect.top, w: rect.width, h: rect.height});
-                }
-              }
-            }
+            pieces.push(piece);
           }
 
-          const mode = (getComputedStyle(hit.block).writingMode || '').toString();
-          const vertical = mode.indexOf('vertical') === 0 || mode === 'tb' || mode === 'tb-rl';
+          const vertical = jerreaderSelectionIsVertical(hit.block, $configuredVertical);
 
-          // Mirror of `ReaderSelectionRectMerger` in the shared module, which
-          // owns the algorithm and its tests: one tile per contiguous run per
-          // line, so no pixel is ever filled or outlined twice.
-          const merge = (input) => {
-            const usable = input.filter(r => r.w > 0.5 && r.h > 0.5);
-            if (usable.length <= 1) return usable;
-            const crossStart = r => vertical ? r.x : r.y;
-            const crossEnd = r => vertical ? r.x + r.w : r.y + r.h;
-            const runStart = r => vertical ? r.y : r.x;
-            const runEnd = r => vertical ? r.y + r.h : r.x + r.w;
-            const sharesLine = (a, b) => {
-              const overlap = Math.min(crossEnd(a), crossEnd(b)) -
-                Math.max(crossStart(a), crossStart(b));
-              if (overlap <= 0) return false;
-              const shorter = Math.min(
-                crossEnd(a) - crossStart(a),
-                crossEnd(b) - crossStart(b)
-              );
-              return shorter > 0 && overlap / shorter >= 0.55;
-            };
-            const buckets = [];
-            usable.slice()
-              .sort((a, b) => crossStart(a) - crossStart(b))
-              .forEach(rect => {
-                const bucket = buckets.find(list => list.some(item => sharesLine(item, rect)));
-                if (bucket) bucket.push(rect); else buckets.push([rect]);
-              });
-            const lines = buckets.map(bucket => {
-              const runs = [];
-              bucket.map(r => ({start: runStart(r), end: runEnd(r)}))
-                .sort((a, b) => a.start - b.start)
-                .forEach(run => {
-                  const last = runs[runs.length - 1];
-                  if (last && run.start <= last.end + 1.5) {
-                    last.end = Math.max(last.end, run.end);
-                  } else {
-                    runs.push({start: run.start, end: run.end});
-                  }
-                });
-              return {
-                crossStart: Math.min.apply(null, bucket.map(crossStart)),
-                crossEnd: Math.max.apply(null, bucket.map(crossEnd)),
-                runs: runs
-              };
-            }).sort((a, b) => a.crossStart - b.crossStart);
-            // A ruby base reserves room for its annotation, so its line reaches
-            // into the neighbouring one. Let them meet at the midpoint instead.
-            for (let index = 1; index < lines.length; index++) {
-              const previous = lines[index - 1];
-              const current = lines[index];
-              if (current.crossStart >= previous.crossEnd) continue;
-              const boundary = (current.crossStart + previous.crossEnd) / 2;
-              if (boundary <= previous.crossStart || boundary >= current.crossEnd) continue;
-              previous.crossEnd = boundary;
-              current.crossStart = boundary;
-            }
-            const output = [];
-            lines.forEach(line => line.runs.forEach(run => {
-              output.push(vertical
-                ? {
-                    x: line.crossStart,
-                    y: run.start,
-                    w: line.crossEnd - line.crossStart,
-                    h: run.end - run.start
-                  }
-                : {
-                    x: run.start,
-                    y: line.crossStart,
-                    w: run.end - run.start,
-                    h: line.crossEnd - line.crossStart
-                  });
-            }));
-            return output;
-          };
-
-          const tiles = merge(rects);
+          // A ruby reading is deliberately not part of the selectable text,
+          // but the selected kanji and its furigana are painted as one region,
+          // as on iOS: the reading joins the tile of the kanji below it, one
+          // tile per contiguous run per line, so no pixel is ever filled or
+          // outlined twice (ReaderSelectionTileScript, the page-side twin of
+          // `ReaderSelectionRectMerger`; cases in shared/parity/selection_tiles.json).
+          const tiles = jerreaderSelectionGeometry(pieces, vertical);
 
           // WebView's stock ::selection is transparent so it cannot tint the
           // <rt> line consistently. Paint the same merged tiles inside the
@@ -872,17 +814,20 @@ class ReaderTapTranslationController(
      *
      * WebView's stock blue paint does not include the furigana line because
      * `rt` is intentionally not selectable. The bridge keeps the native
-     * handles and action mode, hides only the stock paint, and draws a
-     * click-through rectangle for each selected base fragment plus its paired
-     * ruby annotation. A selectionchange listener keeps the rectangles aligned
-     * while either handle moves.
+     * handles and action mode, hides only the stock paint, and draws
+     * click-through tiles over the selected base text, one per line run, with
+     * each paired ruby annotation joined into the tile of its kanji
+     * (ReaderSelectionTileScript). A selectionchange listener keeps the tiles
+     * aligned while either handle moves.
      */
     private fun nativeSelectionBridgeScript(): String {
         val palette = ReaderSelectionVisualStyle.palette(appearance())
         val fill = palette.fillCss
         val stroke = palette.strokeCss
+        val configuredVertical = appearance().orientation == ReaderTextOrientation.VERTICAL
         return """
         (() => {
+          ${ReaderSelectionTileScript.ALL}
           const styleId = 'jerreader-native-selection-style';
           const overlayId = 'jerreader-native-selection-highlight';
           const oldSchedule = globalThis.__jerreaderNativeSelectionSchedule;
@@ -918,28 +863,7 @@ class ReaderTapTranslationController(
               computed.visibility !== 'hidden' && computed.opacity !== '0';
           };
 
-          const pairedAnnotation = (node) => {
-            const parent = node?.nodeType === Node.TEXT_NODE ? node.parentElement : node;
-            const ruby = parent?.closest?.('ruby');
-            if (!ruby) return null;
-            let top = node;
-            while (top && top.parentNode && top.parentNode !== ruby) top = top.parentNode;
-            let sibling = top?.nextSibling;
-            while (sibling) {
-              if (sibling.nodeType === Node.ELEMENT_NODE) {
-                if (sibling.matches('rt')) return sibling;
-                if (sibling.matches('rp')) {
-                  sibling = sibling.nextSibling;
-                  continue;
-                }
-                break;
-              }
-              if (sibling.nodeType === Node.TEXT_NODE && sibling.data?.trim()) break;
-              sibling = sibling.nextSibling;
-            }
-            return ruby.querySelector('rt');
-          };
-
+          // Ruby pairing and the tile merge live in ReaderSelectionTileScript.
           const selectedBaseNodes = (range) => {
             const root = document.body || document.documentElement;
             if (!root) return [];
@@ -1027,7 +951,6 @@ class ReaderTapTranslationController(
             if (!selection || !selection.rangeCount || selection.isCollapsed) return [];
             const range = selection.getRangeAt(0).cloneRange();
             const annotations = selectionAnnotations(selection, range);
-            const rects = [];
             const nodes = selectedBaseNodes(range);
             if (!nodes.length) {
               annotations.forEach((annotation) => {
@@ -1036,6 +959,7 @@ class ReaderTapTranslationController(
                 });
               });
             }
+            const pieces = [];
             nodes.forEach((node) => {
               const start = range.startContainer === node ? range.startOffset : 0;
               const end = range.endContainer === node ? range.endOffset : node.data.length;
@@ -1045,22 +969,17 @@ class ReaderTapTranslationController(
               const piece = document.createRange();
               piece.setStart(node, effectiveStart);
               piece.setEnd(node, effectiveEnd);
-              Array.from(piece.getClientRects()).forEach((rect) => {
-                if (rect.width > 0.5 && rect.height > 0.5) rects.push(rect);
-              });
-              const annotation = pairedAnnotation(node);
-              if (annotation && !annotations.has(annotation)) {
-                annotations.add(annotation);
-              }
+              pieces.push(piece);
             });
-            // Include a reading rect even when the native range only exposed
-            // the base node; iOS paints the paired annotation as one unit.
-            annotations.forEach((annotation) => {
-              Array.from(annotation.getClientRects()).forEach((rect) => {
-                if (rect.width > 0.5 && rect.height > 0.5) rects.push(rect);
-              });
-            });
-            return rects;
+            // Each selected kanji's paired reading is painted with it, even
+            // when the native range only exposed the base node, and joins the
+            // kanji's tile so the two read as one region, as on iOS. Readings
+            // the range touched directly join the base they belong to.
+            return jerreaderSelectionGeometry(
+              pieces,
+              jerreaderSelectionIsVertical(nodes[0], $configuredVertical),
+              annotations
+            );
           };
 
           const render = () => {
@@ -1069,8 +988,8 @@ class ReaderTapTranslationController(
               return;
             }
             const selection = globalThis.getSelection?.();
-            const rects = selectionRects(selection);
-            if (!rects.length) {
+            const tiles = selectionRects(selection);
+            if (!tiles.length) {
               clear();
               return;
             }
@@ -1090,15 +1009,15 @@ class ReaderTapTranslationController(
             }
             overlay.replaceChildren();
             const origin = overlay.getBoundingClientRect();
-            rects.forEach((rect) => {
+            tiles.forEach((tile) => {
               const marker = document.createElement('span');
               marker.style.cssText =
                 'position:absolute;pointer-events:none;border-radius:3px;' +
                 'box-sizing:border-box;' +
                 '${selectionMarkerPaintCss(fill = fill, stroke = stroke)}' +
-                'left:' + (rect.left - origin.left) + 'px;' +
-                'top:' + (rect.top - origin.top) + 'px;' +
-                'width:' + rect.width + 'px;height:' + rect.height + 'px;';
+                'left:' + (tile.x - origin.left) + 'px;' +
+                'top:' + (tile.y - origin.top) + 'px;' +
+                'width:' + tile.w + 'px;height:' + tile.h + 'px;';
               overlay.appendChild(marker);
             });
           };
@@ -1144,14 +1063,6 @@ class ReaderTapTranslationController(
      * excluding ruby annotations, so a sentence cut by a screen boundary can be
      * completed locally before any translation request is made.
      */
-    /** Readium's selected-text snapshot; no DOM or publication edits. */
-    suspend fun lookupContext(sourceText: String): String? {
-        val text = navigator?.currentSelection()?.locator?.text ?: return null
-        val selected = text.highlight ?: return null
-        if (ReaderTextNormalizer.normalized(selected) != ReaderTextNormalizer.normalized(sourceText)) return null
-        return text.before.orEmpty().takeLast(240) + selected + text.after.orEmpty().take(240)
-    }
-
     suspend fun crossPageContext(sourceText: String): String? {
         val source = ReaderTextNormalizer.normalized(sourceText)
         if (source.isEmpty()) return null
@@ -1169,16 +1080,23 @@ class ReaderTapTranslationController(
         unit: QuickTranslationUnit = settings.preferences.value.quickTranslationUnit
     ): TranslationCardState? = translateAt(toCssPoint(point), unit)
 
-    internal fun tapSelectionScriptForTesting(point: PointF, unit: QuickTranslationUnit): String =
-        tapSelectionScript(point, unit)
-
     private suspend fun translateCurrentSelection(): TranslationCardState? {
         val selection = navigator?.currentSelection() ?: return null
         return translateSelection(selection)
     }
 
-    private suspend fun translateSelection(selection: Selection): TranslationCardState? {
-        val sourceText = selection.locator.text.highlight ?: return null
+    private suspend fun translateSelection(
+        selection: Selection,
+        tapped: TappedSentence? = null
+    ): TranslationCardState? {
+        val highlight = selection.locator.text.highlight ?: return null
+        // Readium's text carries the <rt> readings of a ruby selection, and so
+        // does its text before and after it, which also runs on into other
+        // paragraphs; the card and the request use the base text, as on iOS.
+        val page = navigator?.let { reader ->
+            ReaderRubySelectionText.read { script -> reader.evaluateJavascript(script) }
+        }
+        val sourceText = page?.text ?: highlight
         if (onShortTapWordRequested != null && isSingleWord(sourceText)) {
             // The word lookup card takes over this selection. Invalidate any
             // previous translation identity so a late retry cannot resurrect
@@ -1202,7 +1120,20 @@ class ReaderTapTranslationController(
         val request = TranslationRequest(
             text = normalized,
             sourceLanguage = preferences.sourceChoice.language ?: bookLanguageHint(),
-            targetLanguage = preferences.targetLanguage
+            targetLanguage = preferences.targetLanguage,
+            // 2.1.0: the text around the sentence, taken as iOS takes it.
+            context = when {
+                // A tap: the paragraph the sentence was found in.
+                tapped != null -> ReaderTranslationContext.paragraph(tapped.paragraph, tapped.start, tapped.end)
+                // A selection: the rest of its paragraph, none across paragraphs.
+                page != null -> ReaderTranslationContext.window(sourceText, page.before, page.after)
+                // The page could not be read: Readium's own text, as iOS falls back to it.
+                else -> ReaderTranslationContext.window(
+                    highlight = sourceText,
+                    before = selection.locator.text.before,
+                    after = selection.locator.text.after
+                )
+            }
         )
         return translateNow(request)
     }
@@ -1230,7 +1161,9 @@ class ReaderTapTranslationController(
         val now = timeSource()
         val previous = manualRetryAt[key]
         if (previous != null && now - previous < MANUAL_RETRY_COOLDOWN_MILLIS) return false
-        if (currentState is TranslationCardState.Loading) return false
+        val visible = currentState
+        if (visible is TranslationCardState.Loading) return false
+        if (visible is TranslationCardState.Success && visible.isStreaming) return false
         manualRetryAt[key] = now
         if (manualRetryAt.size > RETRY_KEY_LIMIT) {
             manualRetryAt.minByOrNull { it.value }?.key?.let(manualRetryAt::remove)
@@ -1277,36 +1210,16 @@ class ReaderTapTranslationController(
         currentIdentity = identity
         val token = ++requestToken
         publish(token, TranslationCardState.Loading(request.text))
-        return try {
-            // The service reaches disk and the network — ML Kit blocks the
-            // calling thread while it prepares a model — so it must not run on
-            // the main dispatcher, or the reader stops answering input.
-            val result = withTimeout(TRANSLATION_TIMEOUT_MILLIS) {
-                withContext(Dispatchers.IO) { translationService.translate(request) }
-            }
-            TranslationCardState.Success(request.text, result).also { publish(token, it) }
-        } catch (_: TimeoutCancellationException) {
-            // Must precede the CancellationException branch: the timeout type
-            // extends it, so catching the parent first swallowed the watchdog
-            // and left the card spinning forever.
-            TranslationCardState.Failure(
-                sourceText = request.text,
-                message = "翻译超过 30 秒未返回，请重试或更换翻译服务。"
-            ).also { publish(token, it) }
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: TranslationFailure) {
-            TranslationCardState.Failure(
-                sourceText = request.text,
-                message = error.message ?: "翻译失败。",
-                canRetry = !ChatGPTPlanMessages.isStop(error)
-            ).also { publish(token, it) }
-        } catch (_: Exception) {
-            TranslationCardState.Failure(
-                sourceText = request.text,
-                message = "翻译服务暂时不可用，请稍后重试。"
-            ).also { publish(token, it) }
-        }
+        // 2.1.0: the translation shows while it arrives, and each piece is
+        // checked against the token, so a closed card or a card that moved on
+        // to another sentence never gets a late piece of this one.
+        return TranslationCardStreaming.translate(
+            request = request,
+            service = translationService,
+            isCurrent = { token == requestToken },
+            publish = { state -> publish(token, state) },
+            unavailableMessage = "翻译服务暂时不可用，请稍后重试。"
+        )
     }
 
     /** Drops results from superseded requests so a late reply cannot win. */
@@ -1314,135 +1227,12 @@ class ReaderTapTranslationController(
         if (token != requestToken) return
         currentState = state
         onStateChanged(state)
-        if (state !is TranslationCardState.Loading &&
-            settings.preferences.value.translationHapticsEnabled
-        ) {
+        // Text still arriving is not a result yet: the haptic plays once, at the end.
+        val isFinal = state !is TranslationCardState.Loading &&
+            !(state is TranslationCardState.Success && state.isStreaming)
+        if (isFinal && settings.preferences.value.translationHapticsEnabled) {
             onHapticFeedback?.invoke()
         }
-    }
-
-    private fun tapSelectionScript(point: PointF, unit: QuickTranslationUnit): String {
-        val granularity = if (unit == QuickTranslationUnit.PARAGRAPH) "paragraph" else "sentence"
-        return """
-            (() => {
-              const x = ${point.x};
-              const y = ${point.y};
-              const requestedUnit = '$granularity';
-              let caret = null;
-              if (document.caretRangeFromPoint) {
-                caret = document.caretRangeFromPoint(x, y);
-              } else if (document.caretPositionFromPoint) {
-                const position = document.caretPositionFromPoint(x, y);
-                if (position) {
-                  caret = document.createRange();
-                  caret.setStart(position.offsetNode, position.offset);
-                  caret.collapse(true);
-                }
-              }
-              if (!caret || !caret.startContainer ||
-                  caret.startContainer.nodeType !== Node.TEXT_NODE) return false;
-
-              const tappedNode = caret.startContainer;
-              const tappedElement = tappedNode.parentElement;
-              if (!tappedElement || tappedElement.closest(
-                    'a,button,input,textarea,select,option,video,audio,canvas,svg,rt,rp,script,style'
-                  )) return false;
-
-              const blockSelector =
-                'p,li,blockquote,dd,dt,figcaption,h1,h2,h3,h4,h5,h6,td,th,pre';
-              const block = tappedElement.closest(blockSelector) || tappedElement;
-              const walker = document.createTreeWalker(
-                block,
-                NodeFilter.SHOW_TEXT,
-                {
-                  acceptNode(node) {
-                    const parent = node.parentElement;
-                    if (!parent || parent.closest('rt,rp,script,style,noscript')) {
-                      return NodeFilter.FILTER_REJECT;
-                    }
-                    return NodeFilter.FILTER_ACCEPT;
-                  }
-                }
-              );
-              const nodes = [];
-              let node = walker.nextNode();
-              while (node) {
-                nodes.push(node);
-                node = walker.nextNode();
-              }
-              if (!nodes.length || !nodes.includes(tappedNode)) return false;
-
-              let text = '';
-              let tapOffset = 0;
-              for (const textNode of nodes) {
-                if (textNode === tappedNode) {
-                  tapOffset = text.length + Math.max(
-                    0,
-                    Math.min(caret.startOffset, textNode.data.length)
-                  );
-                }
-                text += textNode.data;
-              }
-              if (!text.trim()) return false;
-
-              let start = 0;
-              let end = text.length;
-              if (requestedUnit === 'sentence') {
-                let found = false;
-                if (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') {
-                  const locale = /[\u3040-\u30FF]/.test(text) ? 'ja' : 'en';
-                  const segments = Array.from(
-                    new Intl.Segmenter(locale, {granularity: 'sentence'}).segment(text)
-                  );
-                  const segment = segments.find(item =>
-                    tapOffset >= item.index && tapOffset <= item.index + item.segment.length
-                  );
-                  if (segment) {
-                    start = segment.index;
-                    end = segment.index + segment.segment.length;
-                    found = true;
-                  }
-                }
-                if (!found) {
-                  const stops = /[。！？.!?]/;
-                  start = tapOffset;
-                  while (start > 0 && !stops.test(text.charAt(start - 1))) start--;
-                  end = tapOffset;
-                  while (end < text.length && !stops.test(text.charAt(end))) end++;
-                  if (end < text.length) end++;
-                }
-              }
-
-              while (start < end && /\s/.test(text.charAt(start))) start++;
-              while (end > start && /\s/.test(text.charAt(end - 1))) end--;
-              if (end <= start) return false;
-
-              function resolveOffset(offset, isEnd) {
-                let consumed = 0;
-                for (let index = 0; index < nodes.length; index++) {
-                  const length = nodes[index].data.length;
-                  if (offset < consumed + length ||
-                      (offset === consumed + length && (isEnd || index === nodes.length - 1))) {
-                    return {node: nodes[index], offset: offset - consumed};
-                  }
-                  consumed += length;
-                }
-                const last = nodes[nodes.length - 1];
-                return {node: last, offset: last.data.length};
-              }
-
-              const rangeStart = resolveOffset(start, false);
-              const rangeEnd = resolveOffset(end, true);
-              const range = document.createRange();
-              range.setStart(rangeStart.node, rangeStart.offset);
-              range.setEnd(rangeEnd.node, rangeEnd.offset);
-              const selection = window.getSelection();
-              if (!selection) return false;
-              selection.removeAllRanges();
-              selection.addRange(range);
-              return selection.toString().trim().length > 0;
-            })()
-        """.trimIndent()
     }
 
     private fun crossPageContextScript(source: String): String {
@@ -1465,14 +1255,14 @@ class ReaderTapTranslationController(
                   }
                 }
               );
-              const blockSelector =
-                'p,li,blockquote,dd,dt,figcaption,h1,h2,h3,h4,h5,h6,td,th,pre';
+              // Paragraphs are told apart as iOS tells them apart, so a book
+              // whose paragraphs are div gets a space between them too.
+              ${ReaderBlockScript.FUNCTION}
               let raw = '';
               let previousBlock = null;
               let node = walker.nextNode();
               while (node) {
-                const block = (node.parentElement &&
-                  node.parentElement.closest(blockSelector)) || root;
+                const block = readerBlockOf(node.parentElement) || root;
                 if (raw && previousBlock && block !== previousBlock) raw += ' ';
                 raw += node.data;
                 previousBlock = block;
@@ -1517,7 +1307,6 @@ class ReaderTapTranslationController(
         const val LOOKUP_MENU_ITEM_ID = 0x4A455257
         const val ANNOTATE_MENU_ITEM_ID = 0x4A455241
         const val EDGE_PAGE_TURN_RATIO = 0.16f
-        const val TRANSLATION_TIMEOUT_MILLIS = 30_000L
         const val MANUAL_RETRY_COOLDOWN_MILLIS = 5_000L
         const val RETRY_KEY_LIMIT = 128
     }

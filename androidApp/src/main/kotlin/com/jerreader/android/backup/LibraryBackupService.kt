@@ -544,6 +544,7 @@ class LibraryBackupService(
             .put("verticalMargins", app.verticalMargins.toDouble())
             .put("appearanceMode", app.appearanceMode.storageValue)
             .put("backdropGlow", app.backdropGlow)
+            .put("aiActionBarHidden", app.aiActionBarHidden)
             .put(
                 "readerAppearance",
                 JSONObject()

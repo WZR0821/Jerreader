@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.SystemClock
+import android.util.Log
 import android.view.InputDevice
 import android.view.MotionEvent
 import androidx.test.core.app.ActivityScenario
@@ -72,13 +73,11 @@ class ReaderScrollGestureTest {
                 assertFalse(withContext(Dispatchers.Main) { activity.scrollModeBlocksPageTurns() })
                 val firstPage = awaitPage(activity, "The chapter was not laid out in pages") { it.paged }
                 delay(SETTLE_MILLIS)
-                swipeLeft()
-                awaitPage(activity, "A swipe did not turn the page in paged mode") {
+                awaitGesture(activity, "A swipe did not turn the page in paged mode", { swipeLeft() }) {
                     it.paged && abs(it.x - firstPage.x) > it.width * .5
                 }
                 delay(600)
-                swipeRight()
-                awaitPage(activity, "A swipe back did not turn the page in paged mode") {
+                awaitGesture(activity, "A swipe back did not turn the page in paged mode", { swipeRight() }) {
                     it.paged && abs(it.x - firstPage.x) < 1
                 }
 
@@ -88,8 +87,11 @@ class ReaderScrollGestureTest {
                 assertTrue(withContext(Dispatchers.Main) { activity.scrollModeBlocksPageTurns() })
                 val top = awaitPage(activity, "The chapter was not laid out for scrolling") { it.scrolling }
                 delay(SETTLE_MILLIS)
-                swipe(width * .5f, width * .5f, height * .7f, -height * .4f)
-                awaitPage(activity, "A swipe up did not scroll the chapter") {
+                awaitGesture(
+                    activity,
+                    "A swipe up did not scroll the chapter",
+                    { swipe(width * .5f, width * .5f, height * .7f, -height * .4f) }
+                ) {
                     it.scrolling && it.y > top.y + SCROLLED_AWAY
                 }
                 delay(1_000)
@@ -107,6 +109,14 @@ class ReaderScrollGestureTest {
                 for ((name, gesture) in gestures) {
                     gesture()
                     delay(1_200)
+                    if (clearSelection(activity)) {
+                        // The stall described at awaitGesture: the gesture
+                        // selected a word, so it never tested the chapter.
+                        Log.w(TAG, "$name selected text instead; clearing it and making it once more")
+                        delay(SETTLE_MILLIS)
+                        gesture()
+                        delay(1_200)
+                    }
                     val href = chapter(activity)
                     assertTrue("$name left the chapter while scrolling: $href", href.contains("chapter-one"))
                 }
@@ -238,6 +248,48 @@ class ReaderScrollGestureTest {
         )
     }
 
+    /**
+     * Makes [gesture] and waits for chapter one to reach the state [expected]
+     * describes, making it once more if the emulator turned it into a long
+     * press.
+     *
+     * On the software-rendered guest a frame can take a second. When one lands
+     * right after the finger goes down, the long-press timer fires before the
+     * first move is read, and the swipe selects a word instead of moving the
+     * page (11-23 20:36: the TextClassifier ran during this test and the page
+     * stayed put). A phone does not stall that long. Only a selection the
+     * gesture left behind earns the second try; a gesture that still misses,
+     * or that misses without selecting anything, fails as before.
+     */
+    private suspend fun awaitGesture(
+        activity: ReaderActivity,
+        failure: String,
+        gesture: () -> Unit,
+        expected: (Page) -> Boolean
+    ): Page {
+        gesture()
+        repeat(150) {
+            val current = page(activity)
+            if (current != null && chapter(activity).contains("chapter-one") && expected(current)) return current
+            if (clearSelection(activity)) {
+                Log.w(TAG, "$failure: the gesture selected text instead; clearing it and making it once more")
+                delay(SETTLE_MILLIS)
+                gesture()
+                return awaitPage(activity, failure, expected)
+            }
+            delay(100)
+        }
+        return awaitPage(activity, failure, expected)
+    }
+
+    /** Clears a text selection on the page; true when there was one. */
+    private suspend fun clearSelection(activity: ReaderActivity): Boolean {
+        val raw = withTimeoutOrNull(3_000) {
+            withContext(Dispatchers.Main) { navigator(activity)?.evaluateJavascript(CLEAR_SELECTION_SCRIPT) }
+        }
+        return raw == "true"
+    }
+
     /** Waits for chapter one to load and settle into the state [expected] describes. */
     private suspend fun awaitPage(activity: ReaderActivity, failure: String, expected: (Page) -> Boolean): Page {
         var report = "not loaded"
@@ -289,6 +341,17 @@ class ReaderScrollGestureTest {
     }
 
     private companion object {
+        const val TAG = "JerreaderScrollGesture"
+
+        const val CLEAR_SELECTION_SCRIPT = """
+            (function () {
+              var selection = window.getSelection();
+              if (!selection || selection.isCollapsed) return false;
+              selection.removeAllRanges();
+              return true;
+            })()
+        """
+
         const val STEP_MILLIS = 10L
 
         /** Time a freshly laid out chapter gets before the first gesture. */

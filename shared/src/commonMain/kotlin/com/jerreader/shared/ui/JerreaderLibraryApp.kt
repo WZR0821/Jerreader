@@ -141,7 +141,9 @@ fun JerreaderLibraryApp(
     utcOffsetMillisAt: ((epochMillis: Long) -> Int)? = null,
     modifier: Modifier = Modifier,
     coverContent: (@Composable (LibraryBook) -> Unit)? = null,
-    bottomBar: @Composable () -> Unit = {}
+    bottomBar: @Composable () -> Unit = {},
+    /** 本章还剩约 N 分钟 on the 继续阅读 card (2.1.0 §9); null for no line. */
+    chapterEstimate: ((LibraryBook) -> String?)? = null
 ) {
     var pendingDeletion by remember { mutableStateOf<LibraryBook?>(null) }
     var editingBook by remember { mutableStateOf<LibraryBook?>(null) }
@@ -359,7 +361,8 @@ fun JerreaderLibraryApp(
                                         placementSpec = itemPlacement,
                                         fadeOutSpec = itemFade
                                     ),
-                                    coverContent = coverContent
+                                    coverContent = coverContent,
+                                    recentChapterEstimate = recentBook?.let { chapterEstimate?.invoke(it) }
                                 )
                             }
                         }

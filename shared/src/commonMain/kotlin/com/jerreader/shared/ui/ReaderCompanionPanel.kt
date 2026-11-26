@@ -160,7 +160,7 @@ fun ReadingConfusionMapCard(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 JerreaderGlyph(JerreaderIcon.SPARKLES, colors.accent, Modifier.size(16.dp))
-                Text("AI 困惑地图", style = type.titleLarge)
+                Text("困惑地图", style = type.titleLarge)
             }
             Text(confusion.summary, style = type.bodyMedium, color = colors.secondaryText)
             confusion.items.forEach { item ->
@@ -403,7 +403,7 @@ private fun CompanionModePicker(
  * 20dp margins, no wider than 720dp.
  */
 @Composable
-private fun CompanionSheet(
+internal fun CompanionSheet(
     title: String,
     actionTitle: String,
     onAction: () -> Unit,

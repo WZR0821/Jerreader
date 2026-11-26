@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jerreader.shared.domain.LanguageCode
+import com.jerreader.shared.translation.AIAnswerSource
 import com.jerreader.shared.translation.TranslationResult
 
 sealed interface TranslationCardState {
@@ -76,7 +77,19 @@ sealed interface TranslationCardState {
         /** What the answer was based on, shown under the title. */
         val analysisDetail: String? = null,
         /** Only a sentence-structure answer belongs in the grammar notes. */
-        val analysisSavable: Boolean = true
+        val analysisSavable: Boolean = true,
+        /**
+         * True while the translation is still being written (2.1.0): the text
+         * so far shows, but nothing may save, copy or star it yet, and the AI
+         * chips wait for the whole translation.
+         */
+        val isStreaming: Boolean = false,
+        /**
+         * The text around the sentence that went with the translation request
+         * (2.1.0); the AI chips send the same, as iOS sends its request's
+         * context text.
+         */
+        val context: String? = null
     ) : TranslationCardState
 
     data class Failure(
@@ -94,7 +107,7 @@ sealed interface TranslationCardState {
  * A vocabulary entry only makes sense for a single word: one Latin token, or a
  * short run of CJK characters without punctuation.
  */
-internal fun String.isSingleWord(): Boolean {
+fun String.isSingleWord(): Boolean {
     val trimmed = trim()
     if (trimmed.isEmpty() || trimmed.length > 24) return false
     if (trimmed.any { it.isWhitespace() }) return false
@@ -150,19 +163,30 @@ fun TranslationCard(
     onToggleFurigana: (() -> Unit)? = null,
     requestSourceLanguage: LanguageCode? = null,
     requestTargetLanguage: LanguageCode? = null,
-    loadingDetail: String = "正在安全请求所选 AI 服务"
+    loadingDetail: String = "正在安全请求所选 AI 服务",
+    /** The AI chips under a finished translation (2.1.0 §4); null hides them. */
+    aiBar: (@Composable (TranslationCardState.Success) -> Unit)? = null,
+    /** 「第 N 次查 · 上次 MM-dd」 above the translation of one word (2.1.0 §8). */
+    lookupHint: String? = null,
+    /** Opens 发送给模型的内容 from the translation's source badge (2.1.0 §6). */
+    onShowTranslationSource: ((AIAnswerSource) -> Unit)? = null,
+    /** The solid 加入生词本 of the action row, from the third lookup (2.1.0 §8). */
+    onPrimaryAddToVocabulary: (() -> Unit)? = null
 ) {
     val haptics = LocalHapticFeedback.current
     val success = state as? TranslationCardState.Success
+    // A translation still being written cannot be starred, copied or asked
+    // about yet; it gets those once the whole text is in.
+    val finished = success?.takeUnless { it.isStreaming }
     // Android only adds favourites, so the star fills once this card has saved
     // the translation and stays filled for it.
     var favorited by remember(state.sourceText, success?.result?.translatedText) {
         mutableStateOf(false)
     }
     var favoriteBounces by remember { mutableIntStateOf(0) }
-    val favorite: ((Boolean) -> Unit)? = if (success != null && onFavorite != null) {
+    val favorite: ((Boolean) -> Unit)? = if (finished != null && onFavorite != null) {
         { fromStar ->
-            onFavorite(success.result)
+            onFavorite(finished.result)
             if (!favorited) {
                 favorited = true
                 // As on iOS, only the star bounces and confirms.
@@ -211,6 +235,9 @@ fun TranslationCard(
                 onOpenSettings = onOpenSettings,
                 onSaveAnalysis = onSaveAnalysis,
                 translationContent = translationContent,
+                aiBar = aiBar,
+                lookupHint = lookupHint,
+                onShowTranslationSource = onShowTranslationSource,
                 // The header and the action row keep their 44dp; the body
                 // scrolls in what is left, so a long card fills its maximum.
                 modifier = if (boundedHeight) Modifier.weight(1f, fill = false) else Modifier
@@ -220,7 +247,8 @@ fun TranslationCard(
                 favorited = favorited,
                 favoriteBounces = favoriteBounces,
                 onStar = favorite?.let { save -> { save(true) } },
-                menuGroups = menuGroups
+                menuGroups = menuGroups,
+                onPrimaryAddToVocabulary = onPrimaryAddToVocabulary?.takeIf { finished != null }
             )
         }
     }
@@ -326,6 +354,9 @@ private fun TranslationCardBody(
     onOpenSettings: () -> Unit,
     onSaveAnalysis: (() -> Unit)?,
     translationContent: (@Composable (TranslationCardState.Success) -> Unit)?,
+    aiBar: (@Composable (TranslationCardState.Success) -> Unit)?,
+    lookupHint: String?,
+    onShowTranslationSource: ((AIAnswerSource) -> Unit)?,
     modifier: Modifier = Modifier
 ) {
     val phase = phaseIdentity(state)
@@ -358,6 +389,13 @@ private fun TranslationCardBody(
                 is TranslationCardState.Loading -> TranslationLoadingContent(loadingDetail)
 
                 is TranslationCardState.Success -> {
+                    lookupHint?.let { hint ->
+                        Text(
+                            text = hint,
+                            style = JerreaderLearningType.caption,
+                            color = jerreaderPalette.secondaryText
+                        )
+                    }
                     if (translationContent != null) {
                         translationContent(state)
                     } else {
@@ -368,6 +406,18 @@ private fun TranslationCardBody(
                             },
                             style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 25.5.sp)
                         )
+                    }
+                    if (!state.isStreaming) {
+                        // Who translated it, at the end of the translation.
+                        // Only a model was sent anything to show.
+                        state.result.answerSource?.let { source ->
+                            AISourceBadge(
+                                source = source,
+                                onShowSource = onShowTranslationSource?.takeIf { source.isAIModel },
+                                modifier = Modifier.align(Alignment.End)
+                            )
+                        }
+                        aiBar?.invoke(state)
                     }
                     state.analysisText?.let { analysis ->
                         TranslationAnalysis(
@@ -518,7 +568,8 @@ private fun TranslationCardActionRow(
     favoriteBounces: Int,
     onStar: (() -> Unit)?,
     menuGroups: List<List<CardMenuAction>>,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onPrimaryAddToVocabulary: (() -> Unit)? = null
 ) {
     val line = jerreaderPalette.line
     var menuExpanded by remember { mutableStateOf(false) }
@@ -547,6 +598,7 @@ private fun TranslationCardActionRow(
             )
         }
         Spacer(Modifier.weight(1f))
+        onPrimaryAddToVocabulary?.let { add -> TranslationCardPrimaryCapsule(text = "加入生词本", onClick = add) }
         Box {
             TranslationCardIconButton(
                 icon = JerreaderIcon.MORE,
@@ -618,6 +670,40 @@ private fun TranslationCardIconButton(
     }
 }
 
+/**
+ * The solid 加入生词本 of the action row (2.1.0 §8): a 32dp accent capsule
+ * with 13sp semibold text in the row's 44dp height, shrinking a little when
+ * pressed.
+ */
+@Composable
+private fun TranslationCardPrimaryCapsule(text: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val palette = jerreaderPalette
+    val source = remember { MutableInteractionSource() }
+    Box(
+        modifier = modifier
+            .height(CardHitSize)
+            .clickable(interactionSource = source, indication = null, role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .height(32.dp)
+                .jerreaderPressScale(source, pressedScale = 0.96f)
+                .background(palette.accent, CircleShape)
+                .padding(horizontal = 14.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = text,
+                color = palette.onAccent,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1
+            )
+        }
+    }
+}
+
 /** One 更多翻译操作 entry; [checked] makes it a toggle (日语注音). */
 private class CardMenuAction(
     val title: String,
@@ -670,7 +756,10 @@ private fun translationMenuGroups(
     japaneseFuriganaEnabled: Boolean,
     onToggleFurigana: (() -> Unit)?
 ): List<List<CardMenuAction>> {
-    val success = state as? TranslationCardState.Success
+    // While the translation is still being written there is nothing whole to
+    // star, copy or ask about, and asking again waits for it to finish.
+    val streaming = (state as? TranslationCardState.Success)?.isStreaming == true
+    val success = (state as? TranslationCardState.Success)?.takeUnless { it.isStreaming }
     val translation = buildList {
         if (success != null) {
             favorite?.let { save -> add(CardMenuAction("收藏译文", JerreaderIcon.STAR_OUTLINE) { save(false) }) }
@@ -708,7 +797,7 @@ private fun translationMenuGroups(
         onToggleFurigana?.let { toggle ->
             add(CardMenuAction("日语注音", JerreaderIcon.TEXT_FORMAT, checked = japaneseFuriganaEnabled, run = toggle))
         }
-        val canRetry = (state as? TranslationCardState.Failure)?.canRetry ?: true
+        val canRetry = (state as? TranslationCardState.Failure)?.canRetry ?: !streaming
         add(CardMenuAction("重新翻译", JerreaderIcon.RESTORE, enabled = canRetry, run = onRetry))
     }
     return listOf(translation, tools, request).filter { it.isNotEmpty() }

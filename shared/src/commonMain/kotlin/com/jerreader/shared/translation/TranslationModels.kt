@@ -5,7 +5,12 @@ import com.jerreader.shared.domain.LanguageCode
 data class TranslationRequest(
     val text: String,
     val sourceLanguage: LanguageCode?,
-    val targetLanguage: LanguageCode = LanguageCode.CHINESE_SIMPLIFIED
+    val targetLanguage: LanguageCode = LanguageCode.CHINESE_SIMPLIFIED,
+    /**
+     * The text around [text] in the book (2.1.0), see [ReaderTranslationContext].
+     * AI models get it to understand the sentence and are told not to translate it.
+     */
+    val context: String? = null
 )
 
 data class TranslationResult(
@@ -13,8 +18,36 @@ data class TranslationResult(
     val sourceLanguage: LanguageCode,
     val targetLanguage: LanguageCode,
     val providerIdentifier: String,
-    val isFromCache: Boolean = false
+    val isFromCache: Boolean = false,
+    /** Who answered, for the source badge; null when unknown. */
+    val answerSource: AIAnswerSource? = null,
+    /** The tokens the answer took, when the provider said (2.1.0). */
+    val usage: AIUsage? = null,
+    /**
+     * The fallback service that answered after the configured one failed
+     * (2.1.0), or null when the configured service answered. The cache keeps
+     * such an answer under the fallback's namespace, as iOS keeps it under
+     * the fallback provider's identity.
+     */
+    val fallbackProvider: TranslationProviderMode? = null
 )
+
+/**
+ * The source badge of an answer (2.1.0) and what its 「发送给模型的内容」 sheet
+ * shows. [isAIModel] is false for the system translator, which never gets
+ * 「含上下文」.
+ */
+data class AIAnswerSource(
+    val modelName: String,
+    val isAIModel: Boolean,
+    /** The context that went with the request, when one did. */
+    val sentContext: String? = null
+) {
+    val usedContext: Boolean get() = isAIModel && !sentContext.isNullOrBlank()
+
+    val badge: String
+        get() = if (isAIModel) AIReadingActionPolicy.badge(modelName, usedContext) else modelName.trim()
+}
 
 sealed class TranslationFailure(message: String) : Exception(message) {
     data object EmptyInput : TranslationFailure("请选择需要翻译的文本。")

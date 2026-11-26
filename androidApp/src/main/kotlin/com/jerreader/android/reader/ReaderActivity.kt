@@ -17,6 +17,7 @@ import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
+import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.activity.ComponentDialog
 import androidx.activity.viewModels
@@ -31,6 +32,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.LaunchedEffect
@@ -74,7 +77,9 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updateLayoutParams
 import androidx.core.view.updatePadding
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
@@ -112,8 +117,19 @@ import com.jerreader.shared.learning.ReadingConfusionMap
 import com.jerreader.shared.learning.ReadingConfusionMapPolicy
 import com.jerreader.shared.learning.ReadingErrorSignal
 import com.jerreader.shared.translation.AIReadingLensMode
+import com.jerreader.shared.translation.AIAnswerSource
+import com.jerreader.shared.translation.AIReadingAction
 import com.jerreader.shared.translation.ReadingLensOptions
+import com.jerreader.shared.learning.CalendarDay
+import com.jerreader.shared.learning.ChapterTimeEstimatePolicy
+import com.jerreader.shared.learning.LookupHintPolicy
+import com.jerreader.shared.learning.ReaderCompanionDotPolicy
+import com.jerreader.shared.ui.AIFullTextSheet
 import com.jerreader.shared.ui.AIReadingLensChooser
+import com.jerreader.shared.ui.AISetupSheet
+import com.jerreader.shared.ui.AISourceSheet
+import com.jerreader.shared.ui.TranslationAIBar
+import com.jerreader.shared.ui.isSingleWord
 import com.jerreader.shared.ui.JerreaderGlyph
 import com.jerreader.shared.ui.JerreaderIcon
 import com.jerreader.shared.ui.JerreaderTheme
@@ -196,6 +212,21 @@ class ReaderActivity : AppCompatActivity() {
     private var pdfPublicationOpen = false
     private var wordInteractionController: ReaderWordInteractionController? = null
     private var tapTranslationController: ReaderTapTranslationController? = null
+
+    /** Puts a long press on the glyph under the finger (see [ReaderLongPressAim]); EPUB only. */
+    private val longPressAim = ReaderLongPressAim { navigator != null && pdfNavigator == null }
+
+    /**
+     * Each EPUB page Readium finishes loading gets the selection bridge (see
+     * `ensureNativeSelectionBridge`), and its WebView the long-press aim.
+     */
+    private val epubPageLoads = object : EpubNavigatorFragment.PaginationListener {
+        override fun onPageLoaded() {
+            tapTranslationController?.ensureNativeSelectionBridge()
+            longPressAim.attach(navigator?.publicationView)
+        }
+    }
+
     private var pdfTranslationController: PdfTapTranslationController? = null
     private var annotationDialog: Dialog? = null
     private val searchLocators = linkedMapOf<String, Locator>()
@@ -225,9 +256,89 @@ class ReaderActivity : AppCompatActivity() {
     internal val pdfTranslationControllerForTesting: PdfTapTranslationController?
         get() = pdfTranslationController
     internal fun dismissTranslationForTesting() = dismissTranslation()
+
+    /** A translation card arriving as a real one does, which counts a one-word card's word (2.1.0 §8). */
+    internal fun showTranslationForTesting(state: TranslationCardState) {
+        check(com.jerreader.android.BuildConfig.DEBUG)
+        showTranslation(state)
+    }
+
+    /** The card menu's 加入生词本 on the card on screen. */
+    internal fun addTranslatedWordToVocabularyForTesting() {
+        check(com.jerreader.android.BuildConfig.DEBUG)
+        currentTranslationState?.let(::addTranslatedWordToVocabulary)
+    }
+
+    /** The selection menu's 划线/批注, as its menu item calls it. */
+    internal fun requestAnnotationForSelectionForTesting() = requestAnnotationForSelection()
+
+    /** The open note editor's text, the note it edits (null for a new one) and that note's text. */
+    internal val annotationEditorForTesting: Triple<String, String?, String>?
+        get() = pendingAnnotation?.let { Triple(it.selectedText, it.existingId, it.note) }
+
+    /** Saves the open note editor with [note], as its 保存 button does. */
+    internal fun saveAnnotationEditorForTesting(note: String) {
+        val target = checkNotNull(pendingAnnotation) { "No note editor is open" }
+        saveAnnotation(target, note, target.color)
+        annotationDialog?.dismiss()
+    }
+
+    internal fun dismissAnnotationEditorForTesting() {
+        annotationDialog?.dismiss()
+    }
     /** Where 加批注 on the card would put a PDF note (see `annotateTranslatedText`). */
     internal fun pdfAnnotationLocatorForTesting(): Locator? = pdfSelectionLocator() ?: latestLocator
     private var currentTranslationLocatorJson: String? = null
+
+    /** The AI chips of the translation card and what they answered (2.1.0 §4–§5). */
+    private val aiActions by lazy {
+        ReaderAIActions(
+            scope = lifecycleScope,
+            service = { graph.translationService },
+            lensOptions = { mode ->
+                ReadingLensOptions.from(
+                    mode,
+                    companionMode,
+                    AdaptiveReadingAssistPolicy.resolve(readingSignals(), companionMode, book?.id)
+                )
+            }
+        )
+    }
+    internal val aiActionsSnapshotsForTesting: kotlinx.coroutines.flow.StateFlow<ReaderAIActions.Snapshot>
+        get() = aiActions.snapshots
+    /** The 追问 field has the keyboard (2.1.0 §5). */
+    private var aiInputFocused by mutableStateOf(false)
+    /** The window's adjust mode from before the 追问 field took the keyboard. */
+    private var restingSoftInputAdjust: Int? = null
+    /** The passage 合并翻译 built across a page break; no selection anchors it. */
+    private var expandedSourceText: String? = null
+
+    /** 第 N 次查 · 上次 … of the word a card shows, once its lookup is recorded (2.1.0 §8). */
+    private data class LookupTally(
+        val key: String,
+        val word: String,
+        val count: Int,
+        val hint: String?,
+        val inVocabulary: Boolean
+    )
+    private var lookupTally by mutableStateOf<LookupTally?>(null)
+    /** The one-word translation card whose lookup is already recorded, so a redraw does not count it again. */
+    private var recordedTranslationWord: String? = null
+    /** That card's own dictionary lookup, which 加入生词本 waits for so the word is counted once. */
+    private var translatedWordCountJob: Job? = null
+    /** The word key that card counted, once its record is written (2.1.0 §8). */
+    private var translationCountedLookupKey: String? = null
+    /**
+     * The lookup sheet came from 查词 on the translation card and has not
+     * recorded yet: its first record of the word the card counted is not
+     * counted again (2.1.0 §8).
+     */
+    private var lookupSheetFromTranslationCard = false
+
+    /** 本章还剩约 N 分钟 under the progress row (2.1.0 §9); EPUB only. */
+    private var chapterEstimate by mutableStateOf<String?>(null)
+    /** Where the chapter at a reading-order index ends, worked out once per chapter. */
+    private var chapterEndCache: Pair<Int, Double?>? = null
 
     internal var currentAppearance by mutableStateOf(ReaderAppearance())
         private set
@@ -378,6 +489,15 @@ class ReaderActivity : AppCompatActivity() {
         showRoot()
         updateSystemBarAppearance()
         lifecycleScope.launch { resolveAndOpenPublication() }
+        // 本章还剩约 N 分钟 also moves while the reader stays on one page.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                while (true) {
+                    refreshChapterEstimate()
+                    delay(CHAPTER_ESTIMATE_REFRESH_MILLIS)
+                }
+            }
+        }
     }
 
     override fun onResume() {
@@ -462,8 +582,14 @@ class ReaderActivity : AppCompatActivity() {
         resolvedBook?.let { opened ->
             session.recorder.begin(opened.id)
             companionMode = loadCompanionMode(opened.id)
-            // A recap only helps someone coming back to a book.
-            hasCompanionUpdate = opened.lastReadProgress > CONTINUATION_RECAP_MIN_PROGRESS
+            // A recap only helps someone coming back to a book, and not within
+            // six hours of the last visit (2.1.0 §10). The record still holds
+            // the previous open: only a saved position rewrites it, later.
+            hasCompanionUpdate = ReaderCompanionDotPolicy.showsDot(
+                progress = opened.lastReadProgress,
+                lastOpenedAtMillis = opened.lastOpenedAtEpochMillis,
+                nowMillis = System.currentTimeMillis()
+            )
         }
 
         val snapshot = when {
@@ -595,7 +721,8 @@ class ReaderActivity : AppCompatActivity() {
                 transparency = appPreferences.bottomBarTransparency,
                 bottomInset = with(LocalDensity.current) { systemBarBottomPx.toDp() },
                 onInteraction = ::noteChromeInteraction,
-                onScrubbingChanged = ::setChromeAutoHideSuspended
+                onScrubbingChanged = ::setChromeAutoHideSuspended,
+                chapterEstimate = chapterEstimate
             )
         }.apply { id = R.id.reader_bottom_chrome }
         root.addView(
@@ -1162,6 +1289,7 @@ class ReaderActivity : AppCompatActivity() {
                 val factory = navigatorFactory.createFragmentFactory(
                     initialLocator = initialLocator,
                     initialPreferences = basePreferences,
+                    paginationListener = epubPageLoads,
                     configuration = epubConfiguration(navigatorFactory, tapController, basePreferences)
                 )
                 attachEpubNavigator(factory)
@@ -1397,6 +1525,10 @@ class ReaderActivity : AppCompatActivity() {
                 currentChapterIndex = readingOrder.indexOfFirst {
                     it.url().toString() == locator.href.toString()
                 }
+                if (currentChapterIndex != previousChapterIndex) {
+                    tapTranslationController?.ensureNativeSelectionBridge()
+                    longPressAim.attach(navigator?.publicationView)
+                }
                 currentChapterName = currentChapterTitle(locator)
                 // Reading on into the next chapter offers its 90-second loop
                 // through the AI button's dot; nothing pops up over the page.
@@ -1411,8 +1543,50 @@ class ReaderActivity : AppCompatActivity() {
                 refreshBookmarkState()
                 refreshPdfAnnotationRects(locator)
                 session.recorder.recordPosition(locatorJson, currentProgress)
+                refreshChapterEstimate()
             }
         }
+    }
+
+    /**
+     * 本章还剩约 N 分钟 (2.1.0 §9, EPUB only): the book's reading time with
+     * this session's, where the reader is in the whole book, and where this
+     * chapter ends. That end is kept per book for the 继续阅读 card.
+     */
+    private fun refreshChapterEstimate() {
+        val currentBook = book
+        val locator = latestLocator
+        if (currentBook == null || locator == null || pdfPublicationOpen) {
+            chapterEstimate = null
+            return
+        }
+        val chapterEnd = chapterEndProgression(currentChapterIndex)
+        // Before the positions arrive the end is unknown; the library card
+        // keeps the last one it had.
+        if (chapterEnd != null) graph.appSettings.updateChapterEnd(currentBook.id, chapterEnd)
+        chapterEstimate = ChapterTimeEstimatePolicy.text(
+            readingSeconds = currentBook.totalReadingSeconds + session.recorder.sessionSeconds(),
+            progression = currentProgress,
+            chapterEnd = chapterEnd
+        )
+    }
+
+    /**
+     * The first page of the next resource in reading order, as a whole-book
+     * progression; 1.0 after the last one; null when it cannot be known.
+     */
+    private fun chapterEndProgression(index: Int): Double? {
+        if (index < 0 || index > readingOrder.lastIndex) return null
+        chapterEndCache?.takeIf { it.first == index }?.let { return it.second }
+        val end = if (index == readingOrder.lastIndex) {
+            1.0
+        } else {
+            val next = readingOrder[index + 1].url().toString()
+            positions.firstOrNull { it.href.toString() == next }?.locations?.totalProgression
+        }
+        // Positions arrive after the first page; an unknown end is asked again.
+        if (end != null) chapterEndCache = index to end
+        return end
     }
 
     private fun attachNavigator(
@@ -1589,6 +1763,7 @@ class ReaderActivity : AppCompatActivity() {
         val factory = navigatorFactory.createFragmentFactory(
             initialLocator = resumeLocator,
             initialPreferences = preferences,
+            paginationListener = epubPageLoads,
             configuration = epubConfiguration(navigatorFactory, tapController, preferences)
         )
         attachEpubNavigator(factory)
@@ -1799,9 +1974,48 @@ class ReaderActivity : AppCompatActivity() {
 
     private fun requestAnnotationForSelection() {
         lifecycleScope.launch {
-            val selection = navigator?.currentSelection() ?: return@launch
-            val text = selection.locator.text.highlight?.takeIf(String::isNotBlank) ?: return@launch
-            showAnnotationEditor(PendingAnnotation(text, selection.locator))
+            val current = navigator ?: return@launch
+            val selection = current.currentSelection() ?: return@launch
+            val highlight = selection.locator.text.highlight?.takeIf(String::isNotBlank) ?: return@launch
+            // Readium's text carries the ruby readings (扉とびら); a new note
+            // keeps the base text, as iOS and the translation card do.
+            val text = ReaderRubySelectionText.read { current.evaluateJavascript(it) }?.text ?: highlight
+            showAnnotationEditor(annotationDraft(text, selection.locator, otherTexts = listOf(highlight)))
+        }
+    }
+
+    /**
+     * The editor for a note on [text] at [locator]: the note this selection
+     * already has, as iOS opens it (annotationDraftForCurrentSelection), else
+     * a new one. A new note under the same key replaced the one kept there, an
+     * answer 存为笔记 added included. [otherTexts] are other ways the same
+     * selection may have been kept: the selection menu used Readium's text,
+     * the translation card the card's passage.
+     */
+    private suspend fun annotationDraft(
+        text: String,
+        locator: Locator,
+        otherTexts: List<String> = emptyList(),
+        geometryJson: String? = null
+    ): PendingAnnotation {
+        val existing = book?.let { libraryBook ->
+            graph.readerRecords.findAnnotation(
+                bookId = libraryBook.id,
+                locatorJson = locator.toJSON().toString(),
+                selectedTexts = listOf(text) + otherTexts
+            )
+        }
+        return if (existing != null) {
+            PendingAnnotation(
+                selectedText = existing.selectedText,
+                locator = locator,
+                existingId = existing.id,
+                note = existing.noteText,
+                color = existing.color,
+                geometryJson = existing.geometryJson
+            )
+        } else {
+            PendingAnnotation(selectedText = text, locator = locator, geometryJson = geometryJson)
         }
     }
 
@@ -2017,6 +2231,16 @@ class ReaderActivity : AppCompatActivity() {
         val lookup = currentWordLookupState
         val translationPreferences by graph.translationSettings.preferences.collectAsState()
         val interfacePreferences by graph.appSettings.preferences.collectAsState()
+        val aiSnapshot by aiActions.snapshots.collectAsState()
+        // The AI chips come once the whole translation is in (2.1.0 §4),
+        // unless the reader turned them off.
+        val aiCard = aiCardOf(translation, interfacePreferences.aiActionBarHidden)
+        val aiResultShowing = aiCard != null && aiSnapshot.card == aiCard && aiSnapshot.selected != null
+        val tally = lookupTally
+        val translatedWordTally = tally?.takeIf { translation != null && it.word == translation.sourceText.trim() }
+        val lookupWordTally = (lookup as? WordLookupCardState.Success)?.let { success ->
+            tally?.takeIf { it.key == LearningRecordRepository.wordKey(success.explanation) }
+        }
         BoxWithConstraints(modifier = Modifier.fillMaxSize().onGloballyPositioned { coordinates ->
             if (com.jerreader.android.BuildConfig.DEBUG) {
                 val origin = coordinates.positionInWindow()
@@ -2047,9 +2271,19 @@ class ReaderActivity : AppCompatActivity() {
             val bottomChromeInLayer = with(density) {
                 (if (chromeShown) (bottomChromeHeightPx - systemBarBottomPx).coerceAtLeast(0) else 0).toDp()
             }
+            // While 追问 has the keyboard the card sits above it (2.1.0 §5).
+            // The window does not resize for it, see [followUpInputFocused],
+            // so the keyboard is read from the insets, from the window's
+            // bottom edge: the layer itself ends above the navigation bar.
+            val imeBottomPx = WindowInsets.ime.getBottom(density)
+            val keyboardInLayer = with(density) {
+                (if (aiInputFocused) (imeBottomPx - systemBarBottomPx).coerceAtLeast(0) else 0).toDp()
+            }
             val edgeGap = ReaderInterfaceDefaults.FLOATING_CARD_EDGE_GAP_DP.dp
             val safeTop = (topChromeInLayer + edgeGap).coerceAtMost(available)
-            val safeBottom = (available - bottomChromeInLayer - edgeGap)
+            val restingSafeBottom = (available - bottomChromeInLayer - edgeGap)
+                .coerceAtLeast(safeTop)
+            val safeBottom = (available - maxOf(bottomChromeInLayer, keyboardInLayer) - edgeGap)
                 .coerceAtLeast(safeTop)
             if (com.jerreader.android.BuildConfig.DEBUG) {
                 val safeTopPx = with(density) { safeTop.toPx() }
@@ -2068,10 +2302,22 @@ class ReaderActivity : AppCompatActivity() {
             val selectionBottom = rawAnchorBottom.coerceIn(selectionTop, safeBottom)
             val roomBelow = (safeBottom - selectionBottom - selectionGap).coerceAtLeast(0.dp)
             val roomAbove = (selectionTop - safeTop - selectionGap).coerceAtLeast(0.dp)
-            val minimumCardHeight = minOf(108.dp, (safeBottom - safeTop).coerceAtLeast(1.dp))
+            val safeSpan = (safeBottom - safeTop).coerceAtLeast(1.dp)
+            val minimumCardHeight = minOf(108.dp, safeSpan)
+            // With an AI answer open the card may take half of the safe area
+            // (2.1.0 §4), the translation and the answer scrolling together,
+            // and never less than its usual height, as iOS takes the larger
+            // of the two: on a short page, such as a phone on its side, half
+            // is less than usual. The keyboard only lowers the ceiling: half
+            // is of the page.
+            val standardCardHeight = (available * 0.30f).coerceAtLeast(166.dp)
             val preferredCardHeight = minOf(
-                (available * 0.30f).coerceAtLeast(166.dp),
-                (safeBottom - safeTop).coerceAtLeast(1.dp)
+                if (aiResultShowing) {
+                    maxOf((restingSafeBottom - safeTop).coerceAtLeast(1.dp) * 0.5f, standardCardHeight)
+                } else {
+                    standardCardHeight
+                },
+                safeSpan
             )
             val aboveFits = roomAbove >= minimumCardHeight
             val belowFits = roomBelow >= minimumCardHeight
@@ -2089,7 +2335,9 @@ class ReaderActivity : AppCompatActivity() {
             // most of the page used to leave a sliver against the screen edge
             // with its header and drag handle cut off (GitHub issue #2); the
             // card now keeps its minimum and overlaps the selection instead.
-            val cardHeight = minOf(
+            // While 追问 is typed into the card may cover the selection for a
+            // while, so it keeps its height above the keyboard (2.1.0 §5).
+            val cardHeight = if (aiInputFocused) preferredCardHeight else minOf(
                 preferredCardHeight,
                 maxOf(availableCardRoom, minimumCardHeight)
             )
@@ -2118,7 +2366,8 @@ class ReaderActivity : AppCompatActivity() {
                 safeTop,
                 (safeBottom - verticalCardHeight).coerceAtLeast(safeTop)
             )
-            val topBannerHeight = minOf(preferredCardHeight, available * 0.30f)
+            val topBannerHeight = if (aiResultShowing) preferredCardHeight
+                else minOf(preferredCardHeight, available * 0.30f)
             val topBannerCollides = rawAnchorTop < safeTop + topBannerHeight + selectionGap &&
                 rawAnchorBottom > safeTop - selectionGap
             val useTopBanner = translationPreferences.displayMode == TranslationDisplayMode.TOP_BANNER &&
@@ -2156,6 +2405,9 @@ class ReaderActivity : AppCompatActivity() {
                 if (!hasAnchor) return@onGloballyPositioned
                 // The reader moved the card: leave it where they put it.
                 if (cardDragX != 0f || cardDragY != 0f) return@onGloballyPositioned
+                // Typing into 追问 may cover the selection; the card clears it
+                // again once the keyboard goes (2.1.0 §5).
+                if (aiInputFocused) return@onGloballyPositioned
                 val placement = floatingCardPlacement
 
                 // Staying on screen comes before clearing the selection, so
@@ -2296,11 +2548,22 @@ class ReaderActivity : AppCompatActivity() {
                     input = input, dictionary = { graph.offlineDictionary.japaneseChinese },
                     lookup = androidx.compose.runtime.remember { com.jerreader.android.lexical.DefaultLexicalLookupService(offline = graph.offlineDictionary) },
                     explanationService = (graph.translationService as? ContextExplanationService)
-                        .takeIf { graph.translationSettings.preferredAIProviderMode() != null },
-                    onRecord = { value -> graph.learningRecords.recordLookup(value, book?.id, book?.title) },
+                        .takeIf { graph.translationSettings.isAIFeatureConfigured() },
+                    onRecord = { value ->
+                        val counted = LearningRecordRepository.sheetLookupCounts(
+                            value,
+                            translationCountedLookupKey.takeIf { lookupSheetFromTranslationCard }
+                        )
+                        // Once written, later records from this sheet count as usual (2.1.0 §8).
+                        graph.learningRecords.recordLookup(value, book?.id, book?.title, counted = counted)
+                            .also { lookupSheetFromTranslationCard = false }
+                    },
                     onAnalysis = { snapshot, result -> graph.learningRecords.updateContextualAnalysis(snapshot, result) },
                     onFavorite = { snapshot, favorite -> graph.learningRecords.setContextualFavorite(snapshot.lookupKey, favorite) },
-                    onDismiss = { contextualLookupInput = null })
+                    onDismiss = {
+                        lookupSheetFromTranslationCard = false
+                        contextualLookupInput = null
+                    })
                 }
             }
             if (translation != null) {
@@ -2340,7 +2603,9 @@ class ReaderActivity : AppCompatActivity() {
                         onRetry = ::retryTranslation,
                         onCopy = ::copyToClipboard,
                         onFavorite = { result -> favoriteTranslation(translation, result) },
-                        onExplain = { explainTranslation(translation) },
+                        // The 结构 chip takes its place while the chips show (2.1.0 §4).
+                        onExplain = { _: TranslationResult -> explainTranslation(translation) }
+                            .takeIf { aiCard == null },
                         onLens = { showReadingLensChooser(translation) },
                         onSaveAnalysis = {
                             val success = translation as? TranslationCardState.Success
@@ -2357,22 +2622,28 @@ class ReaderActivity : AppCompatActivity() {
                         onAnnotate = ::annotateTranslatedText,
                         onExpandCrossPage = { expandCrossPageSegment(translation) },
                         onAddToVocabulary = { addTranslatedWordToVocabulary(translation) },
-                        onLookup = { lifecycleScope.launch {
-                            val context = try {
-                                kotlinx.coroutines.withTimeoutOrNull(1_000) { tapTranslationController?.lookupContext(translation.sourceText) }
-                            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-                            catch (_: Exception) { null } ?: translation.sourceText
-                            if (currentTranslationState == translation) {
-                                contextualLookupInput = com.jerreader.android.ui.ContextualLookupInput(
-                                    translation.sourceText, context,
-                                    translationSourceLanguage(translation) ?: LanguageCode.JAPANESE)
-                            }
-                        } },
+                        onLookup = { openContextualLookup(translation) },
                         crossPageMessage = crossPageMessage,
                         isExpandingCrossPage = isExpandingCrossPage,
                         onDrag = ::dragFloatingCard,
                         onDraggingChange = { floatingCardDragging = it },
-                        onOpenSettings = ::openTranslationSettings
+                        onOpenSettings = ::openTranslationSettings,
+                        aiBar = aiCard?.let { card ->
+                            @androidx.compose.runtime.Composable { _: TranslationCardState.Success ->
+                                ReaderAIBar(card, aiSnapshot) { text ->
+                                    grammarDraft = com.jerreader.android.data.GrammarNoteEntity(
+                                        title = com.jerreader.android.data.grammarNoteTitle(card.sourceText), sentence = card.sourceText,
+                                        explanation = text, language = (card.sourceLanguage ?: LanguageCode.ENGLISH).tag,
+                                        bookId = book?.id, bookTitle = book?.title,
+                                        locatorJson = currentTranslationLocatorJson ?: latestLocatorJson)
+                                }
+                            }
+                        },
+                        lookupHint = translatedWordTally?.hint,
+                        onShowTranslationSource = { source -> showAISource(translation.sourceText, source) },
+                        onPrimaryAddToVocabulary = translatedWordTally
+                            ?.takeIf { LookupHintPolicy.addToVocabularyIsPrimary(it.count) && !it.inVocabulary }
+                            ?.let { { addTranslatedWordToVocabulary(translation) } }
                     )
                 }
             } else if (lookup != null) {
@@ -2381,8 +2652,13 @@ class ReaderActivity : AppCompatActivity() {
                         state = lookup,
                         onDismiss = ::dismissWordLookup,
                         onRetry = { wordInteractionController?.retry() },
-                        onLookup = { contextualLookupInput = com.jerreader.android.ui.ContextualLookupInput(
-                            lookup.analysis.surfaceForm, lookup.analysis.sentenceContext, lookup.analysis.language) },
+                        onLookup = {
+                            lookupSheetFromTranslationCard = false
+                            contextualLookupInput = com.jerreader.android.ui.ContextualLookupInput(
+                                lookup.analysis.surfaceForm, lookup.analysis.sentenceContext, lookup.analysis.language)
+                        },
+                        lookupHint = lookupWordTally?.hint,
+                        addToVocabularyIsPrimary = lookupWordTally?.let { LookupHintPolicy.addToVocabularyIsPrimary(it.count) } ?: false,
                         onCopy = ::copyToClipboard,
                         onFavorite = { explanation ->
                             lifecycleScope.launch {
@@ -2405,6 +2681,48 @@ class ReaderActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * The AI chips of [card] and the open answer (2.1.0 §4–§7). 查词 opens
+     * the lookup sheet; every other chip needs a model, and without one it
+     * opens 先接入一个 AI 模型 instead.
+     */
+    @androidx.compose.runtime.Composable
+    private fun ReaderAIBar(
+        card: ReaderAIActions.Card,
+        snapshot: ReaderAIActions.Snapshot,
+        onSaveGrammar: (String) -> Unit
+    ) {
+        fun withModel(run: () -> Unit) {
+            if (graph.translationSettings.isAIFeatureConfigured()) {
+                run()
+            } else {
+                // Once a model is set up from the sheet the chip runs, as on
+                // iOS, if its card is still the one shown.
+                showAISetupSheet(onReady = {
+                    if (aiCardOf(currentTranslationState, graph.appSettings.preferences.value.aiActionBarHidden) == card) run()
+                })
+            }
+        }
+        TranslationAIBar(
+            state = aiActions.barState(card, snapshot, noteUnavailableReason(card)),
+            onSelect = { action ->
+                if (action == AIReadingAction.LOOKUP) {
+                    currentTranslationState?.let(::openContextualLookup)
+                } else {
+                    withModel { aiActions.select(card, action) }
+                }
+            },
+            onStop = aiActions::stop,
+            onRetry = { aiActions.retry(card) },
+            onSaveNote = { title, text -> saveAIResultAsNote(card, title, text) },
+            onExpand = ::showAIFullText,
+            onShowSource = { source -> showAISource(card.sourceText, source) },
+            onAsk = { question -> withModel { aiActions.ask(card, question) } },
+            onSaveGrammar = onSaveGrammar,
+            onInputFocusChanged = ::followUpInputFocused
+        )
     }
 
     /**
@@ -2561,6 +2879,8 @@ class ReaderActivity : AppCompatActivity() {
         cardDragY = 0f
         popupAvoidanceX = 0f
         popupAvoidanceY = 0f
+        forgetTranslationCardAI()
+        lookupTally = null
         setFloatingLayerVisible(false)
     }
 
@@ -2574,12 +2894,53 @@ class ReaderActivity : AppCompatActivity() {
         crossPageMessage = null
         popupAvoidanceX = 0f
         popupAvoidanceY = 0f
+        forgetTranslationCardAI()
         // Where the reader dragged this card says nothing about the next one.
         if (currentWordLookupState == null) {
             cardDragX = 0f
             cardDragY = 0f
+            lookupTally = null
         }
         setFloatingLayerVisible(currentWordLookupState != null)
+    }
+
+    /**
+     * The translation card closed: its AI answers go, a request still being
+     * written is dropped, and the keyboard of 追问 no longer holds the page.
+     */
+    private fun forgetTranslationCardAI() {
+        aiActions.reset()
+        expandedSourceText = null
+        recordedTranslationWord = null
+        translationCountedLookupKey = null
+        followUpInputFocused(false)
+    }
+
+    /**
+     * The 追问 field has the keyboard (2.1.0 §5). The window must not resize
+     * meanwhile: a new page size lays the chapter out again, and the locator
+     * that follows closes the card. From Android 11 the keyboard's height
+     * still reaches the floating layer, which lifts the card above it; before
+     * that the window pans to keep the field in view.
+     */
+    private fun followUpInputFocused(focused: Boolean) {
+        if (aiInputFocused == focused) return
+        aiInputFocused = focused
+        val mask = WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST
+        val mode = window.attributes.softInputMode
+        if (focused) {
+            restingSoftInputAdjust = mode and mask
+            val still = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+            } else {
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN
+            }
+            window.setSoftInputMode((mode and mask.inv()) or still)
+        } else {
+            val resting = restingSoftInputAdjust ?: return
+            restingSoftInputAdjust = null
+            window.setSoftInputMode((mode and mask.inv()) or resting)
+        }
     }
 
     private fun resetTransientReaderState() {
@@ -2597,6 +2958,8 @@ class ReaderActivity : AppCompatActivity() {
         cardDragY = 0f
         popupAvoidanceX = 0f
         popupAvoidanceY = 0f
+        forgetTranslationCardAI()
+        lookupTally = null
         setFloatingLayerVisible(false)
     }
 
@@ -2638,11 +3001,7 @@ class ReaderActivity : AppCompatActivity() {
         val key = LearningRecordRepository.wordKey(explanation)
         lifecycleScope.launch {
             try {
-                graph.learningRecords.recordLookup(
-                    explanation = explanation,
-                    sourceBookId = book?.id,
-                    sourceBookTitle = book?.title
-                )
+                lookupTally = recordLookupTally(explanation, explanation.surfaceForm)
                 recordedReaderLookupKey = key
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -2652,17 +3011,106 @@ class ReaderActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Records one lookup of [explanation] and works out 第 N 次查 · 上次 …
+     * (2.1.0 §8). 上次 is read before the record is written, which replaces it.
+     */
+    private suspend fun recordLookupTally(
+        explanation: WordExplanation,
+        word: String,
+        favorite: Boolean = false
+    ): LookupTally {
+        val key = LearningRecordRepository.wordKey(explanation)
+        val previous = graph.learningRecords.lookupRecord(key)
+        val recorded = graph.learningRecords.recordLookup(
+            explanation = explanation,
+            sourceBookId = book?.id,
+            sourceBookTitle = book?.title,
+            favorite = favorite
+        )
+        return LookupTally(
+            key = key,
+            word = word,
+            count = recorded.lookupCount,
+            hint = LookupHintPolicy.hint(
+                lookupCount = recorded.lookupCount,
+                previousLookup = previous?.lastLookedUpAtEpochMillis?.let(::calendarDay),
+                today = calendarDay(System.currentTimeMillis())
+            ),
+            inVocabulary = recorded.isFavorite
+        )
+    }
+
+    private fun calendarDay(millis: Long): CalendarDay {
+        val calendar = java.util.Calendar.getInstance().apply { timeInMillis = millis }
+        return CalendarDay(
+            year = calendar.get(java.util.Calendar.YEAR),
+            month = calendar.get(java.util.Calendar.MONTH) + 1,
+            day = calendar.get(java.util.Calendar.DAY_OF_MONTH)
+        )
+    }
+
+    /**
+     * A translation card of a single word counts as one lookup of it, once
+     * per card however often it redraws (2.1.0 §8). The record keeps the
+     * dictionary entry, as 加入生词本 does; without one nothing is counted.
+     */
+    private fun recordTranslatedWord(state: TranslationCardState.Success) {
+        val word = state.sourceText.trim()
+        if (!word.isSingleWord() || recordedTranslationWord == word) return
+        recordedTranslationWord = word
+        val language = translationSourceLanguage(state) ?: LanguageCode.ENGLISH
+        translatedWordCountJob = lifecycleScope.launch {
+            try {
+                val explanation = withContext(Dispatchers.IO) {
+                    graph.lexicalLookupService.lookup(
+                        word = word,
+                        sentenceContext = null,
+                        language = language,
+                        candidates = emptyList()
+                    )
+                }
+                val tally = recordLookupTally(explanation, word)
+                if (currentTranslationState?.sourceText?.trim() == word) {
+                    lookupTally = tally
+                    translationCountedLookupKey = tally.key
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                android.util.Log.w("Jerreader", "Translated word lookup could not be recorded")
+            }
+        }
+    }
+
     private fun showTranslation(state: TranslationCardState) {
         if (state is TranslationCardState.Loading) recordReadingQuery()
         hideControlsForCard()
-        cardDragX = 0f
-        cardDragY = 0f
-        popupAvoidanceX = 0f
-        popupAvoidanceY = 0f
+        // A translation still arriving (2.1.0) stays one card: where the
+        // reader dragged it holds until the whole text is in.
+        val previous = currentTranslationState
+        val continuesStream = previous is TranslationCardState.Success && previous.isStreaming &&
+            state is TranslationCardState.Success && state.sourceText == previous.sourceText
+        if (!continuesStream) {
+            cardDragX = 0f
+            cardDragY = 0f
+            popupAvoidanceX = 0f
+            popupAvoidanceY = 0f
+        }
+        // Another sentence, or this one asked again: the chips start over. A
+        // word translated again on the same card is still one lookup.
+        if (state is TranslationCardState.Loading || previous?.sourceText != state.sourceText) aiActions.reset()
+        if (previous?.sourceText != state.sourceText) {
+            recordedTranslationWord = null
+            translationCountedLookupKey = null
+        }
+        // Only the passage 扩展跨页句段 made has no selection of its own.
+        if (state.sourceText != expandedSourceText) expandedSourceText = null
         currentTranslationState = state
         currentTranslationLocatorJson = latestLocatorJson
         setFloatingLayerVisible(true)
         updateFloatingAnchor()
+        if (state is TranslationCardState.Success && !state.isStreaming) recordTranslatedWord(state)
     }
 
 
@@ -2782,28 +3230,67 @@ class ReaderActivity : AppCompatActivity() {
     private fun addTranslatedWordToVocabulary(state: TranslationCardState) {
         val word = state.sourceText.trim()
         if (word.isEmpty()) return
+        // The card counts its word once (2.1.0 §8), as on iOS. Its own lookup
+        // may still be on its way: wait for it, and if it counted the word,
+        // only star that record. A card still being written has not started
+        // its lookup, so 加入生词本 is then the card's one lookup.
+        val pending = translatedWordCountJob.takeIf { recordedTranslationWord == word }
+        val claimed = word.isSingleWord() && recordedTranslationWord != word && lookupTally?.word != word
+        if (claimed) recordedTranslationWord = word
         lifecycleScope.launch {
+            pending?.join()
+            val tally = lookupTally?.takeIf { it.word == word }
+            if (tally != null) {
+                graph.learningRecords.setWordFavorite(tally.key, true)
+                if (lookupTally?.key == tally.key) lookupTally = tally.copy(inVocabulary = true)
+                crossPageMessage = "已加入生词本。"
+                return@launch
+            }
+            val language = translationSourceLanguage(state) ?: LanguageCode.ENGLISH
             val explanation = runCatching {
                 withContext(Dispatchers.IO) { graph.lexicalLookupService.lookup(
                     word = word,
                     sentenceContext = null,
-                    language = translationSourceLanguage(state) ?: LanguageCode.ENGLISH,
+                    language = language,
                     candidates = emptyList()
                 ) }
-            }.getOrNull()
+            }.getOrNull() ?: finishedTranslation(word)?.let { translation ->
+                // With no dictionary, the card's own translation is the
+                // definition, as on iOS.
+                WordExplanation(
+                    surfaceForm = word,
+                    lemma = null,
+                    reading = null,
+                    language = language,
+                    partOfSpeech = null,
+                    definitions = listOf(translation.translatedText),
+                    usageNote = "从阅读正文加入；释义来自本次译文。",
+                    providerIdentifier = translation.providerIdentifier
+                )
+            }
             if (explanation == null) {
+                // Nothing was counted; the card may still count its word.
+                if (claimed && recordedTranslationWord == word) recordedTranslationWord = null
                 crossPageMessage = "词典暂时不可用，未加入生词本。"
                 return@launch
             }
-            graph.learningRecords.recordLookup(
-                explanation = explanation,
-                sourceBookId = book?.id,
-                sourceBookTitle = book?.title,
-                favorite = true
-            )
+            val counted = recordLookupTally(explanation, word, favorite = true)
+            // The card's word is counted now: its 第 N 次查 shows, and its 查词
+            // does not count the word again.
+            if (recordedTranslationWord == word && currentTranslationState?.sourceText?.trim() == word) {
+                lookupTally = counted
+                translationCountedLookupKey = counted.key
+            }
             crossPageMessage = "已加入生词本。"
         }
     }
+
+    /** The card's whole translation of [word], once it is written. */
+    private fun finishedTranslation(word: String): TranslationResult? =
+        (currentTranslationState as? TranslationCardState.Success)
+            ?.takeIf { !it.isStreaming && it.sourceText.trim() == word }
+            ?.result
+            ?.takeIf { it.translatedText.isNotBlank() }
 
     private fun favoriteTranslation(state: TranslationCardState, result: TranslationResult) {
         lifecycleScope.launch {
@@ -3011,11 +3498,17 @@ class ReaderActivity : AppCompatActivity() {
                     crossPageMessage = "没有找到可确认的完整句段，已保留当前译文。"
                     return@launch
                 }
+                // The completed passage reaches past the selection, so there
+                // is no highlight to keep a note on (2.1.0 §6).
+                expandedSourceText = expansion.text
                 val preferences = graph.translationSettings.preferences.value
                 val request = TranslationRequest(
                     text = expansion.text,
                     sourceLanguage = preferences.sourceChoice.language ?: translationSourceLanguage(state),
-                    targetLanguage = preferences.targetLanguage
+                    targetLanguage = preferences.targetLanguage,
+                    context = com.jerreader.shared.translation.ReaderTranslationContext.around(
+                        expansion.text, expansion.contextText
+                    )
                 )
                 if (pdfController != null) {
                     pdfController.translateExpanded(request)
@@ -3054,9 +3547,10 @@ class ReaderActivity : AppCompatActivity() {
             }
             dismissTranslation()
             showAnnotationEditor(
-                PendingAnnotation(
-                    selectedText = text,
+                annotationDraft(
+                    text = text,
                     locator = selected ?: pageLocator,
+                    otherTexts = listOfNotNull(selected?.text?.highlight),
                     geometryJson = geometryJson
                 )
             )
@@ -3072,12 +3566,235 @@ class ReaderActivity : AppCompatActivity() {
         )
     }
 
+    /**
+     * 查词 of the translation card, from its menu or its chip: the lookup
+     * sheet with the context the translation request sent, or the sentence
+     * alone, as iOS opens it (`initialContext`).
+     */
+    private fun openContextualLookup(translation: TranslationCardState) {
+        val context = (translation as? TranslationCardState.Success)?.context ?: translation.sourceText
+        lookupSheetFromTranslationCard = true
+        contextualLookupInput = com.jerreader.android.ui.ContextualLookupInput(
+            translation.sourceText, context,
+            translationSourceLanguage(translation) ?: LanguageCode.JAPANESE)
+    }
+
+    /**
+     * 先接入一个 AI 模型 (2.1.0 §7), for an AI chip tapped while no AI
+     * provider is set up. Signing in happens here, as the plan page does it;
+     * a key is entered on the AI 大模型 page; or the chips leave the card.
+     * [onReady] runs once either way leaves an AI model set up.
+     */
+    private fun showAISetupSheet(onReady: () -> Unit) {
+        var busy by mutableStateOf(false)
+        var message by mutableStateOf<String?>(null)
+        showComposeDialog(sheet = true) { dialog ->
+            AISetupSheet(
+                busy = busy,
+                message = message,
+                onSignIn = {
+                    if (!busy) lifecycleScope.launch {
+                        busy = true
+                        message = null
+                        try {
+                            val notice = com.jerreader.android.ui.ChatGPTPlanActions.signIn(this@ReaderActivity, graph.translationSettings)
+                            dialog.dismiss()
+                            crossPageMessage = notice
+                            // The signed-in plan answers the chips (2.1.0 §7).
+                            if (graph.translationSettings.isAIFeatureConfigured()) onReady()
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: com.jerreader.android.translation.chatgptplan.ChatGPTPlanError.Cancelled) {
+                            // Closing the sign-in page is not an error.
+                        } catch (error: Exception) {
+                            message = com.jerreader.android.ui.AIProviderRequests.message(error)
+                        } finally {
+                            busy = false
+                        }
+                    }
+                },
+                onEnterKey = {
+                    dialog.dismiss()
+                    showAIModelsPage(onClosed = {
+                        if (graph.translationSettings.isAIFeatureConfigured()) onReady()
+                    })
+                },
+                onHideButtons = {
+                    graph.appSettings.updateAIActionBarHidden(true)
+                    dialog.dismiss()
+                    crossPageMessage = "可在阅读设置里重新打开"
+                },
+                onDismiss = dialog::dismiss
+            )
+        }
+    }
+
+    /**
+     * 填 API Key (2.1.0 §7): the AI 大模型 page that 阅读与翻译 pushes, in a
+     * full-screen window over the book, as iOS pushes `AIModelsView` in its
+     * sheet. Closing it or going back from it leaves the reader where it was;
+     * the reader is not finished. [onClosed] runs once it has gone.
+     */
+    private fun showAIModelsPage(onClosed: () -> Unit) {
+        val dialog = ComponentDialog(this, android.R.style.Theme_Translucent_NoTitleBar)
+        dialog.setContentView(dialogComposeView {
+            ReaderTheme {
+                val requests = androidx.compose.runtime.remember {
+                    com.jerreader.android.ui.AIProviderRequests.live(graph.configuredTranslationService)
+                }
+                com.jerreader.android.ui.AIModelsScreen(
+                    store = graph.translationSettings,
+                    requests = requests,
+                    backTitle = "阅读",
+                    onBack = dialog::dismiss
+                )
+            }
+        })
+        dialog.window?.let { pageWindow ->
+            pageWindow.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            pageWindow.setBackgroundDrawable(Color.TRANSPARENT.toDrawable())
+            androidx.core.view.WindowCompat.setDecorFitsSystemWindows(pageWindow, false)
+            pageWindow.addFlags(android.view.WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
+            @Suppress("DEPRECATION")
+            fun clearLegacyBarColors() {
+                pageWindow.statusBarColor = Color.TRANSPARENT
+                pageWindow.navigationBarColor = Color.TRANSPARENT
+            }
+            clearLegacyBarColors()
+            if (Build.VERSION.SDK_INT >= 29) pageWindow.isNavigationBarContrastEnforced = false
+            // The page covers the book, so the bars follow the app's light or dark.
+            val systemDark = (resources.configuration.uiMode and
+                android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+                android.content.res.Configuration.UI_MODE_NIGHT_YES
+            val dark = graph.appSettings.preferences.value.appearanceMode.isDark(systemDark)
+            val pageBars = androidx.core.view.WindowCompat.getInsetsController(pageWindow, pageWindow.decorView)
+            pageBars.isAppearanceLightStatusBars = !dark
+            pageBars.isAppearanceLightNavigationBars = !dark
+            // API 24–25 always draws light navigation icons; keep a grey bar there, as 阅读与翻译 does.
+            if (Build.VERSION.SDK_INT < 26 && !dark) {
+                @Suppress("DEPRECATION")
+                fun keepLegacyNavigationBar() { pageWindow.navigationBarColor = Color.DKGRAY }
+                keepLegacyNavigationBar()
+            }
+        }
+        dialog.setOnDismissListener { onClosed() }
+        dialog.show()
+    }
+
+    /** The sentence the AI chips ask about: a whole translation, while the bar is shown (2.1.0 §4). */
+    private fun aiCardOf(translation: TranslationCardState?, barHidden: Boolean): ReaderAIActions.Card? =
+        (translation as? TranslationCardState.Success)
+            ?.takeIf { !it.isStreaming && !barHidden }
+            ?.let { success ->
+                ReaderAIActions.Card(
+                    sourceText = success.sourceText,
+                    translation = success.result.translatedText,
+                    context = success.context,
+                    sourceLanguage = translationSourceLanguage(success)
+                )
+            }
+
+    /** 发送给模型的内容 behind a source badge (2.1.0 §6). */
+    private fun showAISource(sourceText: String, source: AIAnswerSource) {
+        showComposeDialog(sheet = true) { dialog ->
+            AISourceSheet(source = source, sourceText = sourceText, onDismiss = dialog::dismiss)
+        }
+    }
+
+    /** 展开看全文 of an AI answer. */
+    private fun showAIFullText(title: String, text: String) {
+        showComposeDialog(sheet = true) { dialog ->
+            AIFullTextSheet(title = title, text = text, onDismiss = dialog::dismiss)
+        }
+    }
+
+    /**
+     * Whether 存为笔记 has a selection to keep the note on (2.1.0 §6): a
+     * passage completed across the page, or a PDF tap without an anchor, has
+     * none.
+     */
+    private fun noteUnavailableReason(card: ReaderAIActions.Card): String? {
+        val anchored = if (pdfPublicationOpen) {
+            pdfTranslationController?.selectionGeometry() != null
+        } else {
+            hasSelectionAnchor && card.sourceText != expandedSourceText
+        }
+        return if (anchored) null else NOTE_UNAVAILABLE
+    }
+
+    /**
+     * 存为笔记 (2.1.0 §6): the answer goes after the note of this selection's
+     * highlight, or becomes the note of a new one in the default colour. The
+     * selection menu keeps a highlight under its own text and the card's
+     * 添加笔记 under the card's passage, so both are looked for.
+     */
+    private fun saveAIResultAsNote(card: ReaderAIActions.Card, title: String, text: String) {
+        val libraryBook = book ?: return
+        if (noteUnavailableReason(card) != null) {
+            crossPageMessage = NOTE_UNAVAILABLE
+            return
+        }
+        lifecycleScope.launch {
+            val locator: Locator
+            val selectedText: String
+            val otherSelectedTexts: List<String>
+            var geometryJson: String? = null
+            if (pdfPublicationOpen) {
+                locator = pdfSelectionLocator() ?: latestLocator ?: return@launch
+                selectedText = card.sourceText
+                otherSelectedTexts = emptyList()
+                geometryJson = pdfTranslationController?.selectionGeometry()?.let { geometry ->
+                    JSONArray().put(
+                        JSONObject()
+                            .put("x", geometry.left)
+                            .put("y", geometry.top)
+                            .put("w", geometry.width())
+                            .put("h", geometry.height())
+                    ).toString()
+                }
+            } else {
+                val selected = navigator?.currentSelection()?.locator
+                    ?.takeIf { !it.text.highlight.isNullOrBlank() }
+                if (selected == null) {
+                    crossPageMessage = NOTE_UNAVAILABLE
+                    return@launch
+                }
+                locator = selected
+                // A new note keeps the card's passage, as iOS does: Readium's
+                // highlight text carries the ruby readings (扉とびら).
+                selectedText = card.sourceText
+                otherSelectedTexts = listOf(selected.text.highlight.orEmpty())
+            }
+            try {
+                graph.readerRecords.appendToAnnotation(
+                    bookId = libraryBook.id,
+                    bookTitle = libraryBook.title,
+                    locatorJson = locator.toJSON().toString(),
+                    selectedText = selectedText,
+                    title = title,
+                    body = text,
+                    defaultColor = ReaderAnnotationColor.DEFAULT.id,
+                    chapterTitle = currentChapterTitle(locator),
+                    progress = locator.locations.totalProgression ?: currentProgress,
+                    geometryJson = geometryJson,
+                    otherSelectedTexts = otherSelectedTexts
+                )
+                crossPageMessage = "已存为笔记"
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                crossPageMessage = "笔记没有存好，请再试一次。"
+            }
+        }
+    }
+
     private fun dismissWordLookup() {
         wordInteractionController?.clearSelection()
         currentWordLookupState = null
         if (currentTranslationState == null) {
             cardDragX = 0f
             cardDragY = 0f
+            lookupTally = null
         }
         setFloatingLayerVisible(currentTranslationState != null)
     }
@@ -3108,6 +3825,19 @@ class ReaderActivity : AppCompatActivity() {
             viewport.top + selection.bottom * density)
         currentTranslationState = state
         setFloatingLayerVisible(true)
+    }
+
+    /** The selection the card keeps clear of, in window pixels; null without one. */
+    internal fun translationSelectionFrameForTesting(): RectF? {
+        check(com.jerreader.android.BuildConfig.DEBUG)
+        if (!hasSelectionAnchor) return null
+        val viewport = translationViewportForTesting ?: return null
+        return RectF(
+            viewport.left + minOf(anchorLeftPx, anchorRightPx),
+            viewport.top + minOf(anchorTopPx, anchorBottomPx),
+            viewport.left + maxOf(anchorLeftPx, anchorRightPx),
+            viewport.top + maxOf(anchorTopPx, anchorBottomPx)
+        )
     }
 
     /** Drags the translation card by the same path as its handle, in pixels. */
@@ -3161,6 +3891,21 @@ class ReaderActivity : AppCompatActivity() {
     internal suspend fun lookupAtForTesting(point: PointF): WordLookupCardState? =
         wordInteractionController?.lookupAt(point)
 
+    internal suspend fun shortTapWordAtForTesting(point: PointF): String? =
+        wordInteractionController?.shortTapWordForTesting(point)
+
+    /** Long presses moved onto their glyph so far, and what became of the last one. */
+    internal fun longPressAimForTesting(): Pair<Int, String> =
+        longPressAim.aimedPresses to longPressAim.lastOutcome
+
+    /** How many times WebView's selection menu (翻译 / 查词 / 划线/批注) has opened. */
+    internal fun selectionMenusOpenedForTesting(): Int =
+        tapTranslationController?.selectionMenusOpened ?: 0
+
+    internal fun closeSelectionMenuForTesting() {
+        tapTranslationController?.closeSelectionMenuForTesting()
+    }
+
     internal suspend fun translateAtForTesting(point: PointF): TranslationCardState? =
         tapTranslationController?.translateAt(point)
             ?: pdfTranslationController?.translateAt(point)
@@ -3174,7 +3919,11 @@ class ReaderActivity : AppCompatActivity() {
         language: LanguageCode? = null
     ): WordAnalysis? = wordInteractionController?.analyzeSelectedTextForTesting(text, language)
 
-    private fun showComposeDialog(content: @androidx.compose.runtime.Composable (Dialog) -> Unit) {
+    /** [sheet] puts the dialog on the bottom edge, where iOS presents a half sheet. */
+    private fun showComposeDialog(
+        sheet: Boolean = false,
+        content: @androidx.compose.runtime.Composable (Dialog) -> Unit
+    ) {
         val dialog = ComponentDialog(this)
         dialog.setContentView(dialogComposeView {
             ReaderTheme {
@@ -3186,6 +3935,7 @@ class ReaderActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
+            if (sheet) dialog.window?.setGravity(Gravity.BOTTOM)
         }
         dialog.show()
     }
@@ -3312,6 +4062,8 @@ class ReaderActivity : AppCompatActivity() {
         private const val SEARCH_RESULT_LIMIT = 80
         private const val SEARCH_PAGE_LIMIT = 6
         private const val COMPANION_PREFERENCES = "jerreader_reader_companion"
-        private const val CONTINUATION_RECAP_MIN_PROGRESS = 0.01
+        /** 本章还剩约 N 分钟 is worked out again this often while the book is open (2.1.0 §9). */
+        private const val CHAPTER_ESTIMATE_REFRESH_MILLIS = 30_000L
+        private const val NOTE_UNAVAILABLE = "这段选区不能存笔记"
     }
 }

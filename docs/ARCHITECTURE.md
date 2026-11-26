@@ -35,7 +35,7 @@
 - Readium `WKWebView` 在逐屏分页中禁止回弹、缩放、纵向 bounce 和 inset 自动调整；固定版面额外禁止平移。重排版 EPUB 保留 Readium 的横向 pan，因为它同时负责逐页手势和原生文本选区。
 - 中文、英文和日文是当前唯一的翻译语言集。日文书提供“原版 / 横排”双模式：原版将 `verticalText` 和 `readingProgression` 交还出版物元数据；横排同时设定 `verticalText = false` 和 `readingProgression = .ltr`，因此章节间与章节内都统一从左向右。
 - Reader 只把选中文本、Locator JSON 和选区 frame 上报给视图模型。EPUB 翻译入口分三层：短按正文按用户设置用临时 DOM Range 命中所在句子或当前语义块中的一个段落；长按第一次原生选区时利用前后 Readium 文本片段智能补全，单词用 `NLTokenizer`、多词与点句共用句子解析器；同一选区会话中一旦用户拖动手柄改变原始文本，解析器便进入精确模式，后续严格使用系统选区原文，直到点按其他位置、翻页、关闭卡片或位置改变时重置。轻点翻译默认在 Readium 边缘翻页观察者之前消费单击，使一次触摸只会进入翻译命中；该策略不影响横向滑动。用户可在设置中关闭保护，或关闭轻点翻译以恢复左右点按翻页。英文解析先将 EPUB 源码换行投影为等长空格，再在 `NLTokenizer` 上校正人名首字母和可结句的缩写；日文解析只针对引号内问号/叹号后紧跟 `と`、`って` 等引用表达的系统误切合并相邻范围，同时保留真正独立的新句。两者都保持 WebKit UTF-16 高亮偏移不变。PDF 优先用 PDFKit 文字层按点击位置映射字符，并按句子或由空行、缩进和版面几何限定的单个段落提取；无可用文字层时渲染当前页缩略图并调用本机 Vision OCR。按书开启的论文双栏模式只改变自动 PDF 识别：PDFKit 文字层依照 `selectionsByLine()` 的真实 UTF-16 范围和页内几何组合点击栏，并以不连续 `PDFSelection` 高亮；OCR 则把候选行限制在点击的半页栏。横跨 72% 页宽以上的标题、摘要和图注退回普通流程，PDFKit 原生长按/手柄选区保持不变。OCR 行会根据行距、段首缩进、分栏和横/竖排几何关系重组，遇到标点遗漏时也不跨段串句；日文小号假名只有在尺寸、方向和汉字邻接关系同时匹配时才会作为注音过滤，竖排判断不依赖 PDF 语言元数据。命中文本与本页 OCR 结果只缓存在当前阅读器内存。长按文字层仍保留原生选择菜单。所有命中只创建临时覆盖高亮，不改写出版物正文或 PDF 文件。
-- 1.5.0 起，EPUB 在关闭轻点翻译时把非边缘单击交给同一条 DOM 命中链路，粒度改为词语：命中点必须在字形 28pt 内，`ReaderWordSegmenter` 用 `NLTokenizer` 取整词并把被切开的日语词尾并回词干（"ない / た / て"只接平假名结尾的词干），所在句子作为原句；载荷以 `.quickWord` 触发器交给视图模型，直接打开语境查词并写入学习记录。未命中字形时仍切换阅读界面。Android 的短按脚本在同一次 WebView 计算中返回词面与前后文，DPR 换算留在该文档内，不读取可能滞后的 Readium 原生选区；查词成功即记录一次。
+- 1.5.0 起，EPUB 在关闭轻点翻译时把非边缘单击交给同一条 DOM 命中链路，粒度改为词语：命中点必须在字形 28pt 内，`ReaderWordSegmenter` 用 `NLTokenizer` 取整词，所在句子作为原句；日文由 `japaneseWordBounds` 把分词结果重新拼成词（2.1.0 起，Android 短按脚本里有逐行对应的同名函数，两端结果一致）：前缀带后面的词，汉字带送假名，词干按最长匹配带词尾，助词不并，点词里哪个字都得到整个词，规则见 [2.1.0 维护记录](RELEASE_2.1.0_2026-11-23.md) §3。拼词之前，`repairedJapaneseTokens`（Android 是 `repairJapaneseSegments`）先把 ICU 放错的边界挪到系统分词的位置，Android 的段取自系统 ICU（`JapaneseWordBreaks` 用 `android.icu.text.BreakIterator`，带中日文词典；Chromium 给 Android 的 ICU 数据裁掉了这份词典，WebView 的 `Intl.Segmenter('ja')` 只按汉字、平假名、片假名分段，系统给不出分词时才用它），且只把词段交给这两步，所以两端拿到同样的段；载荷以 `.quickWord` 触发器交给视图模型，直接打开语境查词并写入学习记录。未命中字形时仍切换阅读界面。Android 的短按脚本在同一次 WebView 计算中返回词面与前后文，DPR 换算留在该文档内，不读取可能滞后的 Readium 原生选区；查词成功即记录一次。
 - PDF 点按容差以 16pt 屏幕坐标为真值，每次按 PDFView 当前缩放和页旋转换算到 page space；OCR 自定义长按为 0.30 秒。OCR 长按识别器始终附着在 PDFView，由 delegate 按实际触点页面判断是否存在可用文字层，因此 iPad 双页中相邻扫描页也可命中。文字 PDF 的翻译高亮保留 `PDFSelection`，OCR 页保留页内归一化识别框，屏幕 `CGRect` 仅是当前帧的派生值。缩放、滚动、旋转或 layout 变化时，使用 `selectionsByLine()` 和 PDFView 官方 `convert` 重算高亮与翻译卡片锚点，不做 `rect * scaleFactor` 推算。
 - PDF 原生选择与点句翻译共用单调时间手势门：系统长按选区出现后，松手产生的尾随 tap 不会进入点句逻辑并清空选区。翻译菜单优先读取 PDFKit `currentSelection`，Readium 选区回调只作为后备；选择文本、页内范围和几何锚点因此来自同一个 PDFSelection。
 - 选区的实时 frame 更新与翻译请求是两条独立通道：frame 变化驱动覆盖层布局但会过滤亚像素抖动；智能文本等待 170ms、精确文本等待 280ms 稳定，再按章节资源、规范化文本、语言对与服务配置生成语义身份去重。同一句在短按、智能选区和精确选区之间切换时，只更新覆盖层位置，不重复调用翻译服务。Readium 回传的 Navigator 坐标先经 UIKit 转为窗口坐标，覆盖层再减去自身 SwiftUI 全局原点，避免正文延伸到安全区而覆盖层不延伸时的纵向偏移。翻译使用单一 `ReaderTranslationState`，请求 UUID 同时保护连续选区、覆盖层关闭和迟到结果。
@@ -116,7 +116,7 @@
 
 ## 中日优先与学习工具 UI 校验
 
-- 9 月 8 日内置中日词典扩充：`ja-zh-core.tsv` 与 `ja-zh-wiktionary.tsv` 为两端共同输入，后者由固定哈希的中文维基词典快照生成。共 27,983 个不同日语词头。`JapaneseChineseLexicon` 建立词头、假名、活用与精确中文释义索引；同音多词可在独立查词界面选择，不猜测读音或执行句子翻译。词语模式命中本地词条后不启动系统翻译语言包或 AI 请求。来源、修改说明、CC BY-SA 4.0 全文和原词条链接随应用提供。
+- 9 月 8 日内置中日词典扩充：`ja-zh-core.tsv` 与 `ja-zh-wiktionary.tsv` 为两端共同输入，后者由固定哈希的中文维基词典快照生成。共 27,983 个不同日语词头。`JapaneseChineseLexicon` 建立词头、假名、活用与精确中文释义索引；同音多词可在独立查词界面选择，不猜测读音或执行句子翻译。词语模式命中本地词条后不启动系统翻译语言包或 AI 请求。来源、修改说明、CC BY-SA 4.0 全文和原词条链接随应用提供。2.1.0 起，短按选中的整词在词典里没有原样时，`JapaneseChineseLexicon.japanese` 再按 する 动词、两层变形、名字和复数后缀、敬语前缀、复合动词还原，只认唯一的词头；两端用同一份扩展规则表（1411 条，条数和哈希由两端测试核对），含 ていく、てくる、てくれる；只有五段动词才有的词尾不还原成一段动词（いらない 不是 いる），假名写的 いった、いって 列出 行く、言う 两个候选；维基词典收的假名词头遮住核心词典里读这个音的词时，两者都列为候选，核心词典的在前（いく：行く／いく）。`ja-zh-core.tsv` 加了 152 个维基词典包里没有的常用词，共 280 条。
 - 两端翻译页提供“日语 → 中文”“中文 → 日语”快捷入口，保留用户的原默认设置和其他语言。日语汉字词可通过显式方向避免被自动识别为中文。
 - 五个学习工具统一独立导航标题、16 点页面边距、16 点圆角卡片、720 点内容宽度上限；各页面拥有单独的懒加载滚动容器。安卓原句自测的页面返回和系统返回均先回到原句列表。
 - 语法编辑器两端提供标题、语言、标签、原句和解释。阅读器的保存动作先显示可编辑内容；无原书位置及搜索无结果均有明确状态。中日内容不改变 Readium 正文或书籍文件。
@@ -232,7 +232,7 @@
 
 翻译请求：
 
-- `POST https://api.openai.com/v1/responses`，`store: false`、`stream: true`，带 `instructions` 和 `input`。`input` 必须是消息数组 `[{"role":"user","content":"…"}]`，系统提示放 `instructions`；套餐接口不收字符串形式的 `input`（2.0.0（71）发的是字符串，测试连接和翻译都会被 400 拒绝，build 72 改正）。不带 `temperature`、`max_output_tokens`、`previous_response_id` 等套餐不支持的字段。整段收完再解析事件流，**只有收到 `response.completed` 才算成功**，半截结果不显示、不缓存。
+- `POST https://api.openai.com/v1/responses`，`store: false`、`stream: true`，带 `instructions` 和 `input`。`input` 必须是消息数组 `[{"role":"user","content":"…"}]`，系统提示放 `instructions`；套餐接口不收字符串形式的 `input`（2.0.0（71）发的是字符串，测试连接和翻译都会被 400 拒绝，build 72 改正）。不带 `temperature`、`max_output_tokens`、`previous_response_id` 等套餐不支持的字段。2.1.0 起边读边解析，部分文字先显示在卡片上（见下文 2.1.0 一节）；仍然**只有收到 `response.completed` 才算成功**，半截结果不缓存。
 - 错误按 OpenAI 文档的说法分类（两端同一套规则，iOS `ChatGPTPlanRefusal`、安卓 `ChatGPTPlanRefusal`，对拍用例相同）：
   - 401：换新令牌重试一次；还被拒就提示重新登录。
   - 额度用完（`subscription_sharing_usage_limit_exceeded`）直接停下，不自动重试，提示去 <https://chatgpt.com/settings/usage> 查看。
@@ -257,3 +257,39 @@
 - **iOS 目录项按文件内位置定位。** 一个资源里有多个目录项时（`chapter.xhtml#part2`，或整本一个资源的 PDF `#page=N`），当前章节按 `ReaderOutlinePosition` 比较：PDF 用页码，EPUB 用锚点在正文里的相对位置（`ReaderOutlineBuilder.anchorFractions`）。
 - **iOS 阅读时长的日期键一律公历。** `ReadingActivity.dayCalendar` 是 ISO 8601 日历加当前时区；读取时把以前按和历、民国历、佛历写下的键换回公历（`gregorianKey`）。
 - **Android 语法笔记去重在仓库层。** `grammarNoteToSave(note, existing)`：编号不存在而标题、原句、讲解全同的，沿用已有那条的编号；iOS 在 `GrammarNoteEditor` 保存时做同样的查找。
+
+## 2.1.0 卡片 AI 与流式（2026-11-23）
+
+逐条规格见 [SPEC_2.1.0](SPEC_2.1.0.md)，问题和验证见 [2.1.0 维护记录](RELEASE_2.1.0_2026-11-23.md)。下面是以后维护要知道的约定。
+
+- **流式入口。**
+  - iOS 在 `AIStreaming.swift`。`URLSession.bytes(for:)` 的 `lines` 会跳过空行，所以逐个 `data:` 行分发。
+  - Android 在 `AIStreamParsing.kt` 和 `AIStreamTimeouts.kt`。
+  - 四种直连格式和 ChatGPT 套餐都是流式；AI 代理和系统翻译仍一次给出全文。
+  - `length`、`content_filter` 当作没写完，不算完整答案。
+- **计时。**
+  - 静默上限：翻译 30 秒，AI 70 秒。总上限 3 分钟。
+  - 流式请求的单次读超时两端都是 80 秒。它必须比静默上限长，否则系统的读超时会先到，报「暂时不可用」，「超过 70 秒未返回」的提示出不来。
+- **取消。** Android 取消时断开连接，正在读的那一步会报连接错误。catch 里先调 `currentCoroutineContext().ensureActive()`，所以取消不会被当成失败，也不会去重试或切备用服务。
+- **缓存。**
+  - 只缓存完整的结果。
+  - 备用服务给的译文按备用服务缓存。iOS 记在备用 provider 的身份下；Android 靠 `TranslationResult.fallbackProvider`，存进备用服务的命名空间。
+  - 结构、读懂、指代进解释缓存，和解释页共用；直译和追问只留在卡片内存。
+- **迟到保护。** 每次写回部分或最终文字都核对请求 id。卡片关掉时清掉按钮状态：iOS 在 `ReaderCardAI`，Android 是 `ReaderAIActions.reset()`。
+- **笔记是追加写。**
+  - iOS 在 `ReadingAnnotationStore.save`。Android 按 `annotationKey` 先查再写，查用 `ReaderRecordRepository.findAnnotation`。
+  - 新建笔记的入口都先找这段已有的笔记：iOS 是 `annotationDraftForCurrentSelection`，Android 是 `annotationDraft`。
+  - 新建的笔记记不带读音的原文。Android 的选区文字用 `ReaderRubySelectionText` 读。
+- **注音整体选区。**
+  - 规则和用例在 `selection_tiles.json`。
+  - iOS 的 `jerreaderReaderSelectionRects` 直接返回合并好的块，算法在 `ReaderSelectionTileScript.swift`。
+  - Android 的点句覆盖层和长按选区桥共用同一段 JS；shared 的 `ReaderSelectionRectMerger` 是它的 Kotlin 版，`ParityFixturesTest` 跑同一份用例。
+- **英文断句。**
+  - Android 在 shared 的 `ReaderSentenceSegmenter`，iOS 在 `ReaderSentenceSegmentation.swift`。
+  - 两端用同一批句子对拍：Android 是 `ReaderEnglishSentenceTest`，iOS 是 `testEnglishSentenceTapTargetsMatchAndroid`。改一端要同时改另一端。
+- **查词次数的键。** 语言加原形，没有原形才用原样；卡片和查词页共用这个键。翻译卡片选中单个词时先查一次词典再记，词典查不到就不记。
+- **长按选词。**
+  - 长按选中手指下那个字所在的词。iOS 由选区策略脚本里的 `longPressWordGuardScript` 在 WebKit 选好之后改选区。Android 用脚本改选区会丢掉 WebView 的拖动柄和「翻译」「查词」菜单，所以由 `ReaderLongPressAim` 在手指按下时先问页面，按在字的后半边时把这次按压挪到同一个字的前 1/4 处。
+  - 按在注音词的空白里（汉字之间，或较长的读音伸出汉字的那部分），算同一行上最近的汉字，一样近取前一个：iOS 用 `rubyGlyphNear` 找这个字，Android 照同一规则挪落点。按在正对某个汉字的读音上，结果和以前一样。`rt`、`rp` 设了 `pointer-events:none`，读音本身点不中。
+  - 选区不会自动扩到整个注音词，这是用户定的。
+- **iOS 竖排偏移修正挂在 KVO 上。** `observeVerticalContentOffset` 同时观察 contentOffset 和 contentSize。WKWebView 每次图层树提交都会给滚动视图设一次 contentSize（`_setContentSizePreservingContentOffsetDuringRubberband`），自动 KVO 在值没变时也会通知。挂在这里的工作要先比新旧值，也不能自己引起下一次提交，否则大约每 0.4 秒触发一次，竖排书开着就一直跑。2.1.0 开发中加过的整页重画因此先改成只在尺寸真变时触发，后来整个删掉了：竖排整页画高没有修好，见维护记录第 6 节。

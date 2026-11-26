@@ -85,6 +85,10 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
     private var translationUITestSelectionView: UIView?
     private var translationUITestCardView: UIView?
     private var layoutUITestDiagnosticSequence = 0
+    private var rubyRegionUITestView: UIView?
+    private var rubyRegionUITestTask: Task<Void, Never>?
+    private var rubyRegionUITestStart: CFTimeInterval = 0
+    private var rubyRegionUITestOffsets: [[Double]] = []
 #endif
     private let navigationAdapter = DirectionalNavigationAdapter(
         pointerPolicy: .init(
@@ -1351,21 +1355,38 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
         layoutUITestDiagnosticView = nil
         clearTranslationUITestDiagnostics()
 
+        // A placed real book opens on a page of its own: the ruby is one
+        // already on that page, and the page is never scrolled to one.
+        let checksRubyRegions = ProcessInfo.processInfo.arguments
+            .contains("--jerreader-ruby-region-ui-test")
+        if checksRubyRegions {
+            startRubyRegionUITestDiagnostic()
+        }
         var rubyWebView: WKWebView?
-        for _ in 0 ..< 120 {
+        for _ in 0 ..< (checksRubyRegions ? 400 : 120) {
             for candidate in visibleContentWebViews() {
                 let didFindRuby = try? await candidate.evaluateJavaScript(
-                    """
-                    (() => {
-                      const ruby = Array.from(document.querySelectorAll('ruby')).find(
-                        (candidate) => candidate.querySelector('rt')
-                      );
-                      if (!ruby) return false;
-                      ruby.scrollIntoView({ block: 'center', inline: 'center' });
-                      globalThis.__jerreaderReaderUITestRuby = ruby;
-                      return true;
-                    })()
-                    """
+                    checksRubyRegions
+                        ? """
+                        (() => {
+                          \(Self.rubyRegionUITestPickScript)
+                          const ruby = jerreaderUITestVisibleRuby();
+                          if (!ruby) return false;
+                          globalThis.__jerreaderReaderUITestRuby = ruby;
+                          return true;
+                        })()
+                        """
+                        : """
+                        (() => {
+                          const ruby = Array.from(document.querySelectorAll('ruby')).find(
+                            (candidate) => candidate.querySelector('rt')
+                          );
+                          if (!ruby) return false;
+                          ruby.scrollIntoView({ block: 'center', inline: 'center' });
+                          globalThis.__jerreaderReaderUITestRuby = ruby;
+                          return true;
+                        })()
+                        """
                 ) as? Bool
                 if didFindRuby == true {
                     rubyWebView = candidate
@@ -1483,6 +1504,584 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
         return target.convert(target.bounds, to: nil).standardized
     }
 
+    /// 2.1.0 §2 on a real book (`--jerreader-ruby-region-ui-test`): what a
+    /// selection over furigana was painted as, kept current for the check
+    /// that each kanji and its reading are one region. The value is JSON in
+    /// window points:
+    /// - `kind`: `quick` while a tapped sentence is highlighted, `native`
+    ///   while a long-press selection is, else `none`;
+    /// - `tiles`: what was painted, the page's own markers for a tapped
+    ///   sentence and the selection view's tiles for a long press;
+    /// - `rubies`: each kanji on the page with its reading, marked `whole`,
+    ///   `partial` or `no` by the selection, or `unknown` when the
+    ///   selection's range could not be read;
+    /// - `text` and `lines`: the selection's base text, without readings,
+    ///   and how many lines it takes (-1 without a range);
+    /// - `target`: the ruby the check presses, measured now.
+    private func startRubyRegionUITestDiagnostic() {
+        rubyRegionUITestTask?.cancel()
+        rubyRegionUITestView?.removeFromSuperview()
+        let marker = UIView(frame: CGRect(x: 2, y: 0, width: 1, height: 1))
+        marker.backgroundColor = .clear
+        marker.isUserInteractionEnabled = false
+        marker.isAccessibilityElement = true
+        marker.accessibilityIdentifier = "ruby-region-geometry"
+        marker.accessibilityLabel = "注音选区测试几何"
+        marker.accessibilityValue = "pending"
+        view.addSubview(marker)
+        rubyRegionUITestView = marker
+        rubyRegionUITestStart = CACurrentMediaTime()
+        rubyRegionUITestOffsets = []
+        rubyRegionUITestTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard let self, !Task.isCancelled else { return }
+                let value = await self.rubyRegionUITestGeometry()
+                self.rubyRegionUITestView?.accessibilityValue = value
+            }
+        }
+    }
+
+    private func rubyRegionUITestGeometry() async -> String {
+        for webView in visibleContentWebViews() {
+            guard let raw = try? await webView.evaluateJavaScript(
+                Self.rubyRegionUITestGeometryScript
+            ) as? String,
+                let data = raw.data(using: .utf8),
+                let page = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            else { continue }
+            let host: UIView = view
+            func windowFrame(_ value: Any?) -> [Double]? {
+                guard let numbers = value as? [NSNumber], numbers.count == 4 else { return nil }
+                let local = CGRect(
+                    x: numbers[0].doubleValue,
+                    y: numbers[1].doubleValue,
+                    width: numbers[2].doubleValue,
+                    height: numbers[3].doubleValue
+                )
+                let inHost = EPUBSelectionBridge.convertViewportRect(local, from: webView, to: host)
+                return Self.rubyRegionNumbers(host.convert(inHost, to: nil).standardized)
+            }
+            let markers = (page["markers"] as? [Any] ?? []).compactMap { windowFrame($0) }
+            let selectionTiles = selectionBridge.displayedRects.map {
+                Self.rubyRegionNumbers(host.convert($0, to: nil).standardized)
+            }
+            let kind = !markers.isEmpty ? "quick" : (selectionTiles.isEmpty ? "none" : "native")
+            let rubies: [[String: Any]] = (page["rubies"] as? [[String: Any]] ?? []).compactMap { ruby in
+                guard let kanji = windowFrame(ruby["kanji"]),
+                      let reading = windowFrame(ruby["readingFrame"])
+                else { return nil }
+                return [
+                    "base": ruby["base"] as? String ?? "",
+                    "reading": ruby["reading"] as? String ?? "",
+                    "kanji": kanji,
+                    "readingFrame": reading,
+                    "selected": ruby["selected"] as? String ?? "unknown"
+                ]
+            }
+            var result: [String: Any] = [
+                "kind": kind,
+                "text": page["text"] as? String ?? "",
+                "vertical": page["vertical"] as? Bool ?? false,
+                "lines": (page["lines"] as? NSNumber)?.intValue ?? -1,
+                "tiles": kind == "quick" ? markers : (kind == "native" ? selectionTiles : []),
+                "rubies": rubies
+            ]
+            if let target = page["target"] as? [String: Any],
+               let first = windowFrame(target["first"]),
+               let whole = windowFrame(target["frame"]) {
+                result["target"] = [
+                    "base": target["base"] as? String ?? "",
+                    "first": first,
+                    "frame": whole
+                ]
+            }
+            if let wide = page["twoKanji"] as? [String: Any],
+               let whole = windowFrame(wide["frame"]) {
+                result["twoKanji"] = [
+                    "frame": whole,
+                    "glyphs": (wide["glyphs"] as? [Any] ?? []).compactMap { windowFrame($0) }
+                ]
+            }
+            // Where the page sat when it was measured, numbers only. The
+            // selection view is drawn once in window points, so a page that
+            // moves under it shows here and nowhere else.
+            let scrollView = webView.scrollView
+            let insets = scrollView.adjustedContentInset
+            result["scroll"] = [
+                scrollView.contentOffset.x, scrollView.contentOffset.y,
+                scrollView.contentSize.width, scrollView.contentSize.height,
+                scrollView.bounds.height, insets.top, insets.bottom
+            ].map { (Double($0) * 10).rounded() / 10 }
+            result["webFrame"] = Self.rubyRegionNumbers(webView.convert(webView.bounds, to: nil).standardized)
+            if let numbers = page["page"] as? [NSNumber] {
+                result["page"] = numbers.map { ($0.doubleValue * 10).rounded() / 10 }
+            }
+            result["offsets"] = rubyRegionUITestOffsets
+            result["layers"] = Self.rubyRegionUITestLayers(of: webView)
+            // Every web view Readium holds: window frame, shown (alpha, or 0
+            // when hidden or off the window), 1 for the measured one, 1 when
+            // it shows the measured one's resource, and its scroll offset.
+            result["webViews"] = navigator.view.descendantWebViews.map { other -> [Double] in
+                let frame = other.convert(other.bounds, to: nil).standardized
+                let shown = other.isHidden || other.window == nil ? 0 : Double(other.alpha)
+                let sameResource = other.url != nil && other.url == webView.url
+                let numbers: [Double] = [
+                    Double(frame.minX), Double(frame.minY), Double(frame.width), Double(frame.height),
+                    shown,
+                    other === webView ? 1 : 0,
+                    sameResource ? 1 : 0,
+                    Double(other.scrollView.contentOffset.x),
+                    Double(other.scrollView.contentOffset.y)
+                ]
+                return numbers.map { ($0 * 10).rounded() / 10 }
+            }
+            guard let encoded = try? JSONSerialization.data(
+                withJSONObject: result,
+                options: [.sortedKeys]
+            ),
+                let string = String(data: encoded, encoding: .utf8)
+            else { continue }
+            return string
+        }
+        return "unavailable"
+    }
+
+    /// While the ruby-region check runs, the last eight vertical offsets the
+    /// pin was asked to correct, each as seconds since the check began, the
+    /// offset, the content and viewport heights, the top inset and 1 where
+    /// the page fitted (so the pin put it back) or 0 where it did not.
+    private func noteVerticalOffsetForRubyRegionUITest(_ scrollView: UIScrollView) {
+        guard rubyRegionUITestView != nil, rendersVerticalText, scrollView.contentOffset.y != 0 else { return }
+        let fits = scrollView.contentSize.height <= scrollView.bounds.height + 0.5
+        let numbers: [Double] = [
+            CACurrentMediaTime() - rubyRegionUITestStart,
+            Double(scrollView.contentOffset.y),
+            Double(scrollView.contentSize.height),
+            Double(scrollView.bounds.height),
+            Double(scrollView.adjustedContentInset.top),
+            fits ? 1.0 : 0.0
+        ]
+        let entry = numbers.map { ($0 * 10).rounded() / 10 }
+        rubyRegionUITestOffsets.append(entry)
+        if rubyRegionUITestOffsets.count > 8 { rubyRegionUITestOffsets.removeFirst() }
+    }
+
+    /// How the measured page is put on screen, for the ruby-region check:
+    /// lines starting `^` are the web view and its superviews up to the
+    /// window (frame in the window); `snap` lines are image or snapshot
+    /// views anywhere in the window over the web view; the rest walk the web
+    /// view's layers (frame in the web view). Each gives its depth, class,
+    /// frame, a bounds origin, a transform or sublayer transform that is not
+    /// the identity (scale x, y, then translation x, y), a clip, hidden,
+    /// opacity, running animations and, where the presentation layer differs
+    /// from the model, where it is drawn. Layers whose children are all
+    /// leaves (tiles) show their count and union instead. Class names and
+    /// numbers only.
+    private static func rubyRegionUITestLayers(of webView: WKWebView) -> [String] {
+        var lines: [String] = []
+        func text(_ value: CGFloat) -> String { String(format: "%.1f", Double(value)) }
+        func rect(_ value: CGRect) -> String {
+            let r = value.standardized
+            return "\(text(r.minX)),\(text(r.minY)),\(text(r.width)),\(text(r.height))"
+        }
+        func transformText(_ t: CATransform3D) -> String? {
+            CATransform3DIsIdentity(t)
+                ? nil
+                : "\(text(t.m11)),\(text(t.m22)),\(text(t.m41)),\(text(t.m42))"
+        }
+        func name(of layer: CALayer) -> String {
+            if let view = layer.delegate as? UIView {
+                return String(describing: type(of: view))
+            }
+            return "L:" + String(describing: type(of: layer))
+        }
+        func extras(_ layer: CALayer) -> String {
+            var line = ""
+            if layer.bounds.origin != .zero {
+                line += " b=\(text(layer.bounds.minX)),\(text(layer.bounds.minY))"
+            }
+            if let t = transformText(layer.transform) { line += " t=\(t)" }
+            if let t = transformText(layer.sublayerTransform) { line += " st=\(t)" }
+            if layer.masksToBounds { line += " clip" }
+            if layer.isHidden { line += " hidden" }
+            if layer.opacity < 1 { line += " a=\(text(CGFloat(layer.opacity)))" }
+            if let keys = layer.animationKeys(), !keys.isEmpty {
+                line += " anim=" + keys.prefix(4).joined(separator: "|")
+            }
+            if let shown = layer.presentation(),
+               shown.position != layer.position
+                || shown.bounds != layer.bounds
+                || !CATransform3DEqualToTransform(shown.transform, layer.transform) {
+                line += " p=\(text(shown.position.x)),\(text(shown.position.y))"
+                    + " pb=\(rect(shown.bounds))"
+                if let t = transformText(shown.transform) { line += " pt=\(t)" }
+                line += " m=\(text(layer.position.x)),\(text(layer.position.y))"
+            }
+            return line
+        }
+
+        // The web view and its superviews, nearest first.
+        var ancestor: UIView? = webView
+        var level = 0
+        while let view = ancestor, level < 16 {
+            let frame = view.superview == nil ? view.frame : view.convert(view.bounds, to: nil)
+            lines.append("^\(level) \(String(describing: type(of: view))) f=\(rect(frame))"
+                + extras(view.layer))
+            ancestor = view.superview
+            level += 1
+        }
+
+        // Image and snapshot views over the web view, anywhere in the window.
+        if let window = webView.window {
+            let webFrame = webView.convert(webView.bounds, to: nil)
+            var queue: [UIView] = [window]
+            var next = 0
+            var found = 0
+            while next < queue.count, next < 3000, found < 8 {
+                let view = queue[next]
+                next += 1
+                if queue.count < 3000 { queue.append(contentsOf: view.subviews) }
+                let className = String(describing: type(of: view))
+                let isImage = (view as? UIImageView)?.image != nil
+                guard isImage
+                    || className.contains("Snapshot")
+                    || className.contains("Replicant")
+                    || className.contains("Portal")
+                else { continue }
+                let frame = view.convert(view.bounds, to: nil)
+                guard frame.width * frame.height > 10_000,
+                      frame.intersects(webFrame)
+                else { continue }
+                found += 1
+                lines.append("snap \(className) f=\(rect(frame))"
+                    + (view.isHidden ? " hidden" : "")
+                    + (view.alpha < 1 ? " a=\(text(view.alpha))" : ""))
+            }
+        }
+
+        // The web view's own layers.
+        let root = webView.layer
+        func walk(_ layer: CALayer, depth: Int) {
+            guard lines.count < 90 else { return }
+            var line = "\(depth) \(name(of: layer)) f=\(rect(layer.convert(layer.bounds, to: root)))"
+                + extras(layer)
+            let children = layer.sublayers ?? []
+            if children.count > 3, children.allSatisfy({ ($0.sublayers ?? []).isEmpty }) {
+                let union = children.reduce(CGRect.null) { $0.union($1.convert($1.bounds, to: root)) }
+                let moving = children.filter { !($0.animationKeys() ?? []).isEmpty }.count
+                line += " leaves=\(children.count) u=\(rect(union))"
+                    + (moving > 0 ? " leavesAnimating=\(moving)" : "")
+                lines.append(line)
+                return
+            }
+            if children.count > 6 { line += " n=\(children.count)" }
+            lines.append(line)
+            guard depth < 14 else { return }
+            for child in children.prefix(6) { walk(child, depth: depth + 1) }
+        }
+        walk(root, depth: 0)
+        return lines
+    }
+
+    private static func rubyRegionNumbers(_ rect: CGRect) -> [Double] {
+        [rect.minX, rect.minY, rect.width, rect.height].map {
+            (Double($0) * 10).rounded() / 10
+        }
+    }
+
+    /// Defines `jerreaderUITestVisibleRuby(minimumKanji)`: the first ruby
+    /// whose base text is wholly on the page, preferring one away from the
+    /// page-turn edges; with `minimumKanji`, only rubies of at least that many
+    /// base characters. `jerreaderUITestBaseGlyphs(ruby)` gives each base
+    /// character's box.
+    nonisolated private static let rubyRegionUITestPickScript = #"""
+    function jerreaderUITestBaseRects(ruby) {
+      const rects = [];
+      const walker = document.createTreeWalker(ruby, NodeFilter.SHOW_TEXT, {
+        acceptNode: (node) => node.data?.trim() && !node.parentElement?.closest('rt,rp')
+          ? NodeFilter.FILTER_ACCEPT
+          : NodeFilter.FILTER_REJECT
+      });
+      while (walker.nextNode()) {
+        const range = document.createRange();
+        range.selectNodeContents(walker.currentNode);
+        rects.push(...Array.from(range.getClientRects()));
+      }
+      return rects.filter((rect) => rect.width > 0.5 && rect.height > 0.5);
+    }
+    function jerreaderUITestBaseGlyphs(ruby) {
+      const glyphs = [];
+      const walker = document.createTreeWalker(ruby, NodeFilter.SHOW_TEXT, {
+        acceptNode: (node) => node.data?.trim() && !node.parentElement?.closest('rt,rp')
+          ? NodeFilter.FILTER_ACCEPT
+          : NodeFilter.FILTER_REJECT
+      });
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        for (let offset = 0; offset < node.data.length;) {
+          const lead = node.data.charCodeAt(offset);
+          const end = lead >= 0xD800 && lead <= 0xDBFF && offset + 1 < node.data.length ? offset + 2 : offset + 1;
+          if (node.data.slice(offset, end).trim()) {
+            const range = document.createRange();
+            range.setStart(node, offset);
+            range.setEnd(node, end);
+            const rect = Array.from(range.getClientRects()).find((box) => box.width > 0.5 && box.height > 0.5);
+            if (rect) glyphs.push(rect);
+          }
+          offset = end;
+        }
+      }
+      return glyphs;
+    }
+    function jerreaderUITestOnPage(rect) {
+      return rect.left >= 0 && rect.top >= 0 &&
+        rect.right <= window.innerWidth && rect.bottom <= window.innerHeight;
+    }
+    function jerreaderUITestVisibleRuby(minimumKanji) {
+      const rubies = Array.from(document.querySelectorAll('ruby')).filter((ruby) => {
+        const rects = jerreaderUITestBaseRects(ruby);
+        return ruby.querySelector('rt') && rects.length && rects.every(jerreaderUITestOnPage) &&
+          (!(minimumKanji > 1) || jerreaderUITestBaseGlyphs(ruby).length >= minimumKanji);
+      });
+      const central = rubies.find((ruby) => jerreaderUITestBaseRects(ruby).every((rect) => {
+        const x = (rect.left + rect.right) / 2 / window.innerWidth;
+        const y = (rect.top + rect.bottom) / 2 / window.innerHeight;
+        return x > 0.25 && x < 0.75 && y > 0.12 && y < 0.88;
+      }));
+      return central || rubies[0] || null;
+    }
+    """#
+
+    /// The page's half of `ruby-region-geometry`, in client coordinates.
+    nonisolated private static let rubyRegionUITestGeometryScript = #"""
+    (() => {
+      \#(rubyRegionUITestPickScript)
+      const box = (rect) => [rect.left, rect.top, rect.width, rect.height];
+      const visible = (rect) => rect.width > 0.5 && rect.height > 0.5 &&
+        rect.right > 0 && rect.bottom > 0 &&
+        rect.left < window.innerWidth && rect.top < window.innerHeight;
+      const overlay = document.getElementById('jerreader-reader-quick-sentence-highlight');
+      const markers = overlay
+        ? Array.from(overlay.children)
+            .map((marker) => marker.getBoundingClientRect())
+            .filter(visible)
+            .map(box)
+        : [];
+
+      // The selection: the tapped sentence's range, else the long press's.
+      let range = null;
+      const quick = globalThis.__jerreaderReaderQuickSentenceSelection;
+      if (markers.length && quick && Array.isArray(quick.nodes) && quick.nodes.length) {
+        const boundary = (requested) => {
+          const offset = Math.max(0, requested);
+          let consumed = 0;
+          for (const node of quick.nodes) {
+            const next = consumed + node.data.length;
+            if (offset <= next) {
+              return { node, offset: Math.min(offset - consumed, node.data.length) };
+            }
+            consumed = next;
+          }
+          const last = quick.nodes[quick.nodes.length - 1];
+          return { node: last, offset: last.data.length };
+        };
+        try {
+          const start = boundary(quick.lowerBound);
+          const end = boundary(quick.upperBound);
+          range = document.createRange();
+          range.setStart(start.node, start.offset);
+          range.setEnd(end.node, end.offset);
+        } catch (_) {
+          range = null;
+        }
+      } else if (!markers.length) {
+        const selection = getSelection();
+        if (selection && selection.rangeCount && !selection.isCollapsed) {
+          range = selection.getRangeAt(0);
+        }
+      }
+
+      const excluded = 'rt,rp,script,style,noscript,svg,[aria-hidden="true"]';
+      const isBase = (node) => !!node?.data && !!node.parentElement &&
+        !node.parentElement.closest(excluded);
+      const selectedPart = (node) => {
+        if (!range) return null;
+        try {
+          if (!range.intersectsNode(node)) return null;
+        } catch (_) {
+          return null;
+        }
+        const part = document.createRange();
+        part.selectNodeContents(node);
+        if (range.startContainer === node) {
+          part.setStart(node, Math.min(range.startOffset, node.data.length));
+        }
+        if (range.endContainer === node) {
+          part.setEnd(node, Math.min(range.endOffset, node.data.length));
+        }
+        return part.collapsed ? null : part;
+      };
+
+      let text = '';
+      const baseRects = [];
+      if (range) {
+        const walker = document.createTreeWalker(
+          document.body || document.documentElement,
+          NodeFilter.SHOW_TEXT,
+          {
+            acceptNode: (node) => isBase(node) && selectedPart(node)
+              ? NodeFilter.FILTER_ACCEPT
+              : NodeFilter.FILTER_REJECT
+          }
+        );
+        while (walker.nextNode()) {
+          const part = selectedPart(walker.currentNode);
+          text += part.toString();
+          baseRects.push(...Array.from(part.getClientRects()).filter(visible));
+        }
+      }
+      const anchor = range
+        ? (range.startContainer.nodeType === Node.ELEMENT_NODE
+            ? range.startContainer
+            : range.startContainer.parentElement)
+        : document.body;
+      const style = anchor ? getComputedStyle(anchor) : null;
+      const vertical = /^(vertical|sideways|tb)/i.test(
+        (style && (style.writingMode || style.webkitWritingMode)) || ''
+      );
+      // Lines as the tiles group them: boxes sharing at least 55% of the
+      // shorter cross extent are one line.
+      const lines = [];
+      baseRects.forEach((rect) => {
+        const start = vertical ? rect.left : rect.top;
+        const end = vertical ? rect.right : rect.bottom;
+        const line = lines.find((candidate) => {
+          const overlap = Math.min(end, candidate.end) - Math.max(start, candidate.start);
+          const shorter = Math.min(end - start, candidate.end - candidate.start);
+          return overlap > 0 && shorter > 0 && overlap / shorter >= 0.55;
+        });
+        if (line) {
+          line.start = Math.min(line.start, start);
+          line.end = Math.max(line.end, end);
+        } else {
+          lines.push({ start, end });
+        }
+      });
+
+      // Each kanji's reading: the rt that follows it in its ruby, as the
+      // reader pairs them.
+      const pairedReading = (node, ruby) => {
+        let top = node;
+        while (top && top.parentNode && top.parentNode !== ruby) top = top.parentNode;
+        for (let sibling = top?.nextSibling; sibling; sibling = sibling.nextSibling) {
+          if (sibling.nodeType === Node.ELEMENT_NODE) {
+            if (sibling.matches('rt')) return sibling;
+            if (!sibling.matches('rp')) break;
+          } else if (sibling.nodeType === Node.TEXT_NODE && sibling.data.trim()) {
+            break;
+          }
+        }
+        return ruby.querySelector('rt');
+      };
+      const rubies = [];
+      document.querySelectorAll('ruby').forEach((ruby) => {
+        const walker = document.createTreeWalker(ruby, NodeFilter.SHOW_TEXT, {
+          acceptNode: (node) => isBase(node) && node.data.trim()
+            ? NodeFilter.FILTER_ACCEPT
+            : NodeFilter.FILTER_REJECT
+        });
+        while (walker.nextNode()) {
+          const node = walker.currentNode;
+          const reading = pairedReading(node, ruby);
+          if (!reading) continue;
+          const whole = document.createRange();
+          whole.selectNodeContents(node);
+          const kanji = whole.getBoundingClientRect();
+          if (!visible(kanji)) continue;
+          const part = selectedPart(node);
+          let selected = range ? 'no' : 'unknown';
+          if (part) {
+            const lead = node.data.length - node.data.trimStart().length;
+            const trail = node.data.trimEnd().length;
+            selected = part.startOffset <= lead && part.endOffset >= trail
+              ? 'whole'
+              : 'partial';
+          }
+          rubies.push({
+            base: node.data.trim(),
+            reading: reading.getAttribute('data-jerreader-rt') || reading.textContent || '',
+            kanji: box(kanji),
+            readingFrame: box(reading.getBoundingClientRect()),
+            selected
+          });
+        }
+      });
+
+      let target = null;
+      const ruby = jerreaderUITestVisibleRuby();
+      const rects = ruby ? jerreaderUITestBaseRects(ruby) : [];
+      if (rects.length) {
+        const left = Math.min(...rects.map((rect) => rect.left));
+        const top = Math.min(...rects.map((rect) => rect.top));
+        const right = Math.max(...rects.map((rect) => rect.right));
+        const bottom = Math.max(...rects.map((rect) => rect.bottom));
+        let base = '';
+        const walker = document.createTreeWalker(ruby, NodeFilter.SHOW_TEXT, {
+          acceptNode: (node) => isBase(node) && node.data.trim()
+            ? NodeFilter.FILTER_ACCEPT
+            : NodeFilter.FILTER_REJECT
+        });
+        while (walker.nextNode()) base += walker.currentNode.data.trim();
+        target = {
+          base: base.normalize('NFC'),
+          first: box(rects[0]),
+          frame: [left, top, right - left, bottom - top]
+        };
+      }
+      // A ruby of two or more kanji, for a press in the middle of them: with
+      // a reading longer than its first kanji that is the blank room the
+      // reading leaves. Frames only, no text.
+      let twoKanji = null;
+      const wide = jerreaderUITestVisibleRuby(2);
+      const wideRects = wide ? jerreaderUITestBaseRects(wide) : [];
+      if (wideRects.length) {
+        const left = Math.min(...wideRects.map((rect) => rect.left));
+        const top = Math.min(...wideRects.map((rect) => rect.top));
+        const right = Math.max(...wideRects.map((rect) => rect.right));
+        const bottom = Math.max(...wideRects.map((rect) => rect.bottom));
+        twoKanji = {
+          frame: [left, top, right - left, bottom - top],
+          glyphs: jerreaderUITestBaseGlyphs(wide).map(box)
+        };
+      }
+      // Where the page sat: its scroll, viewport, height, the body's top,
+      // and whether the root or the body scrolled inside itself.
+      const viewport = window.visualViewport;
+      const root = document.scrollingElement || document.documentElement;
+      const body = document.body;
+      const page = [
+        window.scrollX, window.scrollY, window.innerWidth, window.innerHeight,
+        viewport ? viewport.offsetTop : -1, viewport ? viewport.pageTop : -1,
+        root ? root.scrollHeight : -1, root ? root.clientHeight : -1,
+        body ? body.getBoundingClientRect().top : -1,
+        document.documentElement.scrollTop,
+        body ? body.scrollTop : -1, body ? body.scrollLeft : -1,
+        body ? body.scrollHeight : -1, body ? body.clientHeight : -1
+      ];
+      return JSON.stringify({
+        markers,
+        text: text.normalize('NFC'),
+        vertical,
+        lines: range ? lines.length : -1,
+        rubies,
+        target,
+        twoKanji,
+        page
+      });
+    })()
+    """#
+
     /// Installs a transparent, non-interactive source rectangle so XCUITest can
     /// compare the actual SwiftUI floating-window frame with the original
     /// text region. This exists only in Debug UI-test launches.
@@ -1509,9 +2108,11 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
 
     /// Mirrors the actual SwiftUI card frame into UIKit accessibility so the
     /// geometry test can read it reliably. The view is transparent and cannot
-    /// receive touches.
+    /// receive touches. The AI-bar check (2.1.0 §11) reads it too.
     func installTranslationUITestCard(frameInWindow: CGRect) {
-        guard ProcessInfo.processInfo.arguments.contains("--jerreader-selection-ui-test"),
+        let arguments = ProcessInfo.processInfo.arguments
+        guard arguments.contains("--jerreader-selection-ui-test")
+                || arguments.contains("--jerreader-card-ai-ui-test"),
               let window = view.window else { return }
         let localFrame = window.convert(frameInWindow, from: nil).standardized
         guard !localFrame.isNull, !localFrame.isEmpty else { return }
@@ -2067,6 +2668,9 @@ final class EPUBReaderViewController: UIViewController, EPUBNavigatorDelegate,
         // follows arrives only as a `contentSize` change.
         let correct: @Sendable (UIScrollView, Any) -> Void = { [weak self] scrollView, _ in
             MainActor.assumeIsolated {
+#if DEBUG
+                self?.noteVerticalOffsetForRubyRegionUITest(scrollView)
+#endif
                 // Re-entrant by construction: the correction is itself a
                 // `contentOffset` write. `pinVerticalContentOffset` returns
                 // immediately once the offset is zero, so it settles in one step.

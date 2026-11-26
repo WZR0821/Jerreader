@@ -77,7 +77,7 @@ JERREADER_SIMULATOR_DESTINATION='platform=Android,serial=emulator-5580,avd=<已�
 scripts/safe_android_build.sh test
 ```
 
-当前设备套件覆盖导入与只读打开、本机词典/句段服务、学习列表、备份合并和 UI。它同时断言源 EPUB 与 App 内副本的 SHA-256、修改时间不变；服务适配器使用 Mock/Stub，不访问外网。仅复验 UI 可设置 `JERREADER_ANDROID_VALIDATION_SCOPE=ui`。历史 M1/M2/M4 夹具保留源码，但未进入当前选择的测试不能借历史记录声明当次通过。实际覆盖以设备日志为准。
+当前设备套件覆盖导入与只读打开、本机词典/句段服务、学习列表、备份合并和 UI。它同时断言源 EPUB 与 App 内副本的 SHA-256、修改时间不变；服务适配器使用 Mock/Stub，不访问外网。仅复验 UI 可设置 `JERREADER_ANDROID_VALIDATION_SCOPE=ui`；只复验注音选区可设置 `ruby`。用真书检查注音选区的做法见 `docs/DEVELOPMENT_MAINTENANCE_GUIDE.md` §8.3。历史 M1/M2/M4 夹具保留源码，但未进入当前选择的测试不能借历史记录声明当次通过。实际覆盖以设备日志为准。
 
 ## iOS 交付边界
 

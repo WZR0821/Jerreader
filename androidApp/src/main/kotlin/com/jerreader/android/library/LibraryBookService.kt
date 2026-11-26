@@ -12,7 +12,13 @@ import kotlinx.coroutines.withContext
 class LibraryBookService(
     private val store: ImmutablePublicationStore,
     private val repository: LibraryRepository,
-    private val context: Context? = null
+    private val context: Context? = null,
+    /**
+     * Forgets what is kept for a book outside its row once the row is gone:
+     * the app passes its `reader.chapterEnd.<id>`, a cache the reader works
+     * out again (2.1.0 §9).
+     */
+    private val onDeleted: (String) -> Unit = {}
 ) {
     suspend fun delete(bookId: String) = withContext(Dispatchers.IO) {
         store.reclaimAbandonedDeletions()
@@ -22,6 +28,7 @@ class LibraryBookService(
         try {
             check(repository.delete(bookId)) { "书籍已不存在。" }
             rowDeleted = true
+            runCatching { onDeleted(bookId) }
             store.finalizeDeletion(staged)
         } catch (error: Throwable) {
             if (!rowDeleted) {

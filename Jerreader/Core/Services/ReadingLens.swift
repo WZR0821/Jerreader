@@ -124,6 +124,7 @@ enum AIReadingLensPromptPolicy {
             personalization,
             focus,
             "只允许依据用户提供的 SELECTED TEXT 和 READING CONTEXT。不要声称读过整本书，不要补写未提供的情节、人物设定或后续内容，不要剧透。证据不足时写“仅凭当前片段无法确认”，并列出最可能的解释。优先帮助用户回到原文自行理解，回答保持清晰、简洁、可核对。",
+            AIReadingActionPolicy.guardSentence,
         ].compactMap { $0 }.joined(separator: "\n")
     }
 

@@ -88,12 +88,47 @@ object ReaderSentenceSegmenter {
      */
     private const val JAPANESE_QUOTE_FOLLOWERS = "。．.！!？?、，,…‥・：:；;"
 
+    /**
+     * English (and other space-separated) text, 2.1.0. The same lists as the
+     * iOS `refinedEnglishRanges`: a title such as "Mr." never ends a sentence,
+     * and an initial or "U.S." ends one only before a word that clearly starts
+     * a new sentence.
+     */
+    private const val ENGLISH_TERMINATORS = ".!?"
+    private const val ENGLISH_OPENING_MARKS = "\"“‘'([{<«‹"
+    private const val ENGLISH_CLOSING_MARKS = "\"”’')]}>»›"
+
+    private val ENGLISH_NON_TERMINAL_ABBREVIATIONS = setOf(
+        "mr.", "mrs.", "ms.", "dr.", "prof.", "rev.", "hon.", "pres.", "gov.", "sen.",
+        "rep.", "gen.", "capt.", "cmdr.", "lt.", "col.", "sgt.", "st.", "mt.", "fig.",
+        "ch.", "vol."
+    )
+
+    /** `No. 5`, `p. 12`: before a number these keep the sentence going, as on iOS. */
+    private val ENGLISH_NUMBER_ABBREVIATIONS = setOf(
+        "no.", "nos.", "p.", "pp.", "art.", "sec.", "nr.", "op."
+    )
+
+    private val ENGLISH_STRONG_SENTENCE_STARTERS = setOf(
+        "a", "after", "afterward", "afterwards", "although", "an", "and", "are", "as",
+        "before", "but", "can", "could", "did", "do", "does", "finally", "had", "has",
+        "have", "he", "here", "however", "how", "i", "if", "in", "instead", "is", "it",
+        "later", "meanwhile", "nevertheless", "nonetheless", "otherwise", "she", "should",
+        "so", "still", "suddenly", "that", "the", "then", "there", "these", "they", "this",
+        "those", "though", "we", "were", "what", "when", "where", "while", "who", "why",
+        "will", "would", "yet", "you"
+    )
+
     /** Range of the sentence containing [offset], or null when out of bounds. */
     fun sentenceRange(text: String, offset: Int, language: LanguageCode?): IntRange? {
         if (text.isEmpty()) return null
         val position = offset.coerceIn(0, text.length - 1)
-        val quotes = QuoteMap(text)
         val japanese = language == LanguageCode.JAPANESE || containsJapanese(text)
+        // Chinese text, and Latin words inside it, keep the rules below.
+        if (!japanese && (language == LanguageCode.ENGLISH || !containsHan(text))) {
+            return englishSentenceRange(text, position)
+        }
+        val quotes = QuoteMap(text)
 
         var start = position
         while (start > 0) {
@@ -202,6 +237,99 @@ object ReaderSentenceSegmenter {
 
     private fun containsJapanese(text: String): Boolean =
         text.any { it in '぀'..'ヿ' }
+
+    private fun containsHan(text: String): Boolean =
+        text.any { it in '一'..'鿿' || it in '㐀'..'䶿' }
+
+    /**
+     * Unlike the Japanese rules, quotation marks do not hold an English
+     * sentence together: in a quotation that runs for several sentences, each
+     * one is its own tap target, and the reporting clause stays with the
+     * sentence it follows (`“Yes,” Holmes said.`).
+     */
+    private fun englishSentenceRange(text: String, offset: Int): IntRange? {
+        // A tap on the closing quote after a terminator belongs to the
+        // sentence that quote closes, not to the one after it.
+        var position = offset
+        var back = offset
+        while (
+            back > 0 &&
+            text[back] in ENGLISH_CLOSING_MARKS &&
+            (text[back - 1] in ENGLISH_CLOSING_MARKS || text[back - 1] in ENGLISH_TERMINATORS)
+        ) {
+            back--
+            if (text[back] in ENGLISH_TERMINATORS) {
+                position = back
+                break
+            }
+        }
+
+        var start = position
+        while (start > 0 && !isEnglishBoundaryAfter(text, start - 1)) start--
+        while (start < text.length && text[start].isWhitespace()) start++
+
+        var end = position
+        while (end < text.length && !isEnglishBoundaryAfter(text, end)) end++
+        if (end < text.length) end++
+        while (end < text.length && text[end] in ENGLISH_CLOSING_MARKS) end++
+        while (end > start && text[end - 1].isWhitespace()) end--
+
+        if (end <= start) return null
+        return start until end
+    }
+
+    private fun isEnglishBoundaryAfter(text: String, index: Int): Boolean {
+        val character = text[index]
+        if (character !in ENGLISH_TERMINATORS) return false
+        // "Wait..." and "?!" end at their last mark.
+        if (text.getOrNull(index + 1)?.let { it in ENGLISH_TERMINATORS } == true) return false
+        val endsARun = text.getOrNull(index - 1)?.let { it in ENGLISH_TERMINATORS } == true
+
+        var after = index + 1
+        while (after < text.length && text[after] in ENGLISH_CLOSING_MARKS) after++
+        var probe = after
+        while (probe < text.length && text[probe].isWhitespace()) probe++
+        if (probe >= text.length) return true
+        // 3.14, U.S.A. and e.g., : no space after the mark, no boundary.
+        if (probe == after) return false
+        // "Stop!" he said. / 5 p.m. and dark: a lower-case word continues.
+        if (text[probe].isLowerCase()) return false
+        if (character == '.' && !endsARun) {
+            val token = periodToken(text, index)
+            if (token.lowercase() in ENGLISH_NON_TERMINAL_ABBREVIATIONS) return false
+            if (token.lowercase() in ENGLISH_NUMBER_ABBREVIATIONS && text[probe].isDigit()) return false
+            val stem = token.dropLast(1)
+            if ((stem.length == 1 && stem[0].isUpperCase()) || stem.contains('.')) {
+                // J. K. Rowling / the U.S. Army keep going; "in the U.S. He
+                // moved" ends, because "He" clearly starts a new sentence.
+                val word = englishWordAt(text, probe) ?: return false
+                return word.lowercase() in ENGLISH_STRONG_SENTENCE_STARTERS
+            }
+        }
+        return true
+    }
+
+    /** The letters and dots that end at the period at [index]: `Mr.`, `U.S.`. */
+    private fun periodToken(text: String, index: Int): String {
+        var start = index
+        while (start > 0 && (text[start - 1].isLetter() || text[start - 1] == '.')) start--
+        return text.substring(start, index + 1)
+    }
+
+    /** The word at [index], after any spaces and opening quotes. */
+    private fun englishWordAt(text: String, index: Int): String? {
+        var start = index
+        while (
+            start < text.length &&
+            (text[start].isWhitespace() || text[start] in ENGLISH_OPENING_MARKS)
+        ) {
+            start++
+        }
+        if (start >= text.length || !text[start].isLetter()) return null
+        var end = start + 1
+        while (end < text.length && text[end].isLetter()) end++
+        return text.substring(start, end)
+    }
 }
 
 object ReaderCrossPageContextBuilder {

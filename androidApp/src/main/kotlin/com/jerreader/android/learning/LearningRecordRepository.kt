@@ -47,11 +47,18 @@ class LearningRecordRepository(
         explanation: WordExplanation,
         sourceBookId: String? = null,
         sourceBookTitle: String? = null,
-        favorite: Boolean = false
+        favorite: Boolean = false,
+        /**
+         * `false` saves the entry without counting one more lookup: the count
+         * and 上次 stay as they were (2.1.0 §8, see [sheetLookupCounts]). A
+         * word not recorded before still starts at one.
+         */
+        counted: Boolean = true
     ): WordLookupEntity {
         val key = wordKey(explanation)
         val timestamp = now()
         val existing = dao.word(key)
+        val kept = existing?.takeIf { !counted }
         val sameContext = existing != null && existing.surfaceForm == explanation.surfaceForm &&
             existing.sentenceContext == explanation.sentenceContext && existing.sourceBookId == sourceBookId &&
             existing.definitionsText == explanation.definitions.joinToString(DEFINITION_SEPARATOR) &&
@@ -72,9 +79,9 @@ class LearningRecordRepository(
             sourceBookId = sourceBookId,
             sourceBookTitle = sourceBookTitle,
             providerIdentifier = explanation.providerIdentifier,
-            lookupCount = (existing?.lookupCount ?: 0) + 1,
+            lookupCount = kept?.lookupCount ?: ((existing?.lookupCount ?: 0) + 1),
             createdAtEpochMillis = existing?.createdAtEpochMillis ?: timestamp,
-            lastLookedUpAtEpochMillis = timestamp,
+            lastLookedUpAtEpochMillis = kept?.lastLookedUpAtEpochMillis ?: timestamp,
             isFavorite = favorite || existing?.isFavorite == true,
             isInHistory = true,
             reviewJson = existing?.reviewJson
@@ -87,6 +94,12 @@ class LearningRecordRepository(
         dao.setWordFavorite(key, favorite)
         dao.removeOrphanedWords()
     }
+
+    /**
+     * The stored record of a word, read before [recordLookup] overwrites its
+     * 上次 time, for 第 N 次查 · 上次 … (2.1.0 §8).
+     */
+    suspend fun lookupRecord(key: String): WordLookupEntity? = dao.word(key)
 
     suspend fun setContextualFavorite(key: String, favorite: Boolean): Boolean {
         val changed = dao.setWordFavorite(key, favorite) == 1
@@ -157,6 +170,15 @@ class LearningRecordRepository(
 
         fun wordKey(explanation: WordExplanation): String =
             "${explanation.language.tag}|${(explanation.lemma ?: explanation.surfaceForm).trim().lowercase()}"
+
+        /**
+         * Whether the lookup sheet's record of [explanation] counts as a lookup
+         * (2.1.0 §8). [cardCountedKey] is the word a one-word translation card
+         * already counted, when 查词 on that card opened the sheet: the same
+         * word is then not counted a second time. Any other record counts.
+         */
+        fun sheetLookupCounts(explanation: WordExplanation, cardCountedKey: String?): Boolean =
+            cardCountedKey == null || wordKey(explanation) != cardCountedKey
 
         fun translationKey(source: String, translated: String, target: String): String {
             val digest = MessageDigest.getInstance("SHA-256")

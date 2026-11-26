@@ -49,6 +49,35 @@ data class TranslationServiceConfiguration(
     val directIssue: AIProviderSettingsError? = null
 )
 
+/**
+ * 「已配置 AI」 of 2.1.0 §7: a signed-in ChatGPT plan counts, so signing in is
+ * all the AI buttons need. This decides the AI features only; translation
+ * keeps to the translation service the user chose.
+ */
+internal object AIFeatureProviderPolicy {
+    /**
+     * The ChatGPT plan that answers the AI features in place of [preferred],
+     * the service the settings pick for them. It does when they pick none, or
+     * pick the AI 大模型 service while its provider in use cannot be called
+     * ([preferredCallable] false), as iOS falls back from the provider in use
+     * to the signed-in plan; and only while the plan is signed in and has a
+     * model, whether or not it is the provider in use. `null` leaves the AI
+     * features to [preferred].
+     */
+    fun standInPlan(
+        preferred: TranslationProviderMode?,
+        preferredCallable: Boolean,
+        providers: AIProviderSettings,
+        planSignedIn: Boolean
+    ): AIProviderEntry? {
+        val replaced = preferred == null ||
+            (preferred == TranslationProviderMode.DIRECT_API && !preferredCallable)
+        if (!replaced || !planSignedIn) return null
+        val plan = providers.entry(ChatGPTPlan.PROVIDER_ID) ?: return null
+        return plan.takeIf { it.activeModel.id.isNotBlank() }
+    }
+}
+
 class AndroidTranslationSettingsStore(
     context: Context,
     private val credentials: TranslationCredentialStore = AndroidKeystoreCredentialStore(context),
@@ -652,6 +681,53 @@ class AndroidTranslationSettingsStore(
         if (apiKey(aiProviders.value.activeID).isNotBlank()) return TranslationProviderMode.DIRECT_API
         if (current.backendEndpoint.isNotBlank()) return TranslationProviderMode.BACKEND_PROXY
         return null
+    }
+
+    /**
+     * The service the AI features call (2.1.0 §7): the one
+     * [preferredAIProviderMode] picks or, when it picks none or a provider in
+     * use that cannot be called, a signed-in ChatGPT plan that has a model
+     * (see [AIFeatureProviderPolicy]). `null` when there is none. Translation
+     * does not read this.
+     */
+    fun aiFeatureConfiguration(): TranslationServiceConfiguration? {
+        val plan = standInPlan() ?: return preferredAIProviderMode()?.let { currentServiceConfiguration(it) }
+        val direct = try {
+            configuration(plan, plan.activeModel, apiKey(plan.id))
+        } catch (_: AIProviderSettingsError) {
+            return null
+        }
+        return TranslationServiceConfiguration(
+            preferences = preferences.value.copy(providerMode = TranslationProviderMode.DIRECT_API),
+            endpoint = direct.endpoint,
+            model = direct.model,
+            credential = direct.apiKey,
+            direct = direct
+        )
+    }
+
+    /** 「已配置 AI」 (2.1.0 §7): an AI feature has a service to call. */
+    fun isAIFeatureConfigured(): Boolean = aiFeatureConfiguration() != null
+
+    /**
+     * [cacheNamespace] for the AI features' results. While a signed-in plan
+     * answers in place of the provider in use, its model is added, so its
+     * answers are not read back as that provider's once it can answer.
+     */
+    fun aiFeatureCacheNamespace(): String {
+        val namespace = cacheNamespace()
+        val plan = standInPlan() ?: return namespace
+        return "$namespace|${plan.kind.raw}|${plan.activeModel.id.trim()}"
+    }
+
+    private fun standInPlan(): AIProviderEntry? {
+        val preferred = preferredAIProviderMode()
+        return AIFeatureProviderPolicy.standInPlan(
+            preferred = preferred,
+            preferredCallable = preferred != TranslationProviderMode.DIRECT_API || directConfiguration() != null,
+            providers = aiProviders.value,
+            planSignedIn = mutableChatGPTPlanAccount.value != null
+        )
     }
 
     /**

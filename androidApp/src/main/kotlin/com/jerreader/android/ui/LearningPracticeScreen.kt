@@ -77,7 +77,7 @@ import kotlinx.coroutines.withContext
 
 /**
  * iOS `LearningPracticeView`: the 今日练习 hero with today's review ring, the
- * AI 困惑地图 when the reading left one, and the 练习与积累 tools in one card.
+ * 困惑地图 when the reading left one, and the 练习与积累 tools in one card.
  * It reads the existing collections; there is no separate learning store.
  */
 @Composable
@@ -369,7 +369,7 @@ private fun LearningConfusionMapCard(confusion: ReadingConfusionMap, modifier: M
         Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             JerreaderIconTile(JerreaderIcon.QUESTION, tint = palette.vermilion)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(text = "AI 困惑地图", style = JerreaderLearningType.headline)
+                Text(text = "困惑地图", style = JerreaderLearningType.headline)
                 Text(text = confusion.summary, style = JerreaderLearningType.subheadline, color = secondary)
             }
         }

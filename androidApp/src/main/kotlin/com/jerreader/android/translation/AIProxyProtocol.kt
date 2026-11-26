@@ -17,23 +17,53 @@ internal object AIProxyProtocol {
     const val VERSION_HEADER = "X-Jerreader-Translation-Protocol"
     const val IDEMPOTENCY_HEADER = "X-Jerreader-Idempotency-Key"
 
-    /** A translation, with a key that is the same whenever the request is. */
+    /**
+     * A translation, with a key that is the same whenever the request is.
+     * [context] is the text around the sentence (2.1.0), left out when there
+     * is none, as iOS does; it takes part in the key.
+     */
     fun translation(
         configuration: TranslationServiceConfiguration,
         text: String,
         source: LanguageCode,
         target: LanguageCode,
-        prompt: String
+        prompt: String,
+        context: String? = null
     ): PreparedRequest {
+        val sentContext = context?.let(::normalized)?.takeIf { it.isNotEmpty() && it != normalized(text) }
         val body = JSONObject()
             .put("text", text)
             .put("sourceLanguage", source.tag)
             .put("targetLanguage", target.tag)
             .put("prompt", prompt)
+        sentContext?.let { body.put("context", it) }
         model(configuration)?.let { body.put("model", it) }
         val headers = headers(configuration.credential) +
-            (IDEMPOTENCY_HEADER to idempotencyKey(configuration, text, source, target))
+            (IDEMPOTENCY_HEADER to idempotencyKey(configuration, text, source, target, sentContext))
         return PreparedRequest(configuration.endpoint, headers, body.toString())
+    }
+
+    /**
+     * One AI action of the translation card (直译, 追问) for a proxy that takes
+     * a single turn: the whole conversation flattened into `text`, the
+     * instruction in `prompt`. No idempotency key, as for an explanation.
+     */
+    fun action(
+        configuration: TranslationServiceConfiguration,
+        actionId: String,
+        flattened: String,
+        source: LanguageCode,
+        prompt: String
+    ): PreparedRequest {
+        val body = JSONObject()
+            .put("task", "explain")
+            .put("analysisMode", actionId)
+            .put("text", flattened)
+            .put("sourceLanguage", source.tag)
+            .put("responseLanguage", LanguageCode.CHINESE_SIMPLIFIED.tag)
+            .put("prompt", prompt)
+        model(configuration)?.let { body.put("model", it) }
+        return PreparedRequest(configuration.endpoint, headers(configuration.credential), body.toString())
     }
 
     /**
@@ -81,7 +111,8 @@ internal object AIProxyProtocol {
         credential?.trim()?.takeIf(String::isNotEmpty)?.let { put("Authorization", "Bearer $it") }
     }
 
-    private fun model(configuration: TranslationServiceConfiguration): String? =
+    /** The model the proxy settings name, sent as `model` and shown on the source badge (2.1.0). */
+    fun model(configuration: TranslationServiceConfiguration): String? =
         configuration.model.trim().takeIf(String::isNotEmpty)
 
     /**
@@ -105,7 +136,8 @@ internal object AIProxyProtocol {
         configuration: TranslationServiceConfiguration,
         text: String,
         source: LanguageCode,
-        target: LanguageCode
+        target: LanguageCode,
+        context: String?
     ): String {
         val providerVersion = sha256(
             listOf(
@@ -116,8 +148,10 @@ internal object AIProxyProtocol {
                 "jerreader-proxy-v1"
             ).joinToString(SEPARATOR)
         ).take(24)
+        // iOS adds the context as one more part, only when there is one.
         return sha256(
-            listOf("ai-backend-proxy", providerVersion, source.tag, target.tag, normalized(text))
+            (listOf("ai-backend-proxy", providerVersion, source.tag, target.tag, normalized(text)) +
+                listOfNotNull(context?.let { "context:$it" }))
                 .joinToString(SEPARATOR)
         )
     }

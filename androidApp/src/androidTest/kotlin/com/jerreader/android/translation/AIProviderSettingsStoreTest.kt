@@ -2,15 +2,25 @@ package com.jerreader.android.translation
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.jerreader.android.translation.chatgptplan.ChatGPTPlan
+import com.jerreader.android.translation.chatgptplan.ChatGPTPlanAccount
+import com.jerreader.android.translation.chatgptplan.ChatGPTPlanModel
 import com.jerreader.shared.domain.LanguageCode
 import com.jerreader.shared.translation.ContextExplanationRequest
 import com.jerreader.shared.translation.TranslationFailure
+import com.jerreader.shared.translation.TranslationFallbackMode
 import com.jerreader.shared.translation.TranslationPreferences
 import com.jerreader.shared.translation.TranslationProviderMode
 import com.jerreader.shared.translation.TranslationRequest
 import com.jerreader.shared.translation.TranslationResult
 import com.jerreader.shared.translation.TranslationService
+import java.io.IOException
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.After
@@ -173,6 +183,67 @@ class AIProviderSettingsStoreTest {
         assertEquals(TranslationProviderMode.DIRECT_API, settings.preferences.value.providerMode)
     }
 
+    /** 2.1.0 §7: signing in from the reader is all the AI buttons need. */
+    @Test fun aSignedInPlanAnswersTheAIFeaturesWithoutChangingTranslation() {
+        val settings = store()
+        assertNull(settings.preferredAIProviderMode())
+        assertFalse(settings.isAIFeatureConfigured())
+
+        settings.chatGPTPlanSignedIn(ChatGPTPlanAccount("reader@example.test", "plus"), listOf(ChatGPTPlanModel("gpt-a", "GPT A")))
+        // The plan is put in use; translation stays on the device.
+        assertEquals(ChatGPTPlan.PROVIDER_ID, settings.aiProviders.value.activeID)
+        assertEquals(TranslationProviderMode.ON_DEVICE, settings.preferences.value.providerMode)
+        assertEquals(TranslationProviderMode.DIRECT_API, settings.preferredAIProviderMode())
+        assertTrue(settings.isAIFeatureConfigured())
+        val ai = checkNotNull(settings.aiFeatureConfiguration())
+        assertEquals(AIProviderKind.CHATGPT_PLAN, ai.direct?.kind)
+        assertEquals("gpt-a", ai.direct?.model)
+        assertEquals("ml-kit-translate-17.0.3", settings.currentServiceConfiguration().model)
+        assertEquals(settings.cacheNamespace(), settings.aiFeatureCacheNamespace())
+    }
+
+    @Test fun aSignedInPlanNotInUseStandsInForTheAIFeaturesOnly() {
+        val settings = store()
+        // The account's models could not be fetched at sign-in: the plan is not put in use.
+        settings.chatGPTPlanSignedIn(ChatGPTPlanAccount("reader@example.test", "plus"), emptyList())
+        assertEquals("deepSeek", settings.aiProviders.value.activeID)
+        assertFalse(settings.isAIFeatureConfigured())
+        val translation = settings.currentServiceConfiguration()
+
+        settings.chatGPTPlanModelsRefreshed(listOf(ChatGPTPlanModel("gpt-a", "GPT A")))
+        assertEquals("deepSeek", settings.aiProviders.value.activeID)
+        assertNull(settings.preferredAIProviderMode())
+        assertTrue(settings.isAIFeatureConfigured())
+        val ai = checkNotNull(settings.aiFeatureConfiguration())
+        assertEquals(AIProviderKind.CHATGPT_PLAN, ai.direct?.kind)
+        assertEquals(TranslationProviderMode.DIRECT_API, ai.preferences.providerMode)
+        // Translation still goes where the user chose.
+        assertEquals(translation, settings.currentServiceConfiguration())
+        assertEquals(TranslationProviderMode.ON_DEVICE, settings.preferences.value.providerMode)
+        // The plan's answers are cached apart from the provider in use, and badged as the plan's.
+        val namespace = settings.aiFeatureCacheNamespace()
+        assertTrue(namespace.startsWith(settings.cacheNamespace()))
+        assertFalse(namespace == settings.cacheNamespace())
+        val service = ConfiguredTranslationService(settings, NoOnDeviceTranslation, RecordingTransport())
+        assertEquals(
+            "GPT A",
+            service.cachedExplanationSource(
+                ContextExplanationRequest("猫が鳴いた。", "朝、猫が鳴いた。", LanguageCode.JAPANESE)
+            )?.modelName
+        )
+
+        // AI 大模型 chosen for translation while its provider has no key: the plan answers the AI features.
+        settings.updateProviderMode(TranslationProviderMode.DIRECT_API)
+        assertEquals(TranslationProviderMode.DIRECT_API, settings.preferredAIProviderMode())
+        assertNull(settings.currentServiceConfiguration().direct)
+        assertEquals(AIProviderKind.CHATGPT_PLAN, settings.aiFeatureConfiguration()?.direct?.kind)
+
+        settings.updateProviderMode(TranslationProviderMode.ON_DEVICE)
+        settings.chatGPTPlanSignedOut()
+        assertFalse(settings.isAIFeatureConfigured())
+        assertEquals(settings.cacheNamespace(), settings.aiFeatureCacheNamespace())
+    }
+
     @Test fun eachFormatSendsItsOwnRequest() = runBlocking {
         val settings = store()
         val transport = RecordingTransport()
@@ -198,7 +269,7 @@ class AIProviderSettingsStoreTest {
             assertEquals("claude-haiku-5-5", body.getString("model"))
             assertEquals(AIRequestTuning.ANTHROPIC_OUTPUT_TOKENS, body.getInt("max_tokens"))
             assertEquals("low", body.getJSONObject("output_config").getString("effort"))
-            assertEquals("Hello.", body.getJSONArray("messages").getJSONObject(0).getString("content"))
+            assertEquals("SOURCE:\nHello.", body.getJSONArray("messages").getJSONObject(0).getString("content"))
         }
 
         // Gemini's own format: the model is in the path and the key in a header.
@@ -291,6 +362,61 @@ class AIProviderSettingsStoreTest {
             assertFalse(body.has("operation"))
         }
     }
+
+    /**
+     * Cancelling a streamed request closes its connection, so the read
+     * waiting on it fails with an IOException (2.1.0): that stays a
+     * cancellation, and the fallback is never asked. A connection that fails
+     * on its own still falls back, and the answer names the fallback, so the
+     * cache keeps it apart from the configured service's answers.
+     */
+    @Test fun aCancelledReadNeverFallsBack() = runBlocking<Unit> {
+        val settings = store()
+        settings.updateProviderMode(TranslationProviderMode.DIRECT_API)
+        settings.addProvider(AIProviderEntry.preset(AIProviderKind.DEEPSEEK), "ds-key")
+        settings.changeProviders { it.activating("deepSeek") }
+        settings.updateFallbackMode(TranslationFallbackMode.ON_DEVICE)
+        val fallback = CountingTranslation()
+        val reading = CompletableDeferred<Unit>()
+        val waiting = object : TranslationHttpTransport {
+            override suspend fun post(url: String, headers: Map<String, String>, body: String): TranslationHttpResponse =
+                error("Only a streamed request is expected.")
+
+            override suspend fun postStreaming(
+                url: String,
+                headers: Map<String, String>,
+                body: String,
+                onLine: (String) -> Unit
+            ): TranslationHttpResponse {
+                reading.complete(Unit)
+                try {
+                    awaitCancellation()
+                } catch (_: CancellationException) {
+                }
+                throw IOException("Socket closed")
+            }
+        }
+        val request = TranslationRequest("Hello.", LanguageCode.ENGLISH, LanguageCode.CHINESE_SIMPLIFIED)
+        var thrown: Throwable? = null
+        val job = launch {
+            try {
+                ConfiguredTranslationService(settings, fallback, waiting).translateStreaming(request) {}
+            } catch (error: Throwable) {
+                thrown = error
+                throw error
+            }
+        }
+        reading.await()
+        job.cancelAndJoin()
+        assertTrue("got $thrown", thrown is CancellationException)
+        assertEquals(0, fallback.calls)
+
+        val offline = TranslationHttpTransport { _, _, _ -> throw IOException("offline") }
+        val answer = ConfiguredTranslationService(settings, fallback, offline).translateStreaming(request) {}
+        assertEquals("本机译文", answer.translatedText)
+        assertEquals(TranslationProviderMode.ON_DEVICE, answer.fallbackProvider)
+        assertEquals(1, fallback.calls)
+    }
 }
 
 class ProviderKeyStore(val values: MutableMap<String, String> = mutableMapOf()) : TranslationCredentialStore {
@@ -310,6 +436,17 @@ private class RecordingTransport : TranslationHttpTransport {
     override suspend fun post(url: String, headers: Map<String, String>, body: String): TranslationHttpResponse {
         calls += Call(url, headers, body)
         return TranslationHttpResponse(200, reply)
+    }
+}
+
+/** The on-device translator answering as the fallback, counting what it is asked. */
+private class CountingTranslation : TranslationService {
+    override val identifier = "counting"
+    var calls = 0
+
+    override suspend fun translate(request: TranslationRequest): TranslationResult {
+        calls += 1
+        return TranslationResult("本机译文", LanguageCode.ENGLISH, request.targetLanguage, "本机翻译 · 离线")
     }
 }
 

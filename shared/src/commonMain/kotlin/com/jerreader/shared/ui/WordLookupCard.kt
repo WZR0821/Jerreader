@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -86,6 +87,10 @@ fun WordLookupCard(
     onFavorite: ((WordExplanation) -> Unit)? = null,
     onSpeak: ((WordExplanation) -> Unit)? = null,
     onLookup: (() -> Unit)? = null,
+    /** 第 N 次查 · 上次 …, under the word, from the second lookup on (2.1.0 §8). */
+    lookupHint: String? = null,
+    /** False before the third lookup: 加入生词本 is then tinted, not filled (2.1.0 §8). */
+    addToVocabularyIsPrimary: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
@@ -102,7 +107,9 @@ fun WordLookupCard(
             onCopy = onCopy,
             onFavorite = onFavorite,
             onSpeak = onSpeak,
-            onLookup = onLookup
+            onLookup = onLookup,
+            lookupHint = lookupHint,
+            addToVocabularyIsPrimary = addToVocabularyIsPrimary
         )
     }
 }
@@ -187,6 +194,8 @@ private fun WordCardBody(
     onFavorite: ((WordExplanation) -> Unit)?,
     onSpeak: ((WordExplanation) -> Unit)?,
     onLookup: (() -> Unit)?,
+    lookupHint: String?,
+    addToVocabularyIsPrimary: Boolean,
     modifier: Modifier = Modifier
 ) {
     val phase = wordCardPhase(state)
@@ -223,6 +232,14 @@ private fun WordCardBody(
                     fontFamily = jerreaderSerifFamily(word)
                 )
             )
+            lookupHint?.takeIf(String::isNotBlank)?.let { hint ->
+                Text(
+                    text = hint,
+                    modifier = Modifier.testTag("word_card_lookup_hint"),
+                    style = JerreaderLearningType.caption,
+                    color = jerreaderPalette.secondaryText
+                )
+            }
             when (state) {
                 is WordLookupCardState.Loading -> WordCardLoading(onLookup = onLookup)
 
@@ -238,7 +255,8 @@ private fun WordCardBody(
                     onCopy = onCopy,
                     onFavorite = onFavorite,
                     onSpeak = onSpeak,
-                    onLookup = onLookup
+                    onLookup = onLookup,
+                    addToVocabularyIsPrimary = addToVocabularyIsPrimary
                 )
             }
         }
@@ -295,6 +313,7 @@ private fun WordCardEntry(
     onFavorite: ((WordExplanation) -> Unit)?,
     onSpeak: ((WordExplanation) -> Unit)?,
     onLookup: (() -> Unit)?,
+    addToVocabularyIsPrimary: Boolean,
     modifier: Modifier = Modifier
 ) {
     val palette = jerreaderPalette
@@ -364,16 +383,21 @@ private fun WordCardEntry(
                         height = WordCardButtonHeight
                     )
                 } else {
-                    JerreaderPrimaryButton(
-                        text = "加入生词本",
-                        onClick = {
-                            favorite(explanation)
-                            favorited = true
-                            haptics.performHapticFeedback(HapticFeedbackType.Confirm)
-                        },
-                        height = WordCardButtonHeight,
-                        fullWidth = false
-                    )
+                    val add = {
+                        favorite(explanation)
+                        favorited = true
+                        haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                    }
+                    if (addToVocabularyIsPrimary) {
+                        JerreaderPrimaryButton(
+                            text = "加入生词本",
+                            onClick = add,
+                            height = WordCardButtonHeight,
+                            fullWidth = false
+                        )
+                    } else {
+                        JerreaderTintedButton(text = "加入生词本", onClick = add, height = WordCardButtonHeight)
+                    }
                 }
             }
             onSpeak?.let { speak ->

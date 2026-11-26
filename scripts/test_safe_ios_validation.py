@@ -151,6 +151,34 @@ class SafetyPolicyTests(unittest.TestCase):
         self.assertIsNone(guard.foreign_work(own_worker, 100, "/fixture/SafeDerivedData"))
         self.assertIsNotNone(guard.foreign_work(own_worker, 100, "/other/project"))
 
+    def test_process_table_gives_names_not_cut_paths(self):
+        # 2026-11-26: with comm in a column that is not the last, macOS ps
+        # printed the first 16 characters of the path, so an Android emulator
+        # installed under a long folder read as that folder and was never seen.
+        self.assertIn("ucomm=", guard.PROCESS_COLUMNS)
+        self.assertNotIn(",comm=", guard.PROCESS_COLUMNS)
+        self.assertTrue(guard.PROCESS_COLUMNS.endswith("args="))
+        table = guard.read(["/bin/ps", "-axo", guard.PROCESS_COLUMNS])
+        mine = [row.split(None, 4) for row in table.splitlines() if row.split(None, 1)[0] == str(os.getpid())]
+        self.assertEqual(len(mine), 1)
+        self.assertNotIn("/", mine[0][3])
+        # What ps prints for such processes now: names, cut to 16 characters.
+        rows = ("300 1 300 qemu-system-x86_ /opt/android-sdk/emulator/qemu/darwin-x86_64/"
+                "qemu-system-x86_64-headless -avd test -read-only\n"
+                "301 1 301 xcodebuild /Applications/Xcode-16.2.app/Contents/Developer/usr/bin/"
+                "xcodebuild -scheme App test")
+        first, second = guard.external_processes(rows).splitlines()
+        self.assertIn("emulator", guard.foreign_work(first))
+        self.assertIn("build", guard.foreign_work(second))
+
+    def test_xcodebuild_queries_are_not_builds(self):
+        for query in ("-find swift", "-version", "-showsdks", "-checkFirstLaunchStatus", "-license check"):
+            line = "310 310 xcodebuild /x/usr/bin/xcodebuild " + query
+            self.assertIsNone(guard.foreign_work(line), query)
+        for build in ("-scheme App build", "build-for-testing -scheme App", "-findThings build"):
+            line = "311 311 xcodebuild /x/usr/bin/xcodebuild " + build
+            self.assertIsNotNone(guard.foreign_work(line), build)
+
     def test_empty_skipped_failed_or_missing_xctest_results_are_not_passes(self):
         for report in [{}, dict(totalTestCount=0, passedTests=0, failedTests=0, skippedTests=0),
                        dict(totalTestCount=1, passedTests=0, failedTests=0, skippedTests=1),

@@ -8,6 +8,7 @@ import com.jerreader.shared.translation.TranslationResult
 import com.jerreader.shared.translation.ContextExplanationRequest
 import com.jerreader.shared.translation.ContextExplanationResult
 import com.jerreader.shared.translation.TranslationInputPolicy
+import com.jerreader.shared.translation.ReaderTranslationContext
 import java.security.MessageDigest
 import java.text.Normalizer
 
@@ -117,12 +118,20 @@ class TranslationCacheRepository(
             targetLanguage = LanguageCode.CHINESE_SIMPLIFIED
         )
 
+    /**
+     * The same sentence read with different context is its own entry (2.1.0),
+     * the way iOS's `cacheKey` adds `context:` as one more part.
+     */
     private fun key(request: TranslationRequest, namespace: String): String = sha256(
-        listOf(
-            normalized(request.text),
-            request.sourceLanguage?.name ?: "AUTOMATIC",
-            request.targetLanguage.name,
-            namespace
+        (
+            listOf(
+                normalized(request.text),
+                request.sourceLanguage?.name ?: "AUTOMATIC",
+                request.targetLanguage.name,
+                namespace
+            ) + listOfNotNull(
+                ReaderTranslationContext.meaningfulContext(request.context, request.text)?.let { "context:$it" }
+            )
         ).joinToString("\u001F")
     )
 

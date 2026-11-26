@@ -669,6 +669,22 @@ JERREADER_RUN_REAL_RUBY_UI_TESTS = 1
 
 测试后重新做全新的 Release 构建，不要把注入过测试书的 Debug App 直接打包。
 
+**Android（2.1.0 起）**：真书同样不进仓库。做设备验收时把书的绝对路径交给入口，只在 `full` 或 `ruby` 范围有效。`ANDROID_HOME` 等其余变量同 `docs/android/BUILD_AND_PACKAGE.md`：
+
+```sh
+JERREADER_ALLOW_SIMULATOR=1 \
+JERREADER_SIMULATOR_DESTINATION='platform=Android,serial=emulator-5580,avd=<已安装的AVD名称>' \
+JERREADER_ANDROID_VALIDATION_SCOPE=ruby \
+JERREADER_ANDROID_REAL_RUBY_EPUB='/仓库外的路径/ruby-test.epub' \
+scripts/safe_android_build.sh test
+```
+
+- 入口只接受仓库之外、确实存在的 `.epub` 绝对路径，并且只用于 `android-test`。
+- 书只推进本次的只读临时设备（`/data/local/tmp/JerreaderRealRubyBook.epub`），单独运行 `ReaderRealRubyBookTest`，跑完立即删除。
+- `ruby` 范围只跑合成书的 `ReaderRubySelectionTest` 和这一项。`full` 范围在全部回归和界面用例之后再跑它。
+- 测试在书的原版排版方向和另一个方向各做三步：脚本选区、点句高亮、真实长按。每一步核对每个注音都和它的汉字落在同一块高亮里，再截全屏和选区放大图（`android-realruby-*.png`、`*-crop.png`）。摘要写进 `android-realruby-summary.json`，不含书里的文字。
+- 不设这个变量时，这项测试不运行。在 IDE 里直接跑，会因为没有书而跳过。
+
 ### 8.4 人工验收最小集合
 
 - 导入一本 EPUB、PDF、DOCX、TXT；

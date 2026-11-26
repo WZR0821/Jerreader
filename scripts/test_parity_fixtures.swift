@@ -117,6 +117,98 @@ private struct ReadingCompanionFixture: Decodable {
     let lensPrompt: [LensPromptCase]
 }
 
+private struct AIActionsFixture: Decodable {
+    struct Action: Decodable { let id: String; let title: String }
+    struct ActionsCase: Decodable { let sourceLanguage: String?; let expected: [Action] }
+    struct PresetsCase: Decodable { let sourceLanguage: String?; let expected: [String] }
+    struct InstructionCase: Decodable {
+        let name: String
+        let action: String
+        let sourceLanguage: String?
+        let responseLanguage: String
+        let expected: String
+    }
+    struct MaterialCase: Decodable {
+        let name: String
+        let source: String
+        let translation: String?
+        let context: String?
+        let expected: String
+    }
+    struct Turn: Decodable { let question: String; let answer: String? }
+    struct Message: Decodable { let role: String; let text: String }
+    struct FollowUpCase: Decodable {
+        let name: String
+        let source: String
+        let translation: String?
+        let context: String?
+        let sourceLanguage: String?
+        let responseLanguage: String
+        let turns: [Turn]
+        let messages: [Message]
+        let flattened: String
+    }
+    struct BadgeCase: Decodable { let model: String?; let usedContext: Bool; let expected: String }
+    let guardSentence: String
+    let maximumFollowUpTurns: Int
+    let actions: [ActionsCase]
+    let presets: [PresetsCase]
+    let instructions: [InstructionCase]
+    let material: [MaterialCase]
+    let followUp: [FollowUpCase]
+    let badge: [BadgeCase]
+
+    enum CodingKeys: String, CodingKey {
+        case guardSentence = "guard"
+        case maximumFollowUpTurns, actions, presets, instructions, material, followUp, badge
+    }
+}
+
+private struct ChapterEstimateFixture: Decodable {
+    struct Rule: Decodable {
+        let minimumReadingSeconds: Double
+        let minimumProgression: Double
+        let maximumMinutes: Int
+        let underOneMinuteSeconds: Double
+    }
+    struct Case: Decodable {
+        let name: String
+        let readingSeconds: Double
+        let progression: Double
+        let chapterEnd: Double?
+        let minutes: Int?
+        let text: String?
+    }
+    let rule: Rule
+    let cases: [Case]
+}
+
+private struct LookupHintFixture: Decodable {
+    struct Case: Decodable {
+        let name: String
+        let lookupCount: Int
+        let previousLookupAt: String?
+        let hint: String?
+        let addToVocabularyIsPrimary: Bool
+    }
+    let timeZone: String
+    let now: String
+    let cases: [Case]
+}
+
+private struct CompanionDotFixture: Decodable {
+    struct Case: Decodable {
+        let name: String
+        let progress: Double
+        let lastOpenedAt: String?
+        let expected: Bool
+    }
+    let minimumProgress: Double
+    let quietHours: Int
+    let now: String
+    let cases: [Case]
+}
+
 private var failures = 0
 
 private func expect<T: Equatable>(_ actual: T, _ expected: T, _ label: String) {
@@ -138,6 +230,26 @@ private func date(_ milliseconds: Int64) -> Date {
 private func fail(_ message: String) {
     failures += 1
     print("FAIL: " + message)
+}
+
+/// A language tag of a fixture; a tag the app does not know fails the case.
+private func language(_ tag: String?, _ label: String) -> (ok: Bool, value: LanguageCode?) {
+    guard let tag else { return (true, nil) }
+    guard let value = LanguageCode(rawValue: tag) else {
+        fail(label + ": unknown language " + tag)
+        return (false, nil)
+    }
+    return (true, value)
+}
+
+private func isoDate(_ text: String, _ label: String) -> Date? {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    guard let value = formatter.date(from: text) else {
+        fail(label + ": unreadable date " + text)
+        return nil
+    }
+    return value
 }
 
 private func signal(_ json: ReadingCompanionFixture.Signal) -> ReadingErrorSignal {
@@ -282,6 +394,164 @@ private func checkReadingCompanion() throws {
     print("checked \(total) reading-companion cases")
 }
 
+private func checkAIActions() throws {
+    let root = try load("ai_actions.json", as: AIActionsFixture.self)
+    expect(AIReadingActionPolicy.guardSentence, root.guardSentence, "ai actions: guard")
+    expect(AIReadingActionPolicy.maximumFollowUpTurns, root.maximumFollowUpTurns, "ai actions: maximum turns")
+
+    for testCase in root.actions {
+        let label = "actions for " + (testCase.sourceLanguage ?? "auto")
+        let source = language(testCase.sourceLanguage, label)
+        guard source.ok else { continue }
+        let actions = AIReadingActionPolicy.actions(for: source.value)
+        expect(actions.map(\.rawValue), testCase.expected.map(\.id), label + ": ids")
+        expect(actions.map(\.title), testCase.expected.map(\.title), label + ": titles")
+    }
+
+    for testCase in root.presets {
+        let label = "presets for " + (testCase.sourceLanguage ?? "auto")
+        let source = language(testCase.sourceLanguage, label)
+        guard source.ok else { continue }
+        expect(AIReadingActionPolicy.presets(for: source.value), testCase.expected, label)
+    }
+
+    for testCase in root.instructions {
+        let source = language(testCase.sourceLanguage, testCase.name)
+        let response = language(testCase.responseLanguage, testCase.name)
+        guard source.ok, response.ok, let responseLanguage = response.value,
+              let action = AIReadingAction(rawValue: testCase.action)
+        else {
+            fail(testCase.name + ": unknown action or language")
+            continue
+        }
+        expect(
+            AIReadingActionPolicy.instruction(
+                for: action, sourceLanguage: source.value, responseLanguage: responseLanguage
+            ),
+            testCase.expected,
+            testCase.name
+        )
+    }
+
+    for testCase in root.material {
+        expect(
+            AIReadingActionPolicy.material(
+                source: testCase.source, translation: testCase.translation, context: testCase.context
+            ),
+            testCase.expected,
+            testCase.name
+        )
+    }
+
+    for testCase in root.followUp {
+        let source = language(testCase.sourceLanguage, testCase.name)
+        let response = language(testCase.responseLanguage, testCase.name)
+        guard source.ok, response.ok, let responseLanguage = response.value else { continue }
+        let turns = testCase.turns.map { AIFollowUpTurn(question: $0.question, answer: $0.answer) }
+        let messages = AIReadingActionPolicy.followUpMessages(
+            source: testCase.source,
+            translation: testCase.translation,
+            context: testCase.context,
+            sourceLanguage: source.value,
+            responseLanguage: responseLanguage,
+            turns: turns
+        )
+        expect(messages.map(\.role.rawValue), testCase.messages.map(\.role), testCase.name + ": roles")
+        expect(messages.map(\.text), testCase.messages.map(\.text), testCase.name + ": messages")
+        expect(
+            AIReadingActionPolicy.followUpFlattened(
+                source: testCase.source,
+                translation: testCase.translation,
+                context: testCase.context,
+                turns: turns
+            ),
+            testCase.flattened,
+            testCase.name + ": flattened"
+        )
+    }
+
+    for testCase in root.badge {
+        expect(
+            AIReadingActionPolicy.badge(model: testCase.model, usedContext: testCase.usedContext),
+            testCase.expected,
+            "badge for " + (testCase.model ?? "nil")
+        )
+    }
+
+    let total = root.actions.count + root.presets.count + root.instructions.count
+        + root.material.count + root.followUp.count + root.badge.count
+    print("checked \(total) ai-action cases")
+}
+
+private func checkChapterEstimate() throws {
+    let root = try load("chapter_estimate.json", as: ChapterEstimateFixture.self)
+    expect(ChapterTimeEstimatePolicy.minimumReadingSeconds, root.rule.minimumReadingSeconds, "chapter: minimum seconds")
+    expect(ChapterTimeEstimatePolicy.minimumProgression, root.rule.minimumProgression, "chapter: minimum progression")
+    expect(ChapterTimeEstimatePolicy.maximumMinutes, root.rule.maximumMinutes, "chapter: maximum minutes")
+    expect(ChapterTimeEstimatePolicy.underOneMinuteSeconds, root.rule.underOneMinuteSeconds, "chapter: under a minute")
+    for testCase in root.cases {
+        let minutes = ChapterTimeEstimatePolicy.minutes(
+            readingSeconds: testCase.readingSeconds,
+            progression: testCase.progression,
+            chapterEnd: testCase.chapterEnd
+        )
+        expect(minutes, testCase.minutes, testCase.name + ": minutes")
+        expect(ChapterTimeEstimatePolicy.text(minutes: minutes), testCase.text, testCase.name + ": text")
+    }
+    print("checked \(root.cases.count) chapter-estimate cases")
+}
+
+private func checkLookupHint() throws {
+    let root = try load("lookup_hint.json", as: LookupHintFixture.self)
+    guard let timeZone = TimeZone(identifier: root.timeZone) else {
+        fail("lookup hint: unknown time zone " + root.timeZone)
+        return
+    }
+    guard let now = isoDate(root.now, "lookup hint: now") else { return }
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = timeZone
+    for testCase in root.cases {
+        var previous: Date?
+        if let text = testCase.previousLookupAt {
+            guard let parsed = isoDate(text, testCase.name) else { continue }
+            previous = parsed
+        }
+        expect(
+            LookupHintPolicy.hint(
+                lookupCount: testCase.lookupCount, previousLookupAt: previous, now: now, calendar: calendar
+            ),
+            testCase.hint,
+            testCase.name + ": hint"
+        )
+        expect(
+            LookupHintPolicy.addToVocabularyIsPrimary(lookupCount: testCase.lookupCount),
+            testCase.addToVocabularyIsPrimary,
+            testCase.name + ": primary"
+        )
+    }
+    print("checked \(root.cases.count) lookup-hint cases")
+}
+
+private func checkCompanionDot() throws {
+    let root = try load("companion_dot.json", as: CompanionDotFixture.self)
+    expect(ReaderCompanionDotPolicy.minimumProgress, root.minimumProgress, "dot: minimum progress")
+    expect(ReaderCompanionDotPolicy.quietHours, root.quietHours, "dot: quiet hours")
+    guard let now = isoDate(root.now, "dot: now") else { return }
+    for testCase in root.cases {
+        var last: Date?
+        if let text = testCase.lastOpenedAt {
+            guard let parsed = isoDate(text, testCase.name) else { continue }
+            last = parsed
+        }
+        expect(
+            ReaderCompanionDotPolicy.showsDot(progress: testCase.progress, lastOpenedAt: last, now: now),
+            testCase.expected,
+            testCase.name
+        )
+    }
+    print("checked \(root.cases.count) companion-dot cases")
+}
+
 @main
 struct ParityFixtureTests {
     static func main() throws {
@@ -341,6 +611,10 @@ struct ParityFixtureTests {
         print("checked \(prune.cases.count) backup-prune cases")
 
         try checkReadingCompanion()
+        try checkAIActions()
+        try checkChapterEstimate()
+        try checkLookupHint()
+        try checkCompanionDot()
 
         guard failures == 0 else {
             print("FAIL: \(failures) parity mismatch(es)")

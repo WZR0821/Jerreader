@@ -413,10 +413,32 @@ enum ChatGPTPlanRequests {
     /// only as a list of messages, never as a bare string.
     static func responses(accessToken: String, model: String, instructions: String, input: String,
                           extra: [String: Any] = [:], timeoutInterval: TimeInterval = 30) throws -> URLRequest {
+        try responses(accessToken: accessToken, model: model, instructions: instructions,
+                      input: [["role": "user", "content": input]], extra: extra, timeoutInterval: timeoutInterval)
+    }
+
+    /// The same request for a conversation (2.1.0 追问): `turns` are
+    /// (role, text) pairs of "user" and "assistant"; an earlier answer goes
+    /// out as an output message item, as the plan's own clients send it.
+    static func responses(accessToken: String, model: String, instructions: String,
+                          turns: [(role: String, text: String)],
+                          extra: [String: Any] = [:], timeoutInterval: TimeInterval = 30) throws -> URLRequest {
+        let input: [[String: Any]] = turns.map { turn in
+            turn.role == "assistant"
+                ? ["type": "message", "role": "assistant",
+                   "content": [["type": "output_text", "text": turn.text]]]
+                : ["role": "user", "content": turn.text]
+        }
+        return try responses(accessToken: accessToken, model: model, instructions: instructions,
+                             input: input, extra: extra, timeoutInterval: timeoutInterval)
+    }
+
+    private static func responses(accessToken: String, model: String, instructions: String, input: [[String: Any]],
+                                  extra: [String: Any], timeoutInterval: TimeInterval) throws -> URLRequest {
         var body: [String: Any] = [
             "model": model,
             "instructions": instructions,
-            "input": [["role": "user", "content": input]],
+            "input": input,
             "store": false,
             "stream": true,
         ]
@@ -500,47 +522,16 @@ enum ChatGPTPlanStreamOutcome: Equatable, Sendable {
 enum ChatGPTPlanStream {
     static func parse(_ data: Data) -> ChatGPTPlanStreamOutcome {
         guard let text = String(data: data, encoding: .utf8) else { return .interrupted }
-        var deltas = ""
         let normalized = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
-        for block in normalized.components(separatedBy: "\n\n") {
-            var eventName: String?
-            var lines: [String] = []
-            for line in block.split(separator: "\n", omittingEmptySubsequences: true) {
-                if line.hasPrefix("data:") {
-                    lines.append(String(line.dropFirst(5)).trimmingLeadingSpace)
-                } else if line.hasPrefix("event:") {
-                    eventName = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
-                }
-            }
-            guard !lines.isEmpty else { continue }
-            let payload = lines.joined(separator: "\n")
-            guard payload != "[DONE]",
-                  let object = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any]
-            else { continue }
-            switch (object["type"] as? String) ?? eventName ?? "" {
-            case "response.output_text.delta":
-                deltas += object["delta"] as? String ?? ""
-            case "response.completed":
-                let final = outputText(of: object["response"] as? [String: Any])
-                return .completed(final.isEmpty ? deltas : final)
-            case "response.failed":
-                let error = (object["response"] as? [String: Any])?["error"] as? [String: Any]
-                return .failed(code: error?["code"] as? String, message: error?["message"] as? String)
-            case "response.incomplete":
-                let details = (object["response"] as? [String: Any])?["incomplete_details"] as? [String: Any]
-                return .incomplete(reason: details?["reason"] as? String)
-            case "error":
-                let nested = object["error"] as? [String: Any]
-                return .failed(code: (object["code"] as? String) ?? (nested?["code"] as? String),
-                               message: (object["message"] as? String) ?? (nested?["message"] as? String))
-            default:
-                continue
-            }
+        var decoder = ChatGPTPlanStreamDecoder()
+        for line in normalized.split(separator: "\n", omittingEmptySubsequences: false) {
+            decoder.feed(String(line))
+            if decoder.outcome != nil { break }
         }
-        return .interrupted
+        return decoder.finish()
     }
 
-    private static func outputText(of response: [String: Any]?) -> String {
+    fileprivate static func outputText(of response: [String: Any]?) -> String {
         let output = response?["output"] as? [[String: Any]] ?? []
         return output
             .filter { ($0["type"] as? String ?? "message") == "message" }
@@ -548,6 +539,75 @@ enum ChatGPTPlanStream {
             .filter { ($0["type"] as? String) == "output_text" }
             .compactMap { $0["text"] as? String }
             .joined()
+    }
+}
+
+/// Reads a Responses stream of the plan a line at a time, so the answer can
+/// be shown while it is written (2.1.0). An event is read at the blank line
+/// that ends it, as Server-Sent Events have it; `finish()` reads a last
+/// event the body did not end with a blank line.
+struct ChatGPTPlanStreamDecoder: Sendable {
+    /// The deltas so far.
+    private(set) var text = ""
+    /// Set by the event that ends the stream; later lines are ignored.
+    private(set) var outcome: ChatGPTPlanStreamOutcome?
+    private var eventName: String?
+    private var dataLines: [String] = []
+
+    init() {}
+
+    /// Reads one line without its line break. True when `text` grew.
+    @discardableResult
+    mutating func feed(_ line: String) -> Bool {
+        guard outcome == nil else { return false }
+        if line.isEmpty { return dispatch() }
+        if line.hasPrefix("data:") {
+            dataLines.append(String(line.dropFirst(5)).trimmingLeadingSpace)
+        } else if line.hasPrefix("event:") {
+            eventName = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+        }
+        return false
+    }
+
+    /// How the stream ended, once the body has.
+    mutating func finish() -> ChatGPTPlanStreamOutcome {
+        if outcome == nil { dispatch() }
+        return outcome ?? .interrupted
+    }
+
+    @discardableResult
+    private mutating func dispatch() -> Bool {
+        defer {
+            eventName = nil
+            dataLines.removeAll()
+        }
+        guard !dataLines.isEmpty else { return false }
+        let payload = dataLines.joined(separator: "\n")
+        guard payload != "[DONE]",
+              let object = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any]
+        else { return false }
+        switch (object["type"] as? String) ?? eventName ?? "" {
+        case "response.output_text.delta":
+            let delta = object["delta"] as? String ?? ""
+            text += delta
+            return !delta.isEmpty
+        case "response.completed":
+            let final = ChatGPTPlanStream.outputText(of: object["response"] as? [String: Any])
+            outcome = .completed(final.isEmpty ? text : final)
+        case "response.failed":
+            let error = (object["response"] as? [String: Any])?["error"] as? [String: Any]
+            outcome = .failed(code: error?["code"] as? String, message: error?["message"] as? String)
+        case "response.incomplete":
+            let details = (object["response"] as? [String: Any])?["incomplete_details"] as? [String: Any]
+            outcome = .incomplete(reason: details?["reason"] as? String)
+        case "error":
+            let nested = object["error"] as? [String: Any]
+            outcome = .failed(code: (object["code"] as? String) ?? (nested?["code"] as? String),
+                              message: (object["message"] as? String) ?? (nested?["message"] as? String))
+        default:
+            break
+        }
+        return false
     }
 }
 

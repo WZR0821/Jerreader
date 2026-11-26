@@ -34,6 +34,18 @@ COOL_TIMEOUT = 300
 COOL_LOAD_PER_CPU = 2.5
 QUEUE_TIMEOUT = 3600
 _DAEMON_LOG_STATES = {}
+# The process table is read with each executable's own name (ucomm), not its
+# path (comm): macOS ps cuts every column but the last to its width, which
+# left comm at the first 16 characters of the path (for an emulator or an
+# Xcode installed under a long folder, only the start of that folder), so no
+# name check below matched and a run
+# started beside another session's emulator (2026-11-26). ucomm is cut to 16
+# characters as well ("qemu-system-x86_"); every name checked here fits or
+# is a prefix.
+PROCESS_COLUMNS = "pid=,ppid=,pgid=,ucomm=,args="
+# xcrun and the Xcode tools ask xcodebuild where a tool is or which SDKs
+# exist; such a query builds nothing and ends in a moment.
+XCODEBUILD_QUERY = re.compile(r"\s-(find|version|showsdks|checkFirstLaunchStatus|license)(\s|$)")
 
 
 class SafetyError(RuntimeError):
@@ -206,6 +218,8 @@ def foreign_work(processes, owned_group=None, owned_cache=None, idle_daemon=None
         # group. Their exact fixed cache path identifies this serialized build.
         if (owned_cache and name in ("swiftc", "swift-frontend") and owned_cache in args):
             continue
+        if name == "xcodebuild" and XCODEBUILD_QUERY.search(args):
+            continue
         if name in ("xcodebuild", "swiftc", "swift-frontend"):
             return "another compiler/build is running (pid " + pid + ")"
         if "org.gradle.launcher.daemon.bootstrap.GradleDaemon" in args:
@@ -241,7 +255,7 @@ def external_processes(processes, owned_group=None, owned_groups=None):
 
 
 def foreign_reason(owned_group=None, owned_cache=None, owned_groups=None):
-    processes = read(["/bin/ps", "-axo", "pid=,ppid=,pgid=,comm=,args="])
+    processes = read(["/bin/ps", "-axo", PROCESS_COLUMNS])
     return foreign_work(external_processes(processes, owned_group, owned_groups), owned_group, owned_cache,
                         idle_daemon=gradle_daemon_idle)
 
@@ -340,9 +354,20 @@ def options(argv, env):
     filters = ["-only-testing:" + target]
     destination = env.get("JERREADER_SIMULATOR_DESTINATION", "")
     android_scope = env.get("JERREADER_ANDROID_VALIDATION_SCOPE", "full")
-    if (android_scope not in ("full", "ui") or
+    if (android_scope not in ("full", "ui", "ruby") or
         ("JERREADER_ANDROID_VALIDATION_SCOPE" in env and mode != "android-test")):
-        raise SafetyError("Android validation scope must be full/ui and only applies to android-test")
+        raise SafetyError("Android validation scope must be full/ui/ruby and only applies to android-test")
+    # A real Japanese book with furigana for ReaderRealRubyBookTest: the
+    # developer's own DRM-free copy, kept outside the repository and pushed
+    # only into the disposable guest. android_device_validation.py reads it.
+    real_ruby = env.get("JERREADER_ANDROID_REAL_RUBY_EPUB", "")
+    if real_ruby:
+        book = Path(real_ruby)
+        if (mode != "android-test" or android_scope not in ("full", "ruby") or not book.is_absolute() or
+                book.suffix.lower() != ".epub" or not book.is_file() or
+                book.resolve().is_relative_to(ROOT.resolve())):
+            raise SafetyError("JERREADER_ANDROID_REAL_RUBY_EPUB must name an existing .epub outside the repository, "
+                              "for android-test with scope full or ruby")
     android_variant = env.get("JERREADER_ANDROID_PACKAGE_VARIANT", "debug")
     if (android_variant not in ("debug", "release") or
         ("JERREADER_ANDROID_PACKAGE_VARIANT" in env and mode != "android")):
@@ -512,7 +537,7 @@ class Supervisor:
             if self.opts["allow_external_activity"]:
                 self.owned_groups.update(owned_process_groups(process.pid))
             else:
-                external_processes(read(["/bin/ps", "-axo", "pid=,ppid=,pgid=,comm=,args="]),
+                external_processes(read(["/bin/ps", "-axo", PROCESS_COLUMNS]),
                                    process.pid, self.owned_groups)
         except SafetyError:
             pass  # Still clean up the process group(s) already known to be ours.
@@ -667,7 +692,13 @@ class Supervisor:
                                            "Jerreader/Data/Services/LibraryBackupPruner.swift",
                                            "Jerreader/Core/Models/LanguageCode.swift",
                                            learning + "ReadingCompanion.swift",
-                                           "Jerreader/Core/Services/ReadingLens.swift"], "test_parity_fixtures"))
+                                           "Jerreader/Core/Services/ReadingLens.swift",
+                                           "Jerreader/Core/Services/ReadingActions.swift",
+                                           learning + "ReadingProgressHints.swift"], "test_parity_fixtures"))
+        # Ruby-aware selection tiles: the reader's JavaScript runs in JavaScriptCore
+        # against shared/parity/selection_tiles.json, the same cases as Android.
+        suites.append(("selection-tiles", ["Jerreader/Features/Reader/ReaderSelectionTileScript.swift"],
+                       "test_selection_tiles"))
         sdk = read(["/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path"], self.env)
         out = ROOT / ".build/SafeHostTests"
         out.mkdir(parents=True, exist_ok=True)

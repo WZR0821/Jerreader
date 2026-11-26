@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OSLog
 @preconcurrency import ReadiumNavigator
 @preconcurrency import ReadiumShared
 import SwiftData
@@ -54,6 +55,18 @@ final class EPUBReaderViewModel {
 
     private(set) var translationConfiguration: TranslationSession.Configuration?
     private(set) var translationState: ReaderTranslationState = .idle
+    /// The translation so far while an AI model streams it (2.1.0). The card
+    /// shows it while `translationState` stays `.loading`, so the card's
+    /// phase, height animation and success haptic wait for the whole answer.
+    private(set) var streamingTranslation: ReaderStreamingText?
+    /// The translation card's AI bar (2.1.0).
+    let cardAI = ReaderCardAIModel()
+    /// 「第 N 次查 · 上次 MM-dd」 over a one-word card's translation (2.1.0 §8).
+    private(set) var currentLookupHint: String?
+    /// How often the one word of this card has been looked up, this card included.
+    private(set) var currentLookupCount = 0
+    /// 「本章还剩约 N 分钟」 under the progress row (2.1.0 §9); nil shows nothing.
+    private(set) var chapterTimeEstimate: String?
     private(set) var translationAnchorFrame: CGRect?
     private(set) var isSpeakingTranslationSource = false
     private(set) var speechRate: Double
@@ -152,6 +165,9 @@ final class EPUBReaderViewModel {
     @ObservationIgnored private var backendTranslationTask: Task<Void, Never>?
     @ObservationIgnored private var translationWatchdogTask: Task<Void, Never>?
     @ObservationIgnored private var translationWatchdogRequestID: UUID?
+    /// The deltas of the AI translation in flight, which keep its watchdog waiting.
+    @ObservationIgnored private var translationStreamActivity: (requestID: UUID, activity: AIStreamActivity)?
+    @ObservationIgnored private var translationThrottle: (requestID: UUID, throttle: AIPartialTextThrottle)?
     @ObservationIgnored private var inFlightTranslationRequestID: UUID?
     @ObservationIgnored private var translationRetryCooldownTask: Task<Void, Never>?
     @ObservationIgnored private var quickTranslationIndicatorAutoExitTask: Task<Void, Never>?
@@ -172,6 +188,21 @@ final class EPUBReaderViewModel {
     @ObservationIgnored private var translationRetryDeadlines:
         [ReaderTranslationRetryIdentity: ContinuousClock.Instant] = [:]
     @ObservationIgnored private var readingSessionStartedAt: Date?
+    /// One per translation card: a retry or another source language keeps
+    /// it, a new sentence or a closed card replaces it (2.1.0 §8).
+    @ObservationIgnored private var translationCardID = UUID()
+    @ObservationIgnored private var recordedLookupCardID: UUID?
+    /// The lookup key of the word `recordedLookupCardID`'s card counted,
+    /// once its lookup has been recorded.
+    @ObservationIgnored private var countedCardLookupKey: String?
+    /// The card's own dictionary lookup of its word, which 加入生词本 waits
+    /// for so the word is counted once.
+    @ObservationIgnored private var cardLookupTask: (cardID: UUID, task: Task<Void, Never>)?
+    /// The book's previous open, read before this open is recorded (2.1.0 §10).
+    private let previousOpenedAt: Date?
+    /// Where each reading-order resource starts in the book (2.1.0 §9).
+    @ObservationIgnored private var chapterStarts: [Double] = []
+    @ObservationIgnored private var chapterEstimateTask: Task<Void, Never>?
     @ObservationIgnored private var loadAttemptID: UUID?
     @ObservationIgnored private var publicationOpenTask: Task<Publication, Error>?
     @ObservationIgnored private var loadWatchdogTask: Task<Void, Never>?
@@ -198,6 +229,8 @@ final class EPUBReaderViewModel {
     ) {
         self.initialLocatorJSON = initialLocatorJSON
         self.book = book
+        // Read before this open's first saved location overwrites it.
+        previousOpenedAt = book.lastOpenedAt
         self.modelContext = modelContext
         self.speechService = speechService
         self.lexicalLookupService = lexicalLookupService
@@ -494,6 +527,18 @@ final class EPUBReaderViewModel {
                     )
                 publicationLayout = detectedLayout
                 book.readerDetectedPublicationLayout = detectedLayout.rawValue
+#if DEBUG
+                // The card-AI frames (2.1.0 §11) want the sample text in
+                // vertical columns too, and it has no vertical styles of
+                // its own: this launch reads it as a vertical publication
+                // in its original layout. The book's record keeps what was
+                // detected and its own 排版方向, so the next launch is as
+                // before.
+                if ProcessInfo.processInfo.arguments.contains("--jerreader-sample-vertical-ui-test") {
+                    publicationLayout = .verticalRTL
+                    textOrientation = .publication
+                }
+#endif
             }
 
             let controller: any PublicationReaderController
@@ -596,7 +641,7 @@ final class EPUBReaderViewModel {
             activePublicationService?.reassertBookFileMetadata()
             finishLoadAttempt(attemptID)
             loadState = .ready
-            companion.bookOpened(atProgress: progress)
+            companion.bookOpened(atProgress: progress, lastOpenedAt: previousOpenedAt)
             if isReadingSceneActive {
                 resumeReadingSession()
             }
@@ -604,6 +649,7 @@ final class EPUBReaderViewModel {
             // so they must never delay the first paint.
             Task { @MainActor [weak self] in
                 await self?.resolvePDFPageCount()
+                await self?.resolveChapterBoundaries()
                 await self?.resolveOutlineProgressions()
                 await self?.repairMeaninglessOutlineTitles()
             }
@@ -1376,6 +1422,7 @@ final class EPUBReaderViewModel {
         cancelTranslationWatchdog()
         backendTranslationTask?.cancel()
         backendTranslationTask = nil
+        beginNewTranslationCard()
 
         let request = ReaderTranslationRequest(
             id: UUID(),
@@ -1484,6 +1531,8 @@ final class EPUBReaderViewModel {
         cancelTranslationWatchdog()
         backendTranslationTask?.cancel()
         backendTranslationTask = nil
+        // The AI answers went with the old translation.
+        cardAI.reset()
         guard let resolvedLanguage else {
             translationConfiguration = nil
             translationState = .failure(request: request, error: .unsupportedLanguage)
@@ -1538,6 +1587,8 @@ final class EPUBReaderViewModel {
         cancelTranslationWatchdog()
         backendTranslationTask?.cancel()
         backendTranslationTask = nil
+        // The AI answers went with the old translation.
+        cardAI.reset()
         isCurrentTranslationFavorite = false
         isCurrentSelectionInVocabulary = false
         translationState = .loading(request)
@@ -1556,6 +1607,7 @@ final class EPUBReaderViewModel {
             if inFlightTranslationRequestID == requestID {
                 inFlightTranslationRequestID = nil
             }
+            endTranslationStream(for: requestID)
         }
 
         do {
@@ -1580,6 +1632,7 @@ final class EPUBReaderViewModel {
             )
             refreshFavoriteState(for: result, request: request)
             refreshVocabularyState(for: request)
+            recordCardLookupIfNeeded(for: request)
             if !didCacheResult {
                 readerAlertMessage = ReaderTranslationDisplayError.persistenceFailed.message
             }
@@ -1637,6 +1690,7 @@ final class EPUBReaderViewModel {
         vocabularyLookupTask?.cancel()
         isAddingCurrentSelectionToVocabulary = true
         let requestID = request.id
+        let cardID = translationCardID
         let context = request.contextText ?? request.sourceText
         vocabularyLookupTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -1647,9 +1701,31 @@ final class EPUBReaderViewModel {
                 self.vocabularyLookupTask = nil
             }
 
+            // The card counts its word once (2.1.0 §8). Its own lookup may
+            // still be on its way: wait for it, and if it counted the word,
+            // only star that record, as Android does.
+            if let pending = self.cardLookupTask, pending.cardID == cardID {
+                await pending.task.value
+            }
+            guard !Task.isCancelled,
+                  self.translationState.request?.id == requestID
+            else { return }
+            if let counted = self.cardCountedLookup {
+                do {
+                    if try WordLookupStore.setFavorite(true, forKey: counted.key, in: self.modelContext) {
+                        self.isCurrentSelectionInVocabulary = true
+                        self.readerAlertMessage = "“\(term)”已加入生词本。"
+                        return
+                    }
+                } catch {
+                    self.readerAlertMessage = "暂时无法加入生词本，请稍后重试。"
+                    return
+                }
+            }
+
             let explanation: WordExplanation
             do {
-                explanation = try await lexicalLookupService.lookup(
+                explanation = try await self.lexicalLookupService.lookup(
                     word: term,
                     sentenceContext: context,
                     language: sourceLanguage
@@ -1670,26 +1746,23 @@ final class EPUBReaderViewModel {
             }
 
             guard !Task.isCancelled,
-                  translationState.request?.id == requestID
+                  self.translationState.request?.id == requestID
             else { return }
             do {
-                let record = try WordLookupStore.record(
-                    explanation,
-                    sourceBookID: book.id,
-                    sourceBookTitle: book.title,
-                    in: modelContext
-                )
+                // The card's own lookup counted nothing: this is the
+                // card's one lookup, and its 查词 does not count it again.
+                let record = try self.recordCardLookup(explanation, cardID: cardID)
                 if !record.isFavorite {
                     try WordLookupStore.setFavorite(
                         true,
                         for: record,
-                        in: modelContext
+                        in: self.modelContext
                     )
                 }
-                isCurrentSelectionInVocabulary = true
-                readerAlertMessage = "“\(term)”已加入生词本。"
+                self.isCurrentSelectionInVocabulary = true
+                self.readerAlertMessage = "“\(term)”已加入生词本。"
             } catch {
-                readerAlertMessage = "暂时无法加入生词本，请稍后重试。"
+                self.readerAlertMessage = "暂时无法加入生词本，请稍后重试。"
             }
         }
     }
@@ -1920,6 +1993,8 @@ final class EPUBReaderViewModel {
         backendTranslationTask = nil
         translationConfiguration = nil
         inFlightTranslationRequestID = nil
+        // Pieces of the closed card's answers must not reach the next card.
+        beginNewTranslationCard()
         translationState = .idle
         translationAnchorFrame = nil
         isCurrentTranslationFavorite = false
@@ -2017,6 +2092,8 @@ final class EPUBReaderViewModel {
         isClosed = true
         quickTranslationIndicatorDidDisappear()
         cancelChromeAutoHide()
+        chapterEstimateTask?.cancel()
+        chapterEstimateTask = nil
         loadAttemptID = nil
         publicationOpenTask?.cancel()
         publicationOpenTask = nil
@@ -2060,6 +2137,7 @@ final class EPUBReaderViewModel {
             bookTitle: book.title
         )
         progress = readingProgress(at: locator, fallback: 0)
+        refreshChapterTimeEstimate()
         // Reading on into the next chapter offers its 90-second loop through
         // the AI button's dot; nothing pops up over the page.
         if let previousOutlineIndex,
@@ -2312,8 +2390,17 @@ final class EPUBReaderViewModel {
         // the Mock so the run needs neither a network nor a language pack.
         if ProcessInfo.processInfo.arguments.contains("--jerreader-mock-translation-ui-test") {
             translationConfiguration = nil
+            // The AI-bar check streams the translation too, and marks where
+            // the selection is so it can see the card keep clear of it.
+            let streams = Self.isCardAIUITest
+            if streams, let frame = request.selectionFrame {
+                (controller as? EPUBReaderViewController)?
+                    .installTranslationUITestSelection(frameInWindow: frame)
+            }
             backendTranslationTask = Task { [weak self] in
-                await self?.performPendingTranslation(using: MockTranslationService())
+                await self?.performPendingTranslation(
+                    using: MockTranslationService(streamsPartialText: streams)
+                )
             }
             return
         }
@@ -2344,6 +2431,7 @@ final class EPUBReaderViewModel {
             )
             refreshFavoriteState(for: result, request: request)
             refreshVocabularyState(for: request)
+            recordCardLookupIfNeeded(for: request)
             return
         }
 
@@ -2413,8 +2501,15 @@ final class EPUBReaderViewModel {
         cancelTranslationWatchdog()
         let requestID = request.id
         translationWatchdogRequestID = requestID
+        // Set before either task runs, so the request's first delta finds it.
+        let startedAt = ContinuousClock.now
+        let activity = AIStreamActivity(now: startedAt)
+        if request.provider != .apple {
+            translationStreamActivity = (requestID, activity)
+        }
         translationWatchdogTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            var timeoutError = ReaderTranslationDisplayError.timedOut
 
             do {
                 if request.provider == .apple {
@@ -2446,14 +2541,24 @@ final class EPUBReaderViewModel {
                     )
                     return
                 } else {
-                    try await Task.sleep(for: translationTiming.backendRequestTimeout)
+                    // A streamed answer gets the same limit again after each
+                    // delta, up to the total cap (2.1.0).
+                    let total = translationTiming.streamingTotalTimeout
+                    try await activity.waitUntilTimedOut(
+                        idle: translationTiming.backendRequestTimeout,
+                        total: total
+                    )
+                    // Still being written at the cap, rather than gone quiet.
+                    if ContinuousClock.now >= startedAt + total {
+                        timeoutError = .streamTimedOut
+                    }
                 }
             } catch {
                 return
             }
 
             guard isLoadingTranslation(requestID) else { return }
-            finishTranslationTimeout(for: request)
+            finishTranslationTimeout(for: request, error: timeoutError)
         }
     }
 
@@ -2589,7 +2694,8 @@ final class EPUBReaderViewModel {
             identifier: String,
             version: String
         )? {
-            guard let configuration = translationSettings.directAPIConfiguration else {
+            // An AI feature: a signed-in plan counts (2.1.0 §7).
+            guard let configuration = translationSettings.aiFeatureConfiguration else {
                 return nil
             }
             let service = DirectAITranslationService(configuration: configuration)
@@ -2743,12 +2849,24 @@ final class EPUBReaderViewModel {
         var didRetry = false
         while true {
             do {
-                let rawResult = try await service.translate(
-                    text: request.sourceText,
-                    context: request.contextText,
-                    sourceLanguage: request.sourceLanguage,
-                    targetLanguage: request.targetLanguage
-                )
+                let rawResult: TranslationResult
+                if let streaming = service as? any StreamingTranslationService {
+                    // Each attempt starts its partial text afresh.
+                    rawResult = try await streaming.translate(
+                        text: request.sourceText,
+                        context: request.contextText,
+                        sourceLanguage: request.sourceLanguage,
+                        targetLanguage: request.targetLanguage,
+                        onPartialText: beginTranslationStream(for: request.id)
+                    )
+                } else {
+                    rawResult = try await service.translate(
+                        text: request.sourceText,
+                        context: request.contextText,
+                        sourceLanguage: request.sourceLanguage,
+                        targetLanguage: request.targetLanguage
+                    )
+                }
                 guard let result = TranslationOutputPolicy.validated(rawResult) else {
                     throw ServiceError.resultNotFound
                 }
@@ -2764,6 +2882,212 @@ final class EPUBReaderViewModel {
                 didRetry = true
                 try await Task.sleep(for: .milliseconds(450))
             }
+        }
+    }
+
+    /// The handler a streamed translation reports to (2.1.0). Text reaches
+    /// the card at most every 50 ms and only while the card still waits for
+    /// this request; every delta also tells the watchdog the model is alive.
+    private func beginTranslationStream(for requestID: UUID) -> AIPartialTextHandler {
+        translationThrottle?.throttle.cancel()
+        if streamingTranslation?.requestID == requestID {
+            streamingTranslation = nil
+        }
+        let throttle = AIPartialTextThrottle { [weak self] text in
+            guard let self, self.isLoadingTranslation(requestID) else { return }
+            self.streamingTranslation = ReaderStreamingText(requestID: requestID, text: text)
+        }
+        translationThrottle = (requestID, throttle)
+        let activity = translationStreamActivity?.requestID == requestID
+            ? translationStreamActivity?.activity
+            : nil
+        return { text in
+            activity?.touch()
+            await throttle.submit(text)
+        }
+    }
+
+    /// Drops the partial text of a request that has ended, whichever way.
+    private func endTranslationStream(for requestID: UUID) {
+        if translationThrottle?.requestID == requestID {
+            translationThrottle?.throttle.cancel()
+            translationThrottle = nil
+        }
+        if streamingTranslation?.requestID == requestID {
+            streamingTranslation = nil
+        }
+        if translationStreamActivity?.requestID == requestID {
+            translationStreamActivity = nil
+        }
+    }
+
+    /// A new sentence or a closed card: the AI answers, the lookup count and
+    /// any partial text belonged to the card before (2.1.0).
+    private func beginNewTranslationCard() {
+        translationCardID = UUID()
+        currentLookupHint = nil
+        currentLookupCount = 0
+        cardAI.reset()
+        translationThrottle?.throttle.cancel()
+        translationThrottle = nil
+        translationStreamActivity = nil
+        streamingTranslation = nil
+    }
+
+    /// The word the card on screen has counted, for the lookup page its 查词
+    /// opens: that page does not count it again (2.1.0 §8). Nil for a short
+    /// tap's lookup, which has no card.
+    var cardCountedLookup: CardCountedLookup? {
+        guard shortTapLookup == nil,
+              translationState.request != nil,
+              recordedLookupCardID == translationCardID,
+              let key = countedCardLookupKey
+        else { return nil }
+        return CardCountedLookup(key: key, hint: currentLookupHint)
+    }
+
+    /// A card for one word counts one lookup of it, once per card, as the
+    /// lookup page does (2.1.0 §8); a retry or a redraw does not count again.
+    /// As Android's `recordTranslatedWord`, the reader's dictionary looks the
+    /// word up first, without its sentence, so the card counts it under the
+    /// key 查词 uses (the lemma when the dictionary knows it). A lookup that
+    /// fails counts nothing.
+    private func recordCardLookupIfNeeded(for request: ReaderTranslationRequest) {
+        guard recordedLookupCardID != translationCardID else { return }
+        guard let language = request.sourceLanguage,
+              let term = ReaderVocabularyCandidate.term(
+                  from: request.sourceText,
+                  language: language
+              )
+        else {
+            currentLookupHint = nil
+            currentLookupCount = 0
+            return
+        }
+        let cardID = translationCardID
+        recordedLookupCardID = cardID
+        countedCardLookupKey = nil
+        let service = lexicalLookupService
+        // Not cancelled by the next card: the lookup counts either way, and
+        // only the card that asked shows the count.
+        let task = Task { [weak self] in
+            let explanation: WordExplanation
+            do {
+                explanation = try await service.lookup(
+                    word: term,
+                    sentenceContext: nil,
+                    language: language
+                )
+            } catch {
+                Self.lookupLog.notice("A translation card's word lookup failed; nothing was counted.")
+                return
+            }
+            guard let self, !self.isClosed else { return }
+            do {
+                try self.recordCardLookup(explanation, cardID: cardID)
+            } catch {
+                Self.lookupLog.notice("A translation card's word lookup could not be saved.")
+            }
+        }
+        cardLookupTask = (cardID, task)
+    }
+
+    /// Records the card's lookup under the dictionary's key, reading 上次
+    /// first. While that card is still on screen it shows 第 N 次查, and its
+    /// 查词 does not count the word again.
+    @discardableResult
+    private func recordCardLookup(_ explanation: WordExplanation, cardID: UUID) throws -> WordLookupRecord {
+        let previous = WordLookupStore.previousLookup(for: explanation, in: modelContext)
+        let record = try WordLookupStore.record(
+            explanation,
+            sourceBookID: book.id,
+            sourceBookTitle: book.title,
+            in: modelContext
+        )
+        guard translationCardID == cardID, recordedLookupCardID == cardID else { return record }
+        countedCardLookupKey = WordLookupRecord.makeLookupKey(for: explanation)
+        currentLookupCount = record.lookupCount
+        currentLookupHint = LookupHintPolicy.hint(
+            lookupCount: record.lookupCount,
+            previousLookupAt: previous?.date
+        )
+        return record
+    }
+
+    private static let lookupLog = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "Jerreader",
+        category: "WordLookup"
+    )
+
+    /// The AI-bar UI test: the Mock streams its answers and stands in for an
+    /// AI model, so the chips run without any provider set up.
+    static var isCardAIUITest: Bool {
+#if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--jerreader-card-ai-ui-test")
+#else
+        false
+#endif
+    }
+
+    /// Where each reading-order resource starts in the book, for
+    /// 本章还剩约 N 分钟 (2.1.0 §9, EPUB only); the estimate then follows the
+    /// reading time every 30 seconds.
+    private func resolveChapterBoundaries() async {
+        guard isReflowableBook, let publication, !isClosed else { return }
+        guard let positions = await publication.positionsByReadingOrder().getOrNil(),
+              !isClosed
+        else { return }
+        var starts: [Double] = []
+        for (index, resourcePositions) in positions.enumerated() {
+            guard let first = resourcePositions.first else { continue }
+            starts.append(
+                first.locations.totalProgression
+                    ?? Double(index) / Double(positions.count)
+            )
+        }
+        chapterStarts = starts.sorted()
+        refreshChapterTimeEstimate()
+        chapterEstimateTask?.cancel()
+        chapterEstimateTask = Task { @MainActor [weak self] in
+            while true {
+                do {
+                    try await Task.sleep(for: .seconds(30))
+                } catch {
+                    return
+                }
+                guard let self, !self.isClosed else { return }
+                self.refreshChapterTimeEstimate()
+            }
+        }
+    }
+
+    /// 本章还剩约 N 分钟 from this reader's pace so far; also keeps where the
+    /// chapter ends for the shelf's 继续阅读 card.
+    private func refreshChapterTimeEstimate() {
+        guard isReflowableBook, !chapterStarts.isEmpty else {
+            if chapterTimeEstimate != nil { chapterTimeEstimate = nil }
+            return
+        }
+        let position = progress
+        let chapterEnd = chapterStarts.first { $0 > position + 0.000_001 } ?? 1.0
+        var readingSeconds = book.totalReadingSeconds
+        if let startedAt = readingSessionStartedAt {
+            let elapsed = Date().timeIntervalSince(startedAt)
+            if elapsed.isFinite, elapsed > 0 {
+                readingSeconds += min(elapsed, 6 * 60 * 60)
+            }
+        }
+        let text = ChapterTimeEstimatePolicy.text(
+            readingSeconds: readingSeconds,
+            progression: position,
+            chapterEnd: chapterEnd
+        )
+        if chapterTimeEstimate != text {
+            chapterTimeEstimate = text
+        }
+        let key = ChapterTimeEstimatePolicy.chapterEndKey(bookID: book.id)
+        if UserDefaults.standard.object(forKey: key) as? Double != chapterEnd {
+            UserDefaults.standard.set(chapterEnd, forKey: key)
         }
     }
 
@@ -2967,6 +3291,590 @@ final class EPUBReaderViewModel {
     private static func message(for error: Error) -> String {
         (error as? LocalizedError)?.errorDescription
             ?? "操作没有完成，请稍后重试。"
+    }
+}
+
+// MARK: - Translation card AI (2.1.0 §4–§7)
+
+extension EPUBReaderViewModel {
+    /// The models a chip asks: the explanation service for 结构, 读懂 and 指代,
+    /// the action service for 直译 and 追问, and the name the badge shows.
+    private struct CardAIProvider {
+        let explanation: any ContextExplanationService
+        let action: any AIActionService
+        let identifier: String
+        let version: String
+        let modelName: String
+    }
+
+    /// The sentence and translation the chips answer about; nil unless the
+    /// card shows a translation. Another card, or a retry that gives another
+    /// translation, starts the chips afresh, as on Android.
+    var cardAIKey: String? {
+        guard case let .success(request, result, _) = translationState else { return nil }
+        return [
+            translationCardID.uuidString,
+            request.sourceText,
+            request.contextText ?? "",
+            result.translatedText,
+            result.sourceLanguage.rawValue,
+            request.targetLanguage.rawValue,
+        ].joined(separator: "\u{1F}")
+    }
+
+    var cardAIActions: [AIReadingAction] {
+        AIReadingActionPolicy.actions(for: cardAISourceLanguage)
+    }
+
+    var cardAIPresets: [String] {
+        AIReadingActionPolicy.presets(for: cardAISourceLanguage)
+    }
+
+    /// Whether an AI model is set up (2.1.0 §7); the chips show either way,
+    /// and without one an AI chip opens 先接入一个 AI 模型.
+    var isCardAIConfigured: Bool {
+        Self.isCardAIUITest || Self.hasAIFeatureProvider(translationSettings)
+    }
+
+    /// Whether the AI features have a model to call (2.1.0 §7): an AI
+    /// provider that can be used, a signed-in ChatGPT plan, or the AI proxy.
+    /// Which service translates does not enter into it.
+    static func hasAIFeatureProvider(_ settings: TranslationSettingsStore) -> Bool {
+        settings.aiFeatureConfiguration != nil || settings.backendConfiguration != nil
+    }
+
+    /// Why 存为笔记 is greyed: the selection has no anchor (across pages,
+    /// or a PDF without one).
+    var cardAINoteUnavailableReason: String? {
+        canAnnotateCurrentSelection ? nil : ReaderCardAICopy.noteUnavailable
+    }
+
+    /// A chip's result area is open: the card may then take up to half the
+    /// screen (2.1.0 §4).
+    var isCardAIResultShowing: Bool {
+        guard cardAI.isShowing(card: cardAIKey) else { return false }
+        return cardAI.selectedAction?.resultTitle != nil
+    }
+
+    /// The solid 加入生词本 of a one-word card, from its third lookup (2.1.0 §8).
+    var showsPrimaryAddToVocabulary: Bool {
+        guard case .success = translationState else { return false }
+        return canAddCurrentSelectionToVocabulary
+            && !isCurrentSelectionInVocabulary
+            && LookupHintPolicy.addToVocabularyIsPrimary(lookupCount: currentLookupCount)
+    }
+
+    /// The badge under the translation (2.1.0 §6): the model that wrote it,
+    /// or 「Apple 翻译」. The offline Mock has none, except in the AI-bar UI
+    /// test, where it stands in for a model.
+    var translationAnswerSource: ReaderAIAnswerSource? {
+        guard case let .success(request, _, source) = translationState else { return nil }
+        let provider: TranslationProviderChoice?
+        switch source {
+        case .appleTranslation:
+            provider = .apple
+        case .directAPI:
+            provider = .directAPI
+        case .backendProxy:
+            provider = .backendProxy
+        case .cache:
+            provider = request.provider
+        case .mock:
+            provider = nil
+        }
+        let model: String?
+        switch provider {
+        case .apple?:
+            return ReaderAIAnswerSource(
+                modelName: "Apple 翻译",
+                isAIModel: false,
+                sentSource: request.sourceText,
+                sentContext: nil
+            )
+        case .directAPI?:
+            model = cardAIDirectModelName
+        case .backendProxy?:
+            model = cardAIBackendModelName
+        case nil:
+            model = Self.isCardAIUITest ? "Mock" : nil
+        }
+        guard let model else { return nil }
+        return ReaderAIAnswerSource(
+            modelName: model,
+            isAIModel: true,
+            sentSource: request.sourceText,
+            sentContext: request.contextText
+        )
+    }
+
+    /// A chip: 查词 opens the lookup sheet; the open chip closes its answer;
+    /// another opens its answer, asking the model unless it has answered on
+    /// this card already. 追问 only opens its conversation.
+    func selectCardAIAction(_ action: AIReadingAction) {
+        guard action.needsAI else {
+            isShowingContextualLookup = true
+            return
+        }
+        guard let key = cardAIKey else { return }
+        cardAI.adopt(key)
+        if cardAI.selectedAction == action {
+            cardAI.collapse()
+            return
+        }
+        guard isCardAIConfigured, resolvedCardAIProvider() != nil else {
+            cardAI.requestSetup(for: action)
+            return
+        }
+        cardAI.open(action)
+        guard action != .followUp, !cardAI.hasCompletedAnswer(for: action) else { return }
+        startCardAIAnswer(action)
+    }
+
+    /// Asks `question` about the card's sentence, after the questions answered.
+    func sendCardAIFollowUp(_ question: String) {
+        let asked = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !asked.isEmpty, let key = cardAIKey else { return }
+        cardAI.adopt(key)
+        guard case let .success(request, result, _) = translationState,
+              let provider = resolvedCardAIProvider()
+        else {
+            cardAI.requestSetup(for: .followUp)
+            return
+        }
+        let material = cardAIMaterial(request: request, result: result)
+        let requestID = UUID()
+        cardAI.beginFollowUp(
+            question: asked,
+            requestID: requestID,
+            source: cardAIAnswerSource(provider, material: material)
+        )
+        startCardAIFollowUp(
+            requestID: requestID,
+            provider: provider,
+            material: material,
+            translation: result.translatedText
+        )
+    }
+
+    /// 停止: the answer keeps the text it has and can be asked again.
+    func stopCardAI() {
+        cardAI.stop()
+    }
+
+    /// 重试 of the open chip, or of the newest question when it failed.
+    func retryCardAI() {
+        guard cardAI.isShowing(card: cardAIKey),
+              let selected = cardAI.selectedAction
+        else { return }
+        switch selected {
+        case .lookup:
+            return
+        case .followUp:
+            guard case let .success(request, result, _) = translationState,
+                  let provider = resolvedCardAIProvider()
+            else { return }
+            let material = cardAIMaterial(request: request, result: result)
+            let requestID = UUID()
+            guard cardAI.restartLastFollowUp(
+                requestID: requestID,
+                source: cardAIAnswerSource(provider, material: material)
+            ) else { return }
+            startCardAIFollowUp(
+                requestID: requestID,
+                provider: provider,
+                material: material,
+                translation: result.translatedText
+            )
+        case .structure, .comprehension, .reference, .literal:
+            cardAI.open(selected)
+            startCardAIAnswer(selected)
+        }
+    }
+
+    /// 先接入一个 AI 模型 closed: the chip that opened it runs once a model is set up.
+    func cardAISetupDismissed() {
+        guard let action = cardAI.takePendingAction(),
+              isCardAIConfigured,
+              cardAIKey != nil
+        else { return }
+        selectCardAIAction(action)
+    }
+
+    /// 不再显示这些按钮: hides the whole bar until 阅读设置 → 翻译与 AI turns it on.
+    func hideCardAIBar() {
+        UserDefaults.standard.set(true, forKey: ReaderInterfaceDefaults.aiActionBarHiddenKey)
+        cardAI.clearPendingAction()
+        cardAI.collapse()
+        cardAI.isShowingSetup = false
+        cardAI.showToast(ReaderCardAICopy.buttonsHidden, duration: .seconds(3))
+    }
+
+    /// 存为笔记 (2.1.0 §6): adds the result to the sentence's note, or makes
+    /// a highlight in the default colour with it as the note.
+    func saveCardAIResultAsNote(title: String, body: String) {
+        guard let draft = annotationDraftForCurrentSelection() else {
+            readerAlertMessage = ReadingAnnotationError.invalidSelection.errorDescription
+            return
+        }
+        do {
+            try annotationStore.appendNote(
+                book: book,
+                locatorJSON: draft.locatorJSON,
+                anchorJSON: draft.anchorJSON,
+                selectedText: draft.selectedText,
+                title: title,
+                body: body,
+                color: draft.color,
+                chapterTitle: draft.chapterTitle,
+                progress: draft.progress
+            )
+            refreshAnnotations()
+            cardAI.showToast(ReaderCardAICopy.noteSaved)
+        } catch let error as ReadingAnnotationError {
+            readerAlertMessage = error.errorDescription
+        } catch {
+            readerAlertMessage = ReaderCardAICopy.noteFailed
+        }
+    }
+
+    /// 展开看全文: the explanation page for 结构, 读懂 and 指代, which shows
+    /// the answer as its own; a sheet with the whole text for 直译.
+    func showCardAIFullText(for action: AIReadingAction) {
+        guard let answer = cardAI.answers[action],
+              let text = answer.phase.completedText
+        else { return }
+        if let explanation = answer.explanation {
+            contextExplanationTask?.cancel()
+            contextExplanationTask = nil
+            cancelContextExplanationWatchdog()
+            contextExplanationState = .success(
+                request: explanation.request,
+                result: explanation.result
+            )
+            isShowingContextExplanation = true
+            return
+        }
+        cardAI.presentedFullText = ReaderCardAIFullText(
+            title: action.resultTitle ?? action.title,
+            text: text
+        )
+    }
+
+    /// The card's text for a failed AI answer, and whether 重试 can help.
+    /// Nil for a cancellation, which shows nothing.
+    static func cardAIFailure(for error: Error) -> (message: String, canRetry: Bool)? {
+        if error is CancellationError { return nil }
+        guard let serviceError = error as? ServiceError else {
+            return (ReaderCardAICopy.unavailable, true)
+        }
+        switch serviceError {
+        case .planUsageLimitReached:
+            return (ReaderContextExplanationError.planUsageLimit.message, false)
+        case .planSignInRequired:
+            return (ReaderContextExplanationError.planSignInRequired.message, false)
+        case let .planRequestRejected(message):
+            let reason = message.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (reason.isEmpty ? ReaderCardAICopy.unavailable : reason, false)
+        case .authenticationFailed:
+            return (ReaderContextExplanationError.authenticationFailed.message, true)
+        case .invalidConfiguration:
+            return (serviceError.errorDescription ?? ReaderCardAICopy.unavailable, true)
+        case .emptyText, .textTooLong, .unsupportedLanguage:
+            return (serviceError.errorDescription ?? ReaderCardAICopy.unavailable, false)
+        case .resultNotFound, .temporarilyUnavailable, .translationUnavailable,
+             .languageDownloadDeclined, .voiceUnavailable:
+            return (ReaderCardAICopy.unavailable, true)
+        }
+    }
+
+    /// The language the chips are offered for: the one the translation
+    /// detected, as Android's card takes it.
+    private var cardAISourceLanguage: LanguageCode? {
+        switch translationState {
+        case let .success(_, result, _):
+            return result.sourceLanguage
+        case let .loading(request), let .failure(request, _):
+            return request.sourceLanguage
+        case .idle:
+            return nil
+        }
+    }
+
+    /// The model that translates when the AI provider does.
+    private var cardAIDirectModelName: String? {
+        translationSettings.directAPIConfiguration.map(cardAIModelName(of:))
+    }
+
+    /// A plan model by the name the account gives it, others by their id.
+    private func cardAIModelName(of configuration: DirectAITranslationConfiguration) -> String {
+        configuration.provider.usesAccountSignIn
+            ? translationSettings.chatGPTPlanModelName(configuration.model)
+            : configuration.model
+    }
+
+    private var cardAIBackendModelName: String? {
+        guard let configuration = translationSettings.backendConfiguration else { return nil }
+        let model = configuration.model?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return model.isEmpty ? "AI 代理" : model
+    }
+
+    /// The AI model in use, in the order the translation service prefers;
+    /// with Apple translating, the direct model first, as for the
+    /// sentence-structure analysis.
+    private func resolvedCardAIProvider() -> CardAIProvider? {
+#if DEBUG
+        if Self.isCardAIUITest {
+            let mock = MockTranslationService(streamsPartialText: true, pieceDelay: .milliseconds(700))
+            return CardAIProvider(
+                explanation: mock,
+                action: mock,
+                identifier: "mock-explanation",
+                version: "1.0",
+                modelName: "Mock"
+            )
+        }
+#endif
+        func direct() -> CardAIProvider? {
+            // A signed-in plan serves the AI buttons even while another AI
+            // provider is in use without a key (2.1.0 §7).
+            guard let configuration = translationSettings.aiFeatureConfiguration else { return nil }
+            let service = DirectAITranslationService(configuration: configuration)
+            return CardAIProvider(
+                explanation: service,
+                action: service,
+                identifier: service.providerIdentifier,
+                version: service.providerVersion,
+                modelName: cardAIModelName(of: configuration)
+            )
+        }
+
+        func backend() -> CardAIProvider? {
+            guard let configuration = translationSettings.backendConfiguration else { return nil }
+            let made = backendTranslationServiceFactory(configuration)
+            let fallback = BackendTranslationService(configuration: configuration)
+            return CardAIProvider(
+                explanation: (made as? any ContextExplanationService) ?? fallback,
+                action: (made as? any AIActionService) ?? fallback,
+                identifier: BackendTranslationService.providerIdentifier,
+                version: BackendTranslationService.providerVersion(for: configuration),
+                modelName: cardAIBackendModelName ?? "AI 代理"
+            )
+        }
+
+        switch translationSettings.provider {
+        case .backendProxy:
+            return backend() ?? direct()
+        case .directAPI, .apple:
+            return direct() ?? backend()
+        }
+    }
+
+    /// What every chip sends: the sentence and its context as the
+    /// explanation page prepares them.
+    private func cardAIMaterial(
+        request: ReaderTranslationRequest,
+        result: TranslationResult
+    ) -> ContextExplanationRequest {
+        ContextExplanationInputPolicy.prepared(
+            ContextExplanationRequest(
+                focusedText: request.sourceText,
+                contextText: request.contextText,
+                sourceLanguage: result.sourceLanguage,
+                responseLanguage: request.targetLanguage
+            )
+        )
+    }
+
+    private func cardAIAnswerSource(
+        _ provider: CardAIProvider,
+        material: ContextExplanationRequest
+    ) -> ReaderAIAnswerSource {
+        ReaderAIAnswerSource(
+            modelName: provider.modelName,
+            isAIModel: true,
+            sentSource: material.focusedText,
+            sentContext: material.contextText
+        )
+    }
+
+    /// Asks the model for the answer of a chip. 结构, 读懂 and 指代 share the
+    /// explanation page's cache, which keeps only whole, checked answers.
+    private func startCardAIAnswer(_ action: AIReadingAction) {
+        guard case let .success(request, result, _) = translationState,
+              let provider = resolvedCardAIProvider()
+        else { return }
+        let material = cardAIMaterial(request: request, result: result)
+        let requestID = UUID()
+        cardAI.begin(
+            action,
+            requestID: requestID,
+            source: cardAIAnswerSource(provider, material: material)
+        )
+
+        guard action.usesExplanationService else {
+            let actionRequest = AIActionRequest.literal(
+                source: material.focusedText,
+                translation: result.translatedText,
+                context: material.contextText,
+                sourceLanguage: material.sourceLanguage,
+                responseLanguage: material.responseLanguage
+            )
+            let service = provider.action
+            runCardAIRequest(requestID) { onPartialText in
+                let completion = try await service.respond(to: actionRequest, onPartialText: onPartialText)
+                guard let text = TranslationOutputPolicy.displayText(completion.text) else {
+                    throw ServiceError.resultNotFound
+                }
+                return (text, nil)
+            }
+            return
+        }
+
+        let lens = action.lensMode.map { mode in
+            ReadingLensOptions(
+                mode: mode,
+                companionMode: companion.mode,
+                assist: AdaptiveReadingAssistPolicy.resolve(
+                    readingSignals(),
+                    mode: companion.mode,
+                    bookID: companion.bookID
+                )
+            )
+        }
+        let explanationRequest = ReaderContextExplanationRequest(
+            id: requestID,
+            focusedText: material.focusedText,
+            contextText: material.contextText,
+            sourceLanguage: material.sourceLanguage,
+            responseLanguage: material.responseLanguage,
+            providerIdentifier: provider.identifier,
+            providerVersion: provider.version,
+            lens: lens
+        )
+        let cacheKey = contextExplanationCacheKey(for: explanationRequest)
+        if let cached = contextExplanationCache[cacheKey] {
+            cardAI.complete(
+                requestID: requestID,
+                text: cached.explanation,
+                explanation: ReaderCardAIExplanation(request: explanationRequest, result: cached)
+            )
+            return
+        }
+        let serviceRequest = ContextExplanationRequest(
+            focusedText: explanationRequest.focusedText,
+            contextText: explanationRequest.contextText,
+            sourceLanguage: explanationRequest.sourceLanguage,
+            responseLanguage: explanationRequest.responseLanguage,
+            lens: lens
+        )
+        let service = provider.explanation
+        runCardAIRequest(requestID) { [weak self] onPartialText in
+            let raw: ContextExplanationResult
+            if let streaming = service as? any StreamingContextExplanationService {
+                raw = try await streaming.explain(serviceRequest, onPartialText: onPartialText)
+            } else {
+                raw = try await service.explain(serviceRequest)
+            }
+            guard let validated = ContextExplanationOutputPolicy.validated(raw) else {
+                throw ServiceError.resultNotFound
+            }
+            try Task.checkCancellation()
+            self?.contextExplanationCache[cacheKey] = validated
+            return (
+                validated.explanation,
+                ReaderCardAIExplanation(request: explanationRequest, result: validated)
+            )
+        }
+    }
+
+    /// The newest question, with the answered ones before it as the conversation.
+    private func startCardAIFollowUp(
+        requestID: UUID,
+        provider: CardAIProvider,
+        material: ContextExplanationRequest,
+        translation: String
+    ) {
+        let actionRequest = AIActionRequest.followUp(
+            source: material.focusedText,
+            translation: translation,
+            context: material.contextText,
+            sourceLanguage: material.sourceLanguage,
+            responseLanguage: material.responseLanguage,
+            turns: cardAI.followUpTurns()
+        )
+        let service = provider.action
+        runCardAIRequest(requestID) { onPartialText in
+            let completion = try await service.respond(to: actionRequest, onPartialText: onPartialText)
+            guard let text = TranslationOutputPolicy.displayText(completion.text) else {
+                throw ServiceError.resultNotFound
+            }
+            return (text, nil)
+        }
+    }
+
+    /// Runs one AI answer of the card. Its text so far reaches the card at
+    /// most every 50 ms and only while it is still the request in flight;
+    /// every delta tells the watchdog the model is alive. After 70 seconds
+    /// without one, or 3 minutes in all, the answer fails with its text so far.
+    private func runCardAIRequest(
+        _ requestID: UUID,
+        work: @escaping @MainActor @Sendable (
+            @escaping AIPartialTextHandler
+        ) async throws -> (text: String, explanation: ReaderCardAIExplanation?)
+    ) {
+        let cardAI = self.cardAI
+        let startedAt = ContinuousClock.now
+        let activity = AIStreamActivity(now: startedAt)
+        let throttle = AIPartialTextThrottle { [weak cardAI] text in
+            cardAI?.show(partial: text, for: requestID)
+        }
+        let onPartialText: AIPartialTextHandler = { text in
+            activity.touch()
+            await throttle.submit(text)
+        }
+        let task = Task { @MainActor [weak self] in
+            do {
+                let answer = try await work(onPartialText)
+                guard let self, !Task.isCancelled else { return }
+                self.cardAI.complete(
+                    requestID: requestID,
+                    text: answer.text,
+                    explanation: answer.explanation
+                )
+            } catch {
+                guard let self, !Task.isCancelled,
+                      let failure = Self.cardAIFailure(for: error)
+                else { return }
+                self.cardAI.fail(
+                    requestID: requestID,
+                    message: failure.message,
+                    canRetry: failure.canRetry
+                )
+            }
+        }
+        let idle = translationTiming.contextExplanationRequestTimeout
+        let total = translationTiming.streamingTotalTimeout
+        // Off the main actor, as the explanation page's watchdog is: a busy
+        // UI executor must not make the timeout late.
+        let watchdog = Task.detached { [weak self] in
+            do {
+                try await activity.waitUntilTimedOut(idle: idle, total: total)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            let wentQuiet = ContinuousClock.now < startedAt + total
+            await self?.finishCardAITimeout(requestID: requestID, wentQuiet: wentQuiet)
+        }
+        cardAI.attach(requestID: requestID, task: task, watchdog: watchdog, throttle: throttle)
+    }
+
+    private func finishCardAITimeout(requestID: UUID, wentQuiet: Bool) {
+        cardAI.fail(
+            requestID: requestID,
+            message: wentQuiet ? ReaderCardAICopy.quiet : ReaderCardAICopy.tooLong,
+            canRetry: true
+        )
     }
 }
 

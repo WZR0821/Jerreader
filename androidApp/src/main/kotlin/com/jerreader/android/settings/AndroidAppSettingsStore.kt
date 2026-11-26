@@ -39,7 +39,12 @@ data class AndroidAppPreferences(
     /** 外观模式 (2.0.1): follow the system, or hold light or dark. */
     val appearanceMode: JerreaderAppearanceMode = JerreaderAppearanceMode.SYSTEM,
     /** 背景光晕 (2.0.1): the faint accent wash at the top of every page. */
-    val backdropGlow: Boolean = true
+    val backdropGlow: Boolean = true,
+    /**
+     * 翻译卡片显示 AI 按钮 switched off (2.1.0 §7), from the reader settings or
+     * 不再显示这些按钮; the card then shows no AI chips.
+     */
+    val aiActionBarHidden: Boolean = false
 )
 
 /** The range of 上下边距, the same as iOS `ReaderInterfaceDefaults.verticalMarginsRange`. */
@@ -145,6 +150,32 @@ class AndroidAppSettingsStore(context: Context) {
         mutablePreferences.value = mutablePreferences.value.copy(japaneseFuriganaEnabled = value)
     }
 
+    fun updateAIActionBarHidden(value: Boolean) {
+        storage.edit { putBoolean(KEY_AI_ACTION_BAR_HIDDEN, value) }
+        mutablePreferences.value = mutablePreferences.value.copy(aiActionBarHidden = value)
+    }
+
+    /**
+     * Where the chapter the reader last read in this book ends, as a whole-book
+     * progression, for the 继续阅读 card's 本章还剩约 N 分钟 (2.1.0 §9). Null
+     * when the reader never worked it out.
+     */
+    fun chapterEnd(bookId: String): Double? {
+        val key = chapterEndKey(bookId)
+        if (!storage.contains(key)) return null
+        return storage.getFloat(key, 0f).toDouble().takeIf { it.isFinite() && it > 0.0 }
+    }
+
+    fun updateChapterEnd(bookId: String, value: Double?) {
+        val key = chapterEndKey(bookId)
+        val stored = value?.takeIf { it.isFinite() && it > 0.0 }?.coerceAtMost(1.0)
+        if (stored == null) {
+            if (storage.contains(key)) storage.edit { remove(key) }
+        } else if (!storage.contains(key) || storage.getFloat(key, 0f) != stored.toFloat()) {
+            storage.edit { putFloat(key, stored.toFloat()) }
+        }
+    }
+
     fun updateApplyReaderDefaultsToExistingBooks(value: Boolean) {
         storage.edit {
             putBoolean(KEY_APPLY_TO_EXISTING, value)
@@ -227,7 +258,8 @@ class AndroidAppSettingsStore(context: Context) {
             } else {
                 current.appearanceMode
             },
-            backdropGlow = payload.optBoolean("backdropGlow", current.backdropGlow)
+            backdropGlow = payload.optBoolean("backdropGlow", current.backdropGlow),
+            aiActionBarHidden = payload.optBoolean("aiActionBarHidden", current.aiActionBarHidden)
         )
         updateGrowthEnabled(restored.growthEnabled)
         updateTheme(restored.theme)
@@ -242,6 +274,7 @@ class AndroidAppSettingsStore(context: Context) {
         updateVerticalMargins(restored.verticalMargins)
         updateAppearanceMode(restored.appearanceMode)
         updateBackdropGlow(restored.backdropGlow)
+        updateAIActionBarHidden(restored.aiActionBarHidden)
     }
 
     private fun load(): AndroidAppPreferences = AndroidAppPreferences(
@@ -272,7 +305,8 @@ class AndroidAppSettingsStore(context: Context) {
         applyReaderDefaultsToExistingBooks = storage.getBoolean(KEY_APPLY_TO_EXISTING, false),
         verticalMargins = clampedVerticalMargins(storage.getFloat(KEY_VERTICAL_MARGINS, 1f)),
         appearanceMode = JerreaderAppearanceMode.fromStorage(storage.getString(KEY_APPEARANCE_MODE, null)),
-        backdropGlow = storage.getBoolean(KEY_BACKDROP_GLOW, true)
+        backdropGlow = storage.getBoolean(KEY_BACKDROP_GLOW, true),
+        aiActionBarHidden = storage.getBoolean(KEY_AI_ACTION_BAR_HIDDEN, false)
     )
 
     private inline fun <reified T : Enum<T>> enumValue(raw: String?, default: T): T =
@@ -303,5 +337,9 @@ class AndroidAppSettingsStore(context: Context) {
         const val KEY_VERTICAL_MARGINS = "reader.verticalMargins"
         const val KEY_APPEARANCE_MODE = "app.appearanceMode"
         const val KEY_BACKDROP_GLOW = "app.backdropGlow"
+        const val KEY_AI_ACTION_BAR_HIDDEN = "reader.aiActionBar.hidden"
+
+        // reader.chapterEnd.<book id>, as SPEC 2.1.0 §9 names it.
+        fun chapterEndKey(bookId: String): String = "reader.chapterEnd.$bookId"
     }
 }

@@ -18,28 +18,24 @@ import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.jerreader.android.translation.AndroidTranslationSettingsStore
-import com.jerreader.android.translation.chatgptplan.ChatGPTPlanMessages
 import com.jerreader.shared.domain.LanguageCode
 import com.jerreader.shared.translation.QuickTranslationUnit
 import com.jerreader.shared.translation.ReaderCrossPageContextBuilder
 import com.jerreader.shared.translation.ReaderCrossPageTextFragment
 import com.jerreader.shared.translation.ReaderTextNormalizer
-import com.jerreader.shared.translation.TranslationFailure
+import com.jerreader.shared.translation.ReaderTranslationContext
 import com.jerreader.shared.translation.TranslationInputPolicy
 import com.jerreader.shared.translation.TranslationRequest
 import com.jerreader.shared.translation.TranslationService
 import com.jerreader.shared.ui.TranslationCardState
 import java.io.Closeable
 import java.io.File
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import org.readium.r2.navigator.input.InputListener
 import org.readium.r2.navigator.input.TapEvent
 import org.readium.r2.navigator.pdf.PdfNavigatorFragment
@@ -106,7 +102,9 @@ class PdfTapTranslationController(
         val text: String,
         val bounds: RectF,
         /** Bounds in the PDF page's normalized coordinate space (0..1). */
-        val normalizedBounds: RectF
+        val normalizedBounds: RectF,
+        /** The page text around [text], the window iOS sends (2.1.0). */
+        val context: String? = null
     )
 
     private val inputListener = object : InputListener {
@@ -217,7 +215,8 @@ class PdfTapTranslationController(
         val request = TranslationRequest(
             text = extracted.text,
             sourceLanguage = preferences.sourceChoice.language ?: languageHint(),
-            targetLanguage = preferences.targetLanguage
+            targetLanguage = preferences.targetLanguage,
+            context = extracted.context
         )
         return translate(request, token)
     }
@@ -434,6 +433,7 @@ class PdfTapTranslationController(
         val bounds = selected.bounds
         ExtractedText(
             text = selected.text,
+            context = selected.context,
             bounds = RectF(
                 pageRect.left + bounds.left / ocr.width * pageRect.width(),
                 pageRect.top + bounds.top / ocr.height * pageRect.height(),
@@ -520,8 +520,21 @@ class PdfTapTranslationController(
             )
         }
         if (bounds.isEmpty) return null
+        // Like iOS, up to 600 characters of the page on either side of the
+        // sentence, cut to the shared window.
+        val pageText = recognized.text
+        val start = pageText.indexOf(selected).takeIf { it >= 0 }
+        val context = start?.let {
+            val end = it + selected.length
+            ReaderTranslationContext.window(
+                highlight = validated,
+                before = pageText.substring(maxOf(0, it - PAGE_CONTEXT_LENGTH), it),
+                after = pageText.substring(end, minOf(pageText.length, end + PAGE_CONTEXT_LENGTH))
+            )
+        }
         return ExtractedText(
             text = validated,
+            context = context,
             bounds = bounds,
             normalizedBounds = RectF(
                 (bounds.left / pageWidth).coerceIn(0f, 1f),
@@ -587,41 +600,25 @@ class PdfTapTranslationController(
         if (token == requestToken) {
             publish(TranslationCardState.Loading(request.text))
         }
-        return try {
-            TranslationCardState.Success(
-                request.text,
-                withTimeout(TRANSLATION_TIMEOUT_MILLIS) {
-                    withContext(Dispatchers.IO) { translationService.translate(request) }
-                }
-            ).also { if (token == requestToken) publish(it) }
-        } catch (_: TimeoutCancellationException) {
-            TranslationCardState.Failure(
-                request.text,
-                "翻译超过 30 秒未返回，请重试或更换翻译服务。"
-            ).also { if (token == requestToken) publish(it) }
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: TranslationFailure) {
-            TranslationCardState.Failure(
-                request.text,
-                error.message ?: "翻译失败。",
-                canRetry = !ChatGPTPlanMessages.isStop(error)
-            ).also { if (token == requestToken) publish(it) }
-        } catch (_: Exception) {
-            TranslationCardState.Failure(
-                request.text,
-                "未能识别或翻译这一页，请稍后重试。"
-            ).also { if (token == requestToken) publish(it) }
-        }
+        // 2.1.0: the translation shows while it arrives; every piece, like the
+        // final state, reaches the card only while this request is its own.
+        return TranslationCardStreaming.translate(
+            request = request,
+            service = translationService,
+            isCurrent = { token == requestToken },
+            publish = ::publish,
+            unavailableMessage = "未能识别或翻译这一页，请稍后重试。"
+        )
     }
 
     private fun publish(state: TranslationCardState) {
-        // Loading is emitted by the current request only; terminal states are
-        // additionally checked at the call site so a late result cannot win.
+        // Loading is emitted by the current request only; later states are
+        // checked against the request token first so a late result cannot win.
         onStateChanged(state)
-        if (state !is TranslationCardState.Loading &&
-            settings.preferences.value.translationHapticsEnabled
-        ) {
+        // Text still arriving is not a result yet: the haptic plays once, at the end.
+        val isFinal = state !is TranslationCardState.Loading &&
+            !(state is TranslationCardState.Success && state.isStreaming)
+        if (isFinal && settings.preferences.value.translationHapticsEnabled) {
             onHapticFeedback?.invoke()
         }
     }
@@ -741,7 +738,8 @@ class PdfTapTranslationController(
 
     private companion object {
         val SENTENCE_ENDINGS = charArrayOf('。', '！', '？', '.', '!', '?')
-        const val TRANSLATION_TIMEOUT_MILLIS = 30_000L
+        /** Page text taken on each side of the sentence for its context, as on iOS. */
+        const val PAGE_CONTEXT_LENGTH = 600
         const val RETRY_COOLDOWN_MILLIS = 5_000L
         const val RETRY_KEY_LIMIT = 128
         const val OCR_CACHE_LIMIT = 8

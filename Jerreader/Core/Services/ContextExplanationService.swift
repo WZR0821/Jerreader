@@ -17,8 +17,9 @@ struct ContextExplanationRequest: Equatable, Sendable {
     /// The system prompt for this request. `grammarPrompt` is the user's
     /// rendered grammar-analysis template; a lens question replaces it with the
     /// lens contract and keeps it only as the 日语语法 task, as Android does.
+    /// Both end with the guard line of `AIReadingActionPolicy`.
     func systemInstruction(grammarPrompt: String) -> String {
-        guard let lens else { return grammarPrompt + lookupInstruction }
+        guard let lens else { return AIReadingActionPolicy.guarded(grammarPrompt + lookupInstruction) }
         return AIReadingLensPromptPolicy.rendered(
             lens,
             sourceLanguage: sourceLanguage,
